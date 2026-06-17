@@ -1288,30 +1288,48 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 	singleton.BSLightingShader_SetupGeometry_After(Pass);
 }
 
+namespace
+{
+	// VirtualQuery readability probe -- the environment-independent check the address-floor
+	// heuristic can't be: asks the OS whether [ptr, ptr+size) is committed + readable, rejecting
+	// a freed light at ANY address without guessing the heap base. Tracy zone LLF::EffectLightProbe.
+	bool IsReadableRange(const void* a_ptr, std::size_t a_size) noexcept
+	{
+		MEMORY_BASIC_INFORMATION mbi{};
+		if (::VirtualQuery(a_ptr, &mbi, sizeof(mbi)) == 0)
+			return false;
+		if (mbi.State != MEM_COMMIT)
+			return false;
+		constexpr DWORD kReadable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+		                            PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+		if ((mbi.Protect & kReadable) == 0 || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+			return false;
+		const auto base = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+		const auto p = reinterpret_cast<std::uintptr_t>(a_ptr);
+		return (p + a_size) <= (base + mbi.RegionSize);  // whole range in this committed region
+	}
+
+	bool ProbeReadable(const void* a_ptr, std::size_t a_size)
+	{
+		ZoneScopedN("LLF::EffectLightProbe");
+		return IsReadableRange(a_ptr, a_size);
+	}
+}
+
 void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
-	// Defensive pre-call guard: BSEffectShader::SetupGeometry iterates
-	// Pass->sceneLights[i] and dereferences bsLight->light->fade
-	// (BSLight+0x48 -> NiLight+0x134) with NO null check. Stale entries are
-	// possible because Pass->sceneLights[] is a raw BSLight** (not
-	// NiPointer<>): the engine's pass cache can outlive individual lights
-	// or capture them after their NiLight has been cleared. Crashes seen in
-	// the wild include garbage data (BSLight memory recycled as a string
-	// buffer) and outright NULL NiLight (engine half-destroyed the BSLight
-	// but it's still ref-counted alive in some list).
-	//
-	// Walk the array and clamp numLights to the count of entries that the
-	// engine can safely dereference. Validation:
-	//   - BSLight* is canonical, 8-byte aligned, non-null
-	//   - bsLight->light pointer is canonical, 8-byte aligned, non-null
-	// Entries failing either check stop the loop; the engine's own loop
-	// bails on the first bad entry too, so clamping matches its contract.
+	// Defensive guard: BSEffectShader::SetupGeometry derefs Pass->sceneLights[i]->light->fade with
+	// no null check, and sceneLights[] is a raw BSLight** that can outlive its lights (recycled
+	// garbage, or a half-destroyed BSLight with NULL NiLight -> AV). Clamp numLights to the entries
+	// the engine can safely deref: cheap range/alignment check, then a VirtualQuery readability
+	// probe (the real boundary -- a freed light passes the cheap checks but points to unmapped
+	// memory). Entries failing any check stop the loop, matching the engine's bail-on-first-bad.
 	if (Pass && Pass->sceneLights && Pass->numLights > 0) {
 		using ShadowCasterManager::IsPlausibleShadowLightPtr;
 		std::uint8_t validCount = 0;
 		for (std::uint8_t i = 0; i < Pass->numLights; ++i) {
 			RE::BSLight* bsLight = Pass->sceneLights[i];
-			if (!IsPlausibleShadowLightPtr(reinterpret_cast<std::uintptr_t>(bsLight))) {
+			if (!IsPlausibleShadowLightPtr(reinterpret_cast<std::uintptr_t>(bsLight)) || !ProbeReadable(bsLight, 0x50)) {
 				static int loggedBsLight = 0;
 				if (loggedBsLight++ < 10) {
 					logger::warn(
@@ -1322,7 +1340,7 @@ void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* Thi
 				break;
 			}
 			RE::NiLight* niLight = bsLight->light.get();
-			if (!IsPlausibleShadowLightPtr(reinterpret_cast<std::uintptr_t>(niLight))) {
+			if (!IsPlausibleShadowLightPtr(reinterpret_cast<std::uintptr_t>(niLight)) || !ProbeReadable(niLight, 0x168)) {
 				// Catches both NULL (engine cleared the NiPointer) and
 				// garbage (BSLight memory recycled). NULL is the more common
 				// observed failure -- the engine's loop has no null check
