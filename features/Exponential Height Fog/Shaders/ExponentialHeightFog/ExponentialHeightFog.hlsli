@@ -128,9 +128,10 @@ namespace ExponentialHeightFog
 		float2 jitter = 0.0f.xx;
 		[branch] if (SharedData::exponentialHeightFogSettings.volumetricUpsampleJitterMultiplier > 0.0f)
 		{
+			float2 stableNoiseCoord = Stereo::EyeStableNoiseCoord(screenPosition.xy, SharedData::BufferDim.xy);
 			float2 noise = float2(
-				Random::InterleavedGradientNoise(screenPosition.xy, SharedData::FrameCount),
-				Random::InterleavedGradientNoise(screenPosition.yx + 19.19f, SharedData::FrameCount));
+				Random::InterleavedGradientNoise(stableNoiseCoord, SharedData::FrameCount),
+				Random::InterleavedGradientNoise(stableNoiseCoord.yx + 19.19f, SharedData::FrameCount));
 			jitter = (noise * 2.0f - 1.0f) * SharedData::exponentialHeightFogSettings.volumetricUpsampleJitterMultiplier * gridPixelSize;
 		}
 
