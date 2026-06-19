@@ -289,11 +289,19 @@ foreach(FEATURE_PATH ${FEATURE_CONFIG_FILES})
     # retains its prior value (the version major, above) when a REGEX MATCH misses.
     set(_STAGE_ALPHA "")
     set(_STAGE_BETA "")
-    string(REGEX MATCH "(^|[\r\n])[ \t]*[Aa]lpha[ \t]*=[ \t]*([A-Za-z0-9]+)" _STAGE_ALPHA_MATCH "${CONFIG_VALUE}")
+    string(
+        REGEX MATCH "(^|[\r\n])[ \t]*[Aa]lpha[ \t]*=[ \t]*([A-Za-z0-9]+)"
+        _STAGE_ALPHA_MATCH
+        "${CONFIG_VALUE}"
+    )
     if(_STAGE_ALPHA_MATCH)
         string(TOLOWER "${CMAKE_MATCH_2}" _STAGE_ALPHA)
     endif()
-    string(REGEX MATCH "(^|[\r\n])[ \t]*[Bb]eta[ \t]*=[ \t]*([A-Za-z0-9]+)" _STAGE_BETA_MATCH "${CONFIG_VALUE}")
+    string(
+        REGEX MATCH "(^|[\r\n])[ \t]*[Bb]eta[ \t]*=[ \t]*([A-Za-z0-9]+)"
+        _STAGE_BETA_MATCH
+        "${CONFIG_VALUE}"
+    )
     if(_STAGE_BETA_MATCH)
         string(TOLOWER "${CMAKE_MATCH_2}" _STAGE_BETA)
     endif()
