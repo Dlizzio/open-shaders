@@ -238,9 +238,10 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 				skySpecular *= skylightingSpecular;
 #		endif
 			} else {
-				// Mode 0/1: IBL ratio-based
-				float3 ratio = ImageBasedLighting::GetIBLRatio();
-				envSpecular = linEnvSample * ratio * SharedData::iblSettings.EnvIBLScale;
+				// Mode 0/1: Env IBL luminance matching
+				float envLum = Color::RGBToLuminance(Color::IrradianceToLinear(EnvTexture.SampleLevel(LinearSampler, R, 15)));
+				float envTargetLum = Color::RGBToLuminance(ImageBasedLighting::GetEnvIBLColor(-R));
+				envSpecular = (linEnvSample / max(envLum, 0.001)) * envTargetLum;
 				skySpecular = max(0, linFullSample - linEnvSample) * SharedData::iblSettings.SkyIBLScale;
 #		if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;

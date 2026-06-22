@@ -63,18 +63,20 @@ namespace DynamicCubemaps
 				float3 envSpecular = 0.0;
 				float3 skySpecular = 0.0;
 
-				if (SharedData::iblSettings.DALCMode == 2) {
-					// Mode 2: DALC-normalized env scaled by DALCAmount + sky overlay
+				if (SharedData::iblSettings.DALCMode >= 2) {
+					// Mode 2/3: DALC-normalized env scaled by DALCAmount + sky overlay
 					float envLum = Color::RGBToLuminance(Color::IrradianceToLinear(EnvTexture.SampleLevel(SampColorSampler, R, 15)));
 					envSpecular = (linEnvSample / max(envLum, 0.001)) * Color::IrradianceToLinear(directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
 					skySpecular = max(0, linFullSample - linEnvSample) * SharedData::iblSettings.SkyIBLScale;
 #			if defined(SKYLIGHTING)
+					envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSpecular : 1.0;
 					skySpecular *= skylightingSpecular;
 #			endif
 				} else {
-					// Mode 0/1: IBL ratio-based
-					float3 ratio = ImageBasedLighting::GetIBLRatio();
-					envSpecular = linEnvSample * ratio * SharedData::iblSettings.EnvIBLScale;
+					// Mode 0/1: Env IBL luminance matching
+					float envLum = Color::RGBToLuminance(Color::IrradianceToLinear(EnvTexture.SampleLevel(SampColorSampler, R, 15)));
+					float envTargetLum = Color::RGBToLuminance(ImageBasedLighting::GetEnvIBLColor(-R));
+					envSpecular = (linEnvSample / max(envLum, 0.001)) * envTargetLum;
 					skySpecular = max(0, linFullSample - linEnvSample) * SharedData::iblSettings.SkyIBLScale;
 #			if defined(SKYLIGHTING)
 					skySpecular *= skylightingSpecular;
@@ -175,18 +177,20 @@ namespace DynamicCubemaps
 			float3 envSpecular = 0.0;
 			float3 skySpecular = 0.0;
 
-			if (SharedData::iblSettings.DALCMode == 2) {
-				// Mode 2: DALC-normalized env scaled by DALCAmount + sky overlay
+			if (SharedData::iblSettings.DALCMode >= 2) {
+				// Mode 2/3: DALC-normalized env scaled by DALCAmount + sky overlay
 				float envLum = Color::RGBToLuminance(Color::IrradianceToLinear(EnvTexture.SampleLevel(SampColorSampler, R, 15)));
 				envSpecular = (linEnvSample / max(envLum, 0.001)) * Color::IrradianceToLinear(directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
 				skySpecular = max(0, linFullSample - linEnvSample) * SharedData::iblSettings.SkyIBLScale;
 #			if defined(SKYLIGHTING)
+				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSpecular : 1.0;
 				skySpecular *= skylightingSpecular;
 #			endif
 			} else {
-				// Mode 0/1: IBL ratio-based
-				float3 ratio = ImageBasedLighting::GetIBLRatio();
-				envSpecular = linEnvSample * ratio * SharedData::iblSettings.EnvIBLScale;
+				// Mode 0/1: Env IBL luminance matching
+				float envLum = Color::RGBToLuminance(Color::IrradianceToLinear(EnvTexture.SampleLevel(SampColorSampler, R, 15)));
+				float envTargetLum = Color::RGBToLuminance(ImageBasedLighting::GetEnvIBLColor(-R));
+				envSpecular = (linEnvSample / max(envLum, 0.001)) * envTargetLum;
 				skySpecular = max(0, linFullSample - linEnvSample) * SharedData::iblSettings.SkyIBLScale;
 #			if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;
