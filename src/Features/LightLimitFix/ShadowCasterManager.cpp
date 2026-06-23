@@ -1179,12 +1179,9 @@ namespace ShadowCasterManager
 		return *p;
 	}
 
-	// Couple the shadow-cull distance to the light fade-out distance so a caster's
-	// shadow lasts as long as its light stays lit, removing the lit-but-shadowless
-	// band that reads as a pop-in. Recompute from the user's base each frame and
-	// write the engine cache directly (it self-refreshes only on a cell transition);
-	// max() never shrinks a deliberately larger configured distance, and the
-	// non-squared global is kept in sync for sun-cascade paths that read it.
+	// Couple the point-light shadow-cull distance to the light fade-out distance so a
+	// caster's shadow lasts as long as its light stays lit (#161 pop-in). Re-apply each
+	// frame: the engine refreshes this cache only on a cell transition.
 	static void ApplyShadowToLightFadeMatch()
 	{
 		if (!s_settings.MatchShadowToLightFade)
@@ -1204,7 +1201,10 @@ namespace ShadowCasterManager
 			return;  // malformed INI -- don't poison the engine cull with NaN/inf
 		const float targetSq = std::max(base * base, endSq);
 		ShadowDistanceSquaredCurrent() = targetSq;
-		ShadowDistanceCurrent() = std::sqrt(targetSq);
+		// Pin the sun-cascade far plane (the non-squared global) to the configured
+		// shadow distance, NOT the extended cull: stretching the engine's 2 cascades
+		// to the far light fade coarsens them into distant over-shadow (#194).
+		ShadowDistanceCurrent() = base;
 	}
 
 	static bool* GetFocusShadowSelected()
