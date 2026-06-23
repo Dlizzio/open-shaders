@@ -574,7 +574,7 @@ namespace ShadowCasterManager
 		//        crash-2026-05-25-15-28-04.log RDX=0x3A4A3190
 		//        crash-2026-05-25-15-36-15.log RDX=0x3A4B11F5
 		//      all at 107141+0x319.
-		//   3. shadowLightsAccum entries created by GameAccumulate() (engine
+		//   3. shadowLightsAccum entries created by GameSetupFocusShadowAccumulators() (engine
 		//      focus path) bypass SLF's maskIndex assignment in EnableLight,
 		//      so maskIndex stays at uninitialized memory.
 		//
@@ -1267,15 +1267,19 @@ namespace ShadowCasterManager
 
 	// ---------- engine function wrappers ----------
 
-	static void GameAccumulate(RE::BSShadowLight* light)
+	// Engine BSShadowDirectionalLight::SetupFocusShadowAccumulators: allocates + registers
+	// the per-focus-actor BSShaderAccumulators (one per FocusShadowActors entry).
+	static void GameSetupFocusShadowAccumulators(RE::BSShadowLight* light)
 	{
-		// BSShadowDirectionalLight::AccumulateFullFrustumCascades / unk_Accumulate
 		using F = void (*)(RE::BSShadowLight*);
 		static REL::Relocation<F> func{ REL::RelocationID(100819, 107603) };
 		func(light);
 	}
 
-	static void GameSetupDirectionalLight(RE::BSShadowLight* light, RE::NiCamera* cam)
+	// Engine BSShadowDirectionalLight::SetupFocusShadowMaps (RelocationID 100817/107601);
+	// populates the per-actor focusShadowmapDescriptors -- a no-op without focus-shadow
+	// actors, so the old "DirectionalLight" name was misleading.
+	static void GameSetupFocusShadowMaps(RE::BSShadowLight* light, RE::NiCamera* cam)
 	{
 		using F = void (*)(RE::BSShadowLight*, RE::NiCamera*);
 		static REL::Relocation<F> func{ REL::RelocationID(100817, 107601) };
@@ -1762,8 +1766,8 @@ namespace ShadowCasterManager
 		if (s_focusShadowSlots > 0) {
 			bool drawFocus = ShadowField(light, drawFocusShadows);
 			if (drawFocus || (!*GetFocusShadowSelected() && light->GetIsFrustumOrDirectionalLight())) {
-				GameSetupDirectionalLight(light, camera);
-				GameAccumulate(light);
+				GameSetupFocusShadowMaps(light, camera);
+				GameSetupFocusShadowAccumulators(light);
 				if (globals::game::isVR) {
 					for (auto& desc : light->GetVRRuntimeData().focusShadowmapDescriptors) {
 						desc.vrRenderTarget[0] = RE::RENDER_TARGET_DEPTHSTENCIL::kNONE;
