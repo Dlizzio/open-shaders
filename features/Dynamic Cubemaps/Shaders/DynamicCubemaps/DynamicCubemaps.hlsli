@@ -51,7 +51,6 @@ namespace DynamicCubemaps
 			float skylightingSpecular = 1.0;
 #		endif
 #		if defined(SKYLIGHTING)
-			skylightingSpecular = 0.0;
 			if (!SharedData::InInterior) {
 				skylightingSpecular = Skylighting::EvaluateSpecular(skylighting, SphericalHarmonics::FauxSpecularLobe(N, V, roughness));
 			}
@@ -149,7 +148,6 @@ namespace DynamicCubemaps
 		float skylightingSpecular = 1.0;
 #		endif
 #		if defined(SKYLIGHTING)
-		skylightingSpecular = 0.0;
 		if (!SharedData::InInterior) {
 			skylightingSpecular = Skylighting::EvaluateSpecular(skylighting, SphericalHarmonics::FauxSpecularLobe(N, V, roughness));
 		}
