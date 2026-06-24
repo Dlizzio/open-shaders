@@ -205,14 +205,17 @@ jobs:
                     RELEASE_VER="${RELEASE_TAG#v}"
                     export RELEASE_VER
                     python3 << 'PYEOF'
-                  import json, os, re
+                  import json, os
+                  from nexus_changelog import strip_audit
                   with open('release.json') as f:
                       release = json.load(f)
                   if not isinstance(release, dict):
                       release = {}
-                  body = release.get('body') or ''
-                  body = re.sub(r'\n---\n+# Feature Version Audit\b.*', '', body, flags=re.DOTALL).strip()
                   release_ver = os.environ['RELEASE_VER']
+                  # Post this version's release notes (minus the internal audit
+                  # block). Re-run duplicates are prevented by the idempotency
+                  # filter below, not by reformatting the body (issue #198).
+                  changelog = strip_audit(release.get('body') or '')
                   # Prebuilt shader caches are uploaded separately as OPTIONAL files via the
                   # official Nexus action (see the upload-shader-caches job) — unex can only set
                   # MAIN files, so they are not part of this (unex) AIO matrix.
@@ -223,7 +226,7 @@ jobs:
                       'artifact_pattern': os.environ['EFFECTIVE_ARTIFACT'],
                       'mod_filename': os.environ['EFFECTIVE_FILENAME'],
                       'auto_upload': True,
-                      'changelog': body,
+                      'changelog': changelog,
                       'file_description': (
                           f'Open Shaders {release_ver} AIO. See changelog for included features. '
                           'Optional prebuilt shader caches (SE/AE and VR) are available as separate '
@@ -252,20 +255,20 @@ jobs:
                     ARGS+=( --release-version "$RELEASE_VER" )
                     python tools/feature_version_audit.py "${ARGS[@]}"
 
-                    # Splice the GitHub release body into the CORE row's changelog.
+                    # Splice this version's changelog (audit-stripped body) into the CORE row.
                     python3 << 'PYEOF'
-                  import json, os, re
+                  import json, os
+                  from nexus_changelog import strip_audit
                   with open('release.json') as f:
                       release = json.load(f)
                   if not isinstance(release, dict):
                       release = {}
-                  body = release.get('body') or ''
-                  body = re.sub(r'\n---\n+# Feature Version Audit\b.*', '', body, flags=re.DOTALL).strip()
+                  changelog = strip_audit(release.get('body') or '')
                   with open('nexus-matrix-raw.json') as f:
                       data = json.load(f)
                   for row in data:
                       if row.get('name') == 'core':
-                          row['changelog'] = body
+                          row['changelog'] = changelog
                           break
                   with open('nexus-matrix-raw.json', 'w') as f:
                       json.dump(data, f)
@@ -277,6 +280,7 @@ jobs:
                   # Single-row AIO matrix trivially passes this filter.
                   python3 << 'PYEOF'
                   import json, os, fnmatch
+                  from nexus_changelog import nexus_versions
                   with open('nexus-matrix-raw.json') as f:
                       data = json.load(f)
                   try:
@@ -287,6 +291,26 @@ jobs:
                   except Exception:
                       release = {}
                   asset_names = [a['name'] for a in release.get('assets', [])]
+
+                  # Idempotent changelog: unex *appends* changelog rows, so blank
+                  # the changelog for any version already on Nexus. A re-run then
+                  # re-uploads the file but does not append a duplicate entry
+                  # (issue #198). Unknown (no key / API error) -> keep posting.
+                  api_key = os.environ.get('UNEX_APIKEY', '')
+                  game_id = os.environ.get('NEXUS_GAME_ID', 'skyrimspecialedition')
+                  ua = ('open-shaders-ci/1.0' if os.environ.get('MODE') == 'aio'
+                        else 'community-shaders-ci/1.0')
+                  version = os.environ.get('VERSION', '')
+                  for row in data:
+                      if not row.get('changelog'):
+                          continue
+                      mod_id = str(row.get('nexus_mod_id', ''))
+                      ver = row.get('mod_version') or version
+                      versions = nexus_versions(api_key, game_id, mod_id, ua)
+                      if versions is not None and ver in versions:
+                          print(f'::notice::Version {ver} already on Nexus mod {mod_id}; '
+                                f'skipping changelog re-post to avoid duplicate entry.')
+                          row['changelog'] = ''
                   def artifact_in_release(row):
                       pat = row.get('artifact_pattern', '')
                       return bool(pat) and any(fnmatch.fnmatch(n, pat) for n in asset_names)
@@ -346,6 +370,14 @@ jobs:
                   INPUT_MOD_FILENAME: ${{ inputs.mod_filename || '' }}
                   INPUT_ARTIFACT_PATTERN: ${{ inputs.artifact_pattern || '' }}
                   DRY_RUN: ${{ steps.dryrun.outputs.dry_run }}
+                  VERSION: ${{ steps.resolve.outputs.version }}
+                  MODE: ${{ steps.resolve.outputs.mode }}
+                  NEXUS_GAME_ID: ${{ inputs.nexus_game_id || 'skyrimspecialedition' }}
+                  # Idempotency query against Nexus (blank changelog for versions
+                  # already present). Absent key -> changelog still posts.
+                  UNEX_APIKEY: ${{ secrets.UNEX_APIKEY }}
+                  # The heredocs import .github/scripts/nexus_changelog.py.
+                  PYTHONPATH: ${{ github.workspace }}/.github/scripts
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     prepare-artifacts:
@@ -417,10 +449,16 @@ jobs:
             needs.prepare-nexus-matrix.outputs.has_uploads == 'true'
         runs-on: ubuntu-latest
         steps:
+            - name: Checkout repository
+              uses: actions/checkout@v6
+              with:
+                  persist-credentials: false
+
             - name: Query Nexus for existing versions
               run: |
                   python3 << 'PYEOF'
-                  import json, os, urllib.request, urllib.error
+                  import json, os
+                  from nexus_changelog import nexus_versions
 
                   rows = json.loads(os.environ['UPLOAD_MATRIX']).get('include', [])
                   rows = [r for r in rows if not r.get('skip')]
@@ -455,32 +493,14 @@ jobs:
                           w(f'| {link} | `{planned}` | ⚠️ skipped | — |')
                           continue
 
-                      api_url = f'https://api.nexusmods.com/v1/games/{game_id}/mods/{mod_id}/files.json'
-                      req = urllib.request.Request(api_url, headers={
-                          'apikey': api_key,
-                          'User-Agent': ua,
-                          'Accept': 'application/json',
-                      })
-                      try:
-                          with urllib.request.urlopen(req, timeout=15) as resp:
-                              data = json.load(resp)
-                          api_ok = True
-                          files = data.get('files', [])
-                          main = [f for f in files if f.get('category_name') == 'MAIN']
-                          check = main if main else files
-                          seen = []
-                          for f in check:
-                              v = f.get('version', '')
-                              if v and v not in seen:
-                                  seen.append(v)
-                          versions_str = ', '.join(f'`{v}`' for v in seen[-5:]) or '—'
-                          status = '✅ exists' if planned in seen else '🆕 new'
-                          w(f'| {link} | `{planned}` | {status} | {versions_str} |')
-                      except urllib.error.HTTPError as e:
-                          err = {401: '❌ auth failed', 403: '❌ forbidden'}.get(e.code, f'❌ HTTP {e.code}')
-                          w(f'| {link} | `{planned}` | {err} | — |')
-                      except Exception:
-                          w(f'| {link} | `{planned}` | ❌ error | — |')
+                      seen = nexus_versions(api_key, game_id, mod_id, ua)
+                      if seen is None:
+                          w(f'| {link} | `{planned}` | ❌ could not verify | — |')
+                          continue
+                      api_ok = True
+                      versions_str = ', '.join(f'`{v}`' for v in seen[-5:]) or '—'
+                      status = '✅ exists' if planned in seen else '🆕 new'
+                      w(f'| {link} | `{planned}` | {status} | {versions_str} |')
 
                   w()
                   if api_key:
@@ -496,6 +516,7 @@ jobs:
                   NEXUS_GAME_ID: ${{ inputs.nexus_game_id || 'skyrimspecialedition' }}
                   MODE: ${{ needs.prepare-nexus-matrix.outputs.mode }}
                   UNEX_APIKEY: ${{ secrets.UNEX_APIKEY }}
+                  PYTHONPATH: ${{ github.workspace }}/.github/scripts
 
     upload-to-nexus:
         # Reusable workflow call: runs-on is intentionally omitted (runner is defined by the
@@ -580,6 +601,11 @@ jobs:
         needs: [prepare-nexus-matrix, prepare-artifacts, upload-to-nexus, check-nexus-versions]
         if: always() && needs.prepare-nexus-matrix.result == 'success'
         steps:
+            - name: Checkout repository
+              uses: actions/checkout@v6
+              with:
+                  persist-credentials: false
+
             - name: Check upload status
               run: |
                   echo "## Nexus Upload Summary" >> $GITHUB_STEP_SUMMARY
@@ -603,7 +629,8 @@ jobs:
               if: needs.prepare-nexus-matrix.outputs.dry_run != 'true' && needs.prepare-nexus-matrix.outputs.has_uploads == 'true'
               run: |
                   python3 << 'PYEOF'
-                  import json, os, urllib.request, urllib.error
+                  import json, os
+                  from nexus_changelog import nexus_versions
 
                   rows = json.loads(os.environ['UPLOAD_MATRIX']).get('include', [])
                   rows = [r for r in rows if not r.get('skip')]
@@ -616,29 +643,6 @@ jobs:
                   def w(line=''):
                       summary.write(line + '\n')
 
-                  def nexus_versions(mod_id):
-                      if not api_key or not mod_id:
-                          return None
-                      url = f'https://api.nexusmods.com/v1/games/{game_id}/mods/{mod_id}/files.json'
-                      req = urllib.request.Request(url, headers={
-                          'apikey': api_key,
-                          'User-Agent': ua,
-                          'Accept': 'application/json',
-                      })
-                      try:
-                          with urllib.request.urlopen(req, timeout=15) as resp:
-                              files = json.load(resp).get('files', [])
-                          main = [f for f in files if f.get('category_name') == 'MAIN']
-                          check = main if main else files
-                          seen = []
-                          for f in check:
-                              v = f.get('version', '')
-                              if v and v not in seen:
-                                  seen.append(v)
-                          return seen
-                      except Exception:
-                          return None
-
                   succeeded, failed, unknowns = [], [], []
                   rows_status = []
                   for row in rows:
@@ -648,7 +652,7 @@ jobs:
                       label = row.get('mod_filename', name)
                       url = f'https://www.nexusmods.com/{game_id}/mods/{mod_id}' if mod_id else ''
                       artifact = f'nexus-upload-{name}'
-                      versions = nexus_versions(mod_id)
+                      versions = nexus_versions(api_key, game_id, mod_id, ua)
                       if versions is None:
                           status, icon = 'unknown', '❓'
                           unknowns.append(label)
@@ -689,3 +693,4 @@ jobs:
                   NEXUS_GAME_ID: ${{ inputs.nexus_game_id || 'skyrimspecialedition' }}
                   MODE: ${{ needs.prepare-nexus-matrix.outputs.mode }}
                   UNEX_APIKEY: ${{ secrets.UNEX_APIKEY }}
+                  PYTHONPATH: ${{ github.workspace }}/.github/scripts
