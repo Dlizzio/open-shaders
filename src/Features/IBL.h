@@ -60,5 +60,6 @@ public:
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
 
 	Settings GetCommonBufferData() const;
+	bool IsDisabledForCurrentScene() const;
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 };
