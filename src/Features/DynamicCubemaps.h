@@ -26,11 +26,11 @@ public:
 
 /**
 	 * Feature that generates dynamic cube maps for environment mapping and reflections.
-	 * 
+	 *
 	 * Manages GPU resources and compute passes to capture and process environmental
 	 * data into cube maps for real-time reflections and specular irradiance calculations.
 	 */
-	struct DynamicCubemaps : Feature
+struct DynamicCubemaps : Feature
 {
 public:
 	const std::string defaultDynamicCubeMapSavePath = "Data\\textures\\DynamicCubemaps";
@@ -178,7 +178,7 @@ public:
  * Indicates whether the feature applies shader defines to the given shader type.
  * @returns Always `true`.
  */
-bool HasShaderDefine(RE::BSShader::Type) override { return true; };
+	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	/**
 	 * Initialize Direct3D resources required for dynamic cubemap generation.

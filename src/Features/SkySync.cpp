@@ -95,17 +95,6 @@ void SkySync::DrawSettings()
 	ImGui::SliderFloat(T(TKEY("crescent_intensity"), "Crescent Intensity"), &settings.CrescentMoonIntensity, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat(T(TKEY("full_moon_intensity"), "Full Moon Intensity"), &settings.FullMoonIntensity, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 
-	if (settings.DimSunlightUnderHorizon || settings.DimVolumetricLighting) {
-		ImGui::SliderFloat(T(TKEY("horizon_fade_duration"), "Horizon Fade Duration"), &settings.HorizonFadeHours, 0.0f, MaxHorizonFadeHours, "%.1f h", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(T(TKEY("horizon_fade_duration_tooltip"), "How long (in game hours) the dim eases out after sunset and back in before sunrise."));
-		}
-	}
-
-	ImGui::SliderFloat(T(TKEY("new_moon_intensity"), "New Moon Intensity"), &settings.NewMoonIntensity, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat(T(TKEY("crescent_intensity"), "Crescent Intensity"), &settings.CrescentMoonIntensity, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat(T(TKEY("full_moon_intensity"), "Full Moon Intensity"), &settings.FullMoonIntensity, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-
 	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"), ImGuiTreeNodeFlags_None)) {
 		const char* CasterNames[] = { T(TKEY("caster_sun"), "Sun"), T(TKEY("caster_masser"), "Masser"), T(TKEY("caster_secunda"), "Secunda"), T(TKEY("caster_none"), "None") };
 		const char* PhaseNames[] = { T(TKEY("phase_full"), "Full"), T(TKEY("phase_waning_gibbous"), "Waning Gibbous"), T(TKEY("phase_waning_quarter"), "Waning Quarter"), T(TKEY("phase_waning_crescent"), "Waning Crescent"), T(TKEY("phase_new"), "New"), T(TKEY("phase_waxing_crescent"), "Waxing Crescent"), T(TKEY("phase_waxing_quarter"), "Waxing Quarter"), T(TKEY("phase_waxing_gibbous"), "Waxing Gibbous") };

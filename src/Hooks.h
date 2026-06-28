@@ -23,7 +23,7 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-struct BSBatchRenderer_RenderPassImmediately2
+	struct BSBatchRenderer_RenderPassImmediately2
 	{
 		static void thunk(RE::BSRenderPass* pass, uint32_t technique, bool alphaTest, uint32_t renderFlags);
 		static inline REL::Relocation<decltype(thunk)> func;

@@ -62,8 +62,8 @@ public:
 	int drawCalls[RE::BSShader::Type::Total + 1];
 
 	// Frame time tracking per shader type (in milliseconds)
-	float frameTimePerType[RE::BSShader::Type::Total + 1];      ///< Per-type frame time in milliseconds.
-	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1]; ///< EMA-smoothed per-type frame time in milliseconds.
+	float frameTimePerType[RE::BSShader::Type::Total + 1];        ///< Per-type frame time in milliseconds.
+	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1];  ///< EMA-smoothed per-type frame time in milliseconds.
 
 	// Timing state for per-type frame time tracking using QueryPerformanceCounter
 	LARGE_INTEGER frameTimingFrequency;
@@ -141,7 +141,7 @@ public:
 	void SetDefines(std::string defines);
 	std::vector<std::pair<std::string, std::string>>* GetDefines();
 
-/**
+	/**
 	 * @brief Checks whether the given shader type is enabled.
 	 * @param a_type The type of shader to check.
 	 * @return True if the shader type is enabled.
@@ -182,7 +182,7 @@ public:
 	 * warn line per unsupported format with the feature that needs it.
 	 */
 	void CheckTypedUAVLoadSupport();
-/// @brief Returns true if the current device supports typed UAV loads (RWTexture<T>
+	/// @brief Returns true if the current device supports typed UAV loads (RWTexture<T>
 	///        subscript reads) for @p a_format. Use to gate features that need it.
 	static bool SupportsTypedUAVLoad(DXGI_FORMAT a_format);
 
@@ -202,7 +202,7 @@ public:
 	/** @brief Inserts a single-point GPU performance marker. */
 	void SetPerfMarker(std::string_view title);
 
-/// RenderDoc/PIX annotation only - no Tracy CPU zone.
+	/// RenderDoc/PIX annotation only - no Tracy CPU zone.
 	/// Used by ScopedGpuPass which manages its own Tracy CPU zone unconditionally.
 	void BeginAnnotation(std::string_view title);
 	void EndAnnotation();
@@ -239,33 +239,33 @@ public:
 	/**
 	 * Bitflags describing extra shader-specific properties.
 	 */
-	
+
 	/**
 	 * Bitflags describing extra feature-specific properties related to terrain displacement and material models.
 	 */
-	
+
 	/**
 	 * Checks whether the main menu or loading menu is cached as open.
 	 * @returns true if either the main menu or loading menu is open, false otherwise.
 	 */
-	
+
 	/**
 	 * Checks whether the main menu or loading menu is open, querying the UI if provided.
 	 * @param ui Pointer to the UI manager; if non-null, performs live menu checks as a fallback.
 	 * @returns true if the main menu or loading menu is open, false otherwise.
 	 */
-	
+
 	/**
 	 * Updates the shared constant buffer data based on world state and rendering pass.
 	 * @param a_inWorld Whether the camera is in world space.
 	 * @param a_prepass Whether this is a prepass rendering phase.
 	 */
-	
+
 	/**
 	 * Updates sky shader permutation based on the current render pass.
 	 * @param a_pass The render pass to inspect.
 	 */
-	
+
 	/**
 	 * Checks whether directional shadows are available for the current scene.
 	 * @returns true if directional shadows are present, false otherwise.

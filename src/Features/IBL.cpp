@@ -275,8 +275,6 @@ bool IBL::IsDisabledForCurrentScene() const
 	return inLoadingScreen || inWorldMap || inInterior;
 }
 
-
-
 void IBL::ReflectionsPrepass()
 {
 	if (loaded) {

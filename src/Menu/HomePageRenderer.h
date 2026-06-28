@@ -28,7 +28,7 @@ public:
 	static constexpr float DIALOG_CORNER_ROUNDING = 6.0f;
 	static constexpr float DIALOG_LINE_TIGHTEN = 3.0f;
 
-// Discord banner scaling constants
+	// Discord banner scaling constants
 	static constexpr float DISCORD_BANNER_TARGET_WIDTH_RATIO = 0.85f;
 	static constexpr float DISCORD_BANNER_MIN_WIDTH = 150.0f;
 	static constexpr float DISCORD_BANNER_MAX_WIDTH = 1200.0f;

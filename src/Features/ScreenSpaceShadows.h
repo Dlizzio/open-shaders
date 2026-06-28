@@ -74,7 +74,7 @@ public:
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 
-// VR stereo sync resources
+	// VR stereo sync resources
 	Texture2D* stereoSyncCopyTex = nullptr;
 	ConstantBuffer* stereoSyncCB = nullptr;
 	ID3D11ComputeShader* stereoSyncCS = nullptr;

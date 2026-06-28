@@ -20,7 +20,7 @@
 
 namespace SIE
 {
-// Chrono-free snapshot of compile counters for consumers that can't include
+	// Chrono-free snapshot of compile counters for consumers that can't include
 	// ShaderCache.h (see ShaderCompileStatus.h). Thread-safe: atomics + the
 	// shader-map lock inside GetCurrentFailedCount.
 	ShaderCompileStatus GetShaderCompileStatus()
@@ -3485,7 +3485,7 @@ namespace SIE
 			// without polling. Guarded on the devbench host being present.
 			if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 				const nlohmann::json payload{
-{ "completedTasks", completedTasks.load(std::memory_order_relaxed) },
+					{ "completedTasks", completedTasks.load(std::memory_order_relaxed) },
 					{ "failedTasks", failedTasks.load(std::memory_order_relaxed) },
 					{ "totalTasks", totalTasks.load(std::memory_order_relaxed) },
 					{ "durationMs", completionTimeMs },

@@ -19,7 +19,6 @@
 #	include "Features/ScreenshotFeature.h"
 #	include "Globals.h"
 #	include "Menu.h"
-#	include "Profiler.h" 
 #	include "ShaderCache.h"
 #	include "State.h"
 
@@ -41,15 +40,8 @@ namespace
 	using json = nlohmann::json;
 
 	// Current render frame, used as a coarse "enqueued at" stamp so callers can poll
-// `inspect kind=openshaders` until frame_count advances past it (i.e. a queued
+	// `inspect kind=openshaders` until frame_count advances past it (i.e. a queued
 	// main-thread task has had at least one tick to run). Safe from any thread (atomic load).
-	/**
-	 * @brief Retrieves the current render frame count.
-	 *
-	 * Safe to call from any thread.
-	 *
-	 * @return uint The current frame count, or 0 if global state is unavailable.
-	 */
 	uint EnqueuedFrame()
 	{
 		return globals::state ? globals::state->frameCountAtomic.load(std::memory_order_relaxed) : 0u;
@@ -58,20 +50,7 @@ namespace
 	// Shared C-ABI handler body. The whole request — parse, dispatch, dump — is wrapped
 	// so NO exception ever crosses the DLL boundary, and a_write is called exactly once.
 	// `a_build` is a plain function pointer (no captures) so this composes with the
-	/**
-	 * @brief Wraps a DevBench tool handler to safely marshal exceptions into JSON error responses.
-	 *
-	 * Parses JSON arguments from the input string, invokes the builder function, and writes
-	 * the resulting JSON response to the sink via the provided callback. All exceptions are
-	 * caught and converted to standardized JSON error objects to prevent C++ exceptions from
-	 * crossing the DLL boundary.
-	 *
-	 * @param a_build Function that builds a JSON response from parsed request arguments.
-	 * @param a_argsJson JSON-formatted request arguments as a string; null or empty string
-	 *                   defaults to an empty JSON object.
-	 * @param a_sink Opaque destination handle passed to the write callback.
-	 * @param a_write Callback function invoked exactly once to write the serialized JSON response.
-	 */
+	// captureless-handler contract devbench requires. JSON strings only across the ABI.
 	void RunHandler(json (*a_build)(const json&), const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		json out;
@@ -100,16 +79,7 @@ namespace
 	// `cancelled` flag is checked at task entry: if we already gave up waiting, the task skips
 	// the body rather than mutating state after we reported a timeout. shared_ptr state so a
 	// task that runs after we return doesn't dangle. (Best-effort: a task that starts exactly at
-	/**
-	 * @brief Executes a callable on the main thread and waits for its result.
-	 *
-	 * Schedules the callable to run on the main thread via SKSE's task interface with a 5-second
-	 * timeout. If the timeout elapses, sets an internal flag to prevent delayed side effects.
-	 *
-	 * @param a_run Callable that returns a JSON result.
-	 * @return The JSON result from `a_run()`, or an error JSON object if the task interface is
-	 * unavailable, execution times out, or an exception is thrown.
-	 */
+	// the timeout boundary can still run — the flag eliminates the common stalled-thread case.)
 	json RunOnMainThread(std::function<json()> a_run)
 	{
 		auto* task = SKSE::GetTaskInterface();
@@ -139,15 +109,7 @@ namespace
 	// ---- feature: list / get / set / reset / toggle -----------------------------------
 
 	// Build one feature entry, including restart-gated metadata so `list` answers
-	/**
-	 * @brief Constructs a JSON object describing a feature's state and any pending restart-required changes.
-	 *
-	 * Includes feature metadata (name, version, category, load state, etc.) and, if the feature 
-	 * has restart-required fields, an array of those fields with their pending status determined 
-	 * by comparing boot values against current live settings.
-	 *
-	 * @return json Feature entry with metadata and optional restart fields array.
-	 */
+	// "what exists", "which fields need a restart", and "is anything pending" in one read.
 	json FeatureEntry(Feature* f)
 	{
 		json entry{
@@ -157,7 +119,7 @@ namespace
 			{ "version", f->version },
 			{ "category", std::string(f->GetCategory()) },
 			{ "isCore", f->IsCore() },
-{ "supportsVR", f->SupportsVR() },
+			{ "supportsVR", f->SupportsVR() },
 			{ "inMenu", f->IsInMenu() },
 		};
 
@@ -187,15 +149,6 @@ namespace
 		return entry;
 	}
 
-	/**
-	 * @brief Dispatches feature management operations (list, get, set, reset, toggle).
-	 * 
-	 * Validates parameters and executes the requested feature operation, returning
-	 * success or error details in JSON format.
-	 * 
-	 * @param a_args JSON object specifying the action and operation parameters.
-	 * @return JSON object containing the operation result or error information.
-	 */
 	json BuildFeatureResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("list"));
@@ -239,13 +192,13 @@ namespace
 			// Threading contract: Feature::loaded is a public flag the render pipeline reads
 			// per-frame via ForEachLoadedFeature without synchronization, hot-toggled by direct
 			// assignment — touch it ONLY on the main thread. The applied value is reported via
-// the openshaders.feature.changed event (authoritative; the response can't know an
+			// the openshaders.feature.changed event (authoritative; the response can't know an
 			// implicit flip's result synchronously).
 			const bool hasExplicit = a_args.contains("enabled");
 			const bool explicitVal = a_args.value("enabled", false);
 			task->AddTask([target, hasExplicit, explicitVal, shortName]() {
 				const bool applied = hasExplicit ? explicitVal : !target->loaded;
-// Don't let a remote caller enable a VR-incompatible feature on a VR runtime:
+				// Don't let a remote caller enable a VR-incompatible feature on a VR runtime:
 				// it bypasses the SupportsVR() gate and can destabilize the renderer. Reject +
 				// report (covers both an explicit enable and an implicit flip resolving to true).
 				if (applied && globals::game::isVR && !target->SupportsVR()) {
@@ -260,7 +213,6 @@ namespace
 				if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 					const std::string payload = json{ { "shortName", shortName }, { "enabled", applied } }.dump();
 					dvb->EmitEvent("openshaders.feature.changed", payload.c_str());
-				}
 				}
 			});
 			json r{ { "action", "toggle" }, { "shortName", shortName }, { "queued", true }, { "enqueued_at_frame", frame } };
@@ -326,19 +278,12 @@ namespace
 		return json{ { "error", "unknown action (list|get|set|reset|toggle)" }, { "action", action } };
 	}
 
-	/**
-	 * @brief Handles feature-related DevBench tool requests.
-	 *
-	 * Routes feature operations (list, get, set, reset, toggle) through the standard
-	 * handler wrapper to ensure exceptions do not cross the DLL boundary and exactly
-	 * one response is written to the output sink.
-	 */
 	void FeatureToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		RunHandler(&BuildFeatureResult, a_argsJson, a_sink, a_write);
 	}
 
-// ---- inspect: engine state / shader-cache status ----------------------------------
+	// ---- inspect: engine state / shader-cache status ----------------------------------
 
 	// Registered as base-tool extensions on devbench 1.5.0+ (`inspect kind=openshaders`,
 	// `inspect kind=shadercache`); the base tool routes by key, so each handler ignores
@@ -399,74 +344,6 @@ namespace
 		};
 	}
 
-	/**
-	 * @brief Builds inspection data for the specified kind query (state, profiler, or shader cache).
-	 *
-	 * @param a_args JSON object containing the inspection query; must include a required `kind` field.
-	 *               Optional `filter` parameter narrows profiler results to entries whose name contains the filter string.
-	 * @return JSON object with the requested inspection data, or an error object if `kind` is missing or unsupported.
-	 *         For `kind="state"`, includes plugin name and frame count.
-	 *         For `kind="profiler"`, includes GPU/CPU timing statistics and per-pass history samples.
-	 *         For `kind="shadercache"`, includes compilation status and task/failure counts.
-	 */
-	json BuildInspectProfilerResult(const json& a_args)
-	{
-		const std::string filter = a_args.value("filter", std::string{});
-		return RunOnMainThread([filter]() -> json {
-			auto* profiler = globals::profiler;
-			if (!profiler)
-				return json{ { "error", "profiler unavailable" } };
-			json passes = json::array();
-			for (const auto& r : profiler->GetResults()) {
-				if (!r.valid)
-					continue;
-				if (!filter.empty() && r.name.find(filter) == std::string::npos)
-					continue;
-				json entry{
-					{ "name", r.name },
-					{ "gpuMs", r.gpuTimeMs },
-					{ "gpuAvgMs", r.avgMs },
-					{ "gpuP95Ms", r.p95Ms },
-					{ "gpuP99Ms", r.p99Ms },
-					{ "cpuMs", r.cpuTimeMs },
-					{ "cpuAvgMs", r.cpuAvgMs },
-				};
-				json hist = json::array();
-				for (uint32_t i = 0; i < r.historyCount; ++i)
-					hist.push_back(r.GetHistorySample(i));
-				entry["gpuHistory"] = hist;
-				passes.push_back(entry);
-			}
-			return json{
-				{ "totalGpuMs", profiler->GetTotalTimeMs() },
-				{ "totalCpuMs", profiler->GetCpuTotalTimeMs() },
-				{ "frame_count", EnqueuedFrame() },
-				{ "passes", passes },
-			};
-		});
-	}
-
-	json BuildInspectResult(const json& a_args)
-	{
-		const std::string kind = a_args.value("kind", std::string{});
-		if (kind.empty())
-			return json{ { "error", "missing required parameter 'kind'" } };
-
-		if (kind == "state") {
-			return BuildInspectStateResult(a_args);
-		}
-		if (kind == "shadercache") {
-			return BuildInspectShadercacheResult(a_args);
-		}
-		if (kind == "profiler") {
-			return BuildInspectProfilerResult(a_args);
-		}
-		if (kind == "llfshadows") {
-			return BuildInspectShadowsResult(a_args);
-		}
-		return json{ { "error", "unknown kind" }, { "kind", kind }, { "supported", json::array({ "state", "shadercache", "profiler", "llfshadows" }) } };
-	}
-
 	void InspectStateHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		RunHandler(&BuildInspectStateResult, a_argsJson, a_sink, a_write);
@@ -482,31 +359,7 @@ namespace
 		RunHandler(&BuildInspectShadowsResult, a_argsJson, a_sink, a_write);
 	}
 
-	void InspectProfilerHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
-	{
-		RunHandler(&BuildInspectProfilerResult, a_argsJson, a_sink, a_write);
-	}
-
-	/**
-	 * @brief Handles DevBench inspection requests for plugin state, profiler metrics, and shader cache status.
-	 */
-	void InspectToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
-	{
-		RunHandler(&BuildInspectResult, a_argsJson, a_sink, a_write);
-	}
-
-	/**
-	 * @brief Dispatches shader cache operations (clear or deleteDisk) to the main thread.
-	 *
-	 * Validates that the shader cache and task interface are available, then enqueues
-	 * the requested operation on the main thread. Returns immediately with a queued status
-	 * or an error if preconditions are not met.
-	 *
-	 * @param a_args JSON object containing an optional "action" field ("clear" or "deleteDisk").
-	 * @return JSON object with `{ action, queued, enqueued_at_frame, note }` on success,
-	 *         or `{ error, ... }` if the shader cache is unavailable, task interface is unavailable,
-	 *         or action is unrecognized.
-	 */
+	// ---- shadercache: clear / delete the compiled cache -------------------------------
 
 	json BuildShadercacheResult(const json& a_args)
 	{
@@ -521,7 +374,7 @@ namespace
 
 		// Mutating cache ops touch the live ShaderCache (and, for deleteDisk, the filesystem)
 		// — marshal to the main thread. Recompiles are observable via inspect(kind=shadercache)
-// + the openshaders.shaderRecompiled event. NOTE clear vs deleteDisk: clear only drops
+		// + the openshaders.shaderRecompiled event. NOTE clear vs deleteDisk: clear only drops
 		// the in-memory maps, so with the disk cache enabled shaders reload from Data/ShaderCache
 		// rather than recompiling — only deleteDisk guarantees a cold recompile.
 		if (action == "clear") {
@@ -541,23 +394,12 @@ namespace
 		return json{ { "error", "unknown action (clear|deleteDisk)" }, { "action", action } };
 	}
 
-	/**
-	 * @brief Processes DevBench requests for shader cache operations.
-	 */
 	void ShadercacheToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		RunHandler(&BuildShadercacheResult, a_argsJson, a_sink, a_write);
 	}
 
-	/**
-	 * @brief Builds a JSON response for a capture request.
-	 *
-	 * Processes RenderDoc or screenshot capture operations based on the `kind` parameter.
-	 * Validates feature availability and queues the capture on the main thread.
-	 *
-	 * @param a_args JSON object containing `kind` (required) and optional `frames` for RenderDoc.
-	 * @return JSON response indicating queued state or error details.
-	 */
+	// ---- capture: renderdoc / screenshot ----------------------------------------------
 
 	json BuildCaptureResult(const json& a_args)
 	{
@@ -576,7 +418,7 @@ namespace
 			return RunOnMainThread([frameCount, frame]() -> json {
 				auto* renderDoc = &globals::features::renderDoc;
 				if (!renderDoc->loaded)
-return json{ { "error", "RenderDoc feature is not loaded" }, { "hint", "openshaders.feature(action='list') shows RenderDoc.loaded" } };
+					return json{ { "error", "RenderDoc feature is not loaded" }, { "hint", "openshaders.feature(action='list') shows RenderDoc.loaded" } };
 				if (!renderDoc->IsAvailable())
 					return json{ { "error", "RenderDoc API not available — attach RenderDoc or load the in-app DLL" } };
 				if (frameCount == 1)
@@ -601,27 +443,12 @@ return json{ { "error", "RenderDoc feature is not loaded" }, { "hint", "openshad
 		return json{ { "error", "unknown kind" }, { "kind", kind }, { "supported", json::array({ "renderdoc", "screenshot" }) } };
 	}
 
-	/**
-	 * @brief Processes capture requests for RenderDoc and screenshot operations.
-	 *
-	 * DevBench tool handler that triggers RenderDoc frame captures or screenshot
-	 * captures based on the provided `kind` parameter.
-	 */
 	void CaptureToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		RunHandler(&BuildCaptureResult, a_argsJson, a_sink, a_write);
 	}
 
-	/**
-	 * @brief Builds a JSON response for global settings operations.
-	 *
-	 * Enqueues a main-thread task to perform the specified action on the global Community Shaders
-	 * configuration. Returns immediately with queuing status and frame information.
-	 *
-	 * @param a_args JSON object containing an "action" field: `save`, `load`, or `reset`.
-	 * @return JSON object with `action`, `queued`, and `enqueued_at_frame` on success;
-	 *         `error` and optionally `action` on validation failure.
-	 */
+	// ---- settings: save / load / reset the GLOBAL CS config ---------------------------
 
 	json BuildSettingsResult(const json& a_args)
 	{
@@ -676,8 +503,6 @@ return json{ { "error", "RenderDoc feature is not loaded" }, { "hint", "openshad
 						f->RestoreDefaultSettings();
 					} catch (const std::exception& e) {
 						logger::error("DevBenchBridge: settings(reset) {} threw: {}", f->GetShortName(), e.what());
-				} catch (...) {
-					logger::error("DevBenchBridge: settings(reset) {} threw (unknown)", f->GetShortName());
 					}
 				}
 				try {
@@ -694,13 +519,11 @@ return json{ { "error", "RenderDoc feature is not loaded" }, { "hint", "openshad
 		return json{ { "error", "unknown action (save|load|reset)" }, { "action", action } };
 	}
 
-	/**
-	 * @brief Processes DevBench settings tool requests (save, load, reset).
-	 */
 	void SettingsToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		RunHandler(&BuildSettingsResult, a_argsJson, a_sink, a_write);
 	}
+
 	// ---- menu handler: open / close / toggle the Community Shaders settings menu -------
 
 	json BuildMenuResult(const json& a_args)
@@ -731,12 +554,6 @@ return json{ { "error", "RenderDoc feature is not loaded" }, { "hint", "openshad
 
 namespace DevBenchBridge
 {
-	/**
-	 * @brief Registers Community Shaders tools with the DevBench API if available.
-	 *
-	 * Registers tools for feature management, engine state inspection, shader cache control,
-	 * frame capture, and settings persistence, provided the DevBench interface is available.
-	 */
 	void Install()
 	{
 		auto* dvb = DevBenchAPI::GetDevBenchInterface001();
@@ -752,13 +569,8 @@ namespace DevBenchBridge
 		// so existing MCP clients keep working under the new prefix.
 
 		static constexpr const char* featureDesc =
-		static constexpr const char* featureDesc =
 			R"({"description":"All Open Shaders graphics-feature operations — enumerate, inspect settings, mutate settings, restore defaults, toggle on/off. Action-dispatched. list: returns an array of {name,shortName,loaded,version,category,isCore,supportsVR,inMenu}; features with restart-gated settings also include restartFields:[{key,label,pending}]. get: params shortName, returns the SaveSettings blob (null if the feature has no override; set/reset then no-op). set: params shortName, settings (object). reset: params shortName, calls RestoreDefaultSettings. toggle: params shortName, enabled (boolean, OPTIONAL — omit to flip the current loaded state); flips Feature::loaded.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","reset","toggle"]},"shortName":{"type":"string"},"settings":{"type":"object"},"enabled":{"type":"boolean"}}}})";
 		dvb->RegisterTool("openshaders.feature", featureDesc, &FeatureToolHandler, nullptr);
-
-		static constexpr const char* inspectDesc =
-			R"({"description":"Read non-feature Open Shaders engine state. Kind-dispatched; response is a JSON object. kind=state -> {plugin,frame_count,vr}. kind=shadercache -> {compiling,completedTasks,totalTasks,failedTasks,currentFailedCount,frame_count}. kind=profiler -> {totalGpuMs,totalCpuMs,frame_count,passes:[{name,gpuMs,gpuAvgMs,gpuP95Ms,gpuP99Ms,cpuMs,cpuAvgMs,gpuHistory:[...]}]}. kind=llfshadows -> {valid,frame,total,chosen,excess,slotsInUse,lights:[{ptr,reason}]}.","readOnly":true,"inputSchema":{"type":"object","properties":{"kind":{"type":"string","enum":["state","shadercache","profiler","llfshadows"]},"filter":{"type":"string"}},"required":["kind"]}})";
-		dvb->RegisterTool("openshaders.inspect", inspectDesc, &InspectToolHandler, nullptr);
 
 		static constexpr const char* shadercacheDesc =
 			R"({"description":"Manage Open Shaders' compiled shader cache. Action-dispatched, fire-and-forget on the main thread. clear: drop the IN-MEMORY cache only; with the disk cache enabled shaders reload from Data/ShaderCache rather than recompiling, so this does NOT guarantee a recompile. deleteDisk: delete the on-disk cache AND drop the in-memory cache, forcing a full cold recompile (use this for compile benchmarks). Watch progress via inspect kind=shadercache and the openshaders.shaderRecompiled event. Read-only status is inspect kind=shadercache.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["clear","deleteDisk"]}},"required":["action"]}})";
@@ -795,10 +607,6 @@ namespace DevBenchBridge
 			static constexpr const char* inspectShadowsDesc =
 				R"({"description":"Open Shaders Light Limit Fix shadow-scheduler diagnostics -> {valid,frame,total,chosen,excess,invalidCamera,invalidPortal,invalidFrustum,invalidLod,invalidOther,slotsInUse,lights:[{ptr,reason}]}. reason: portal|frustum|lod|excess|other -- why a non-chosen light was demoted from a shadow caster. The scheduler fills this only while the settings menu is open or a dump was recently requested; calling this primes it, so if valid==false (idle) poll again after a frame (use inspect kind=openshaders frame_count to know a tick passed).","readOnly":true,"inputSchema":{"type":"object"}})";
 			dvb->RegisterToolExtension("inspect", "llfshadows", inspectShadowsDesc, &InspectShadowsHandler, nullptr);
-
-			static constexpr const char* inspectProfilerDesc =
-				R"({"description":"Open Shaders profiler metrics -> {totalGpuMs,totalCpuMs,frame_count,passes:[{name,gpuMs,gpuAvgMs,gpuP95Ms,gpuP99Ms,cpuMs,cpuAvgMs,gpuHistory:[...]}]}. Optional filter parameter to match pass names.","readOnly":true,"inputSchema":{"type":"object","properties":{"filter":{"type":"string"}}}})";
-			dvb->RegisterToolExtension("inspect", "profiler", inspectProfilerDesc, &InspectProfilerHandler, nullptr);
 		} else {
 			logger::info("DevBenchBridge: devbench build {} < 10500; CS menu + inspect extensions need 1.5.0", dvb->GetBuildNumber());
 		}
@@ -809,14 +617,7 @@ namespace DevBenchBridge
 
 namespace DevBenchBridge
 {
-/**
- * @brief Registers Open Shaders tools with the DevBench bridge if available.
- *
- * When the DevBench interface is present, registers tool handlers for feature management,
- * inspection, shader caching, capture operations, and settings persistence.
- * If DevBench is unavailable, no action is taken.
- */
-void Install() {}  // inert until built with DEVBENCH_BRIDGE_ENABLED
+	void Install() {}  // inert until built with DEVBENCH_BRIDGE_ENABLED
 }
 
 #endif

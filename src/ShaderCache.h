@@ -380,7 +380,7 @@ namespace SIE
 		ID3DBlob* blob;
 		ShaderCompilationTask::Status status;
 		system_clock::time_point compileTime = system_clock::now();
-		bool loadedFromDisk = false;  /**< true when the shader blob was read from the disk cache rather than compiled */
+		bool loadedFromDisk = false; /**< true when the shader blob was read from the disk cache rather than compiled */
 	};
 
 	class UpdateListener;
@@ -456,7 +456,7 @@ namespace SIE
 		void ValidateDiskCache();
 		/** @brief Writes cache metadata (version, feature list) to the disk cache directory. */
 		void WriteDiskCacheInfo();
-/// One disk-cache/runtime state divergence found by ValidateDiskCache.
+		/// One disk-cache/runtime state divergence found by ValidateDiskCache.
 		/// (Logic lives in Utils/CacheInvalidation.h so tests/cpp can exercise it.)
 		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
 

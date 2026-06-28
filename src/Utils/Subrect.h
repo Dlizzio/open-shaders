@@ -37,7 +37,7 @@ namespace Util::Subrect
 		uint32_t h = 1;
 	};
 
-struct StereoPixelRegions
+	struct StereoPixelRegions
 	{
 		PixelRegion leftEye;
 		PixelRegion rightEye;
@@ -57,7 +57,7 @@ struct StereoPixelRegions
 		std::optional<UVRegion> rightUV{};
 	};
 
-// "User picks a sub-rectangle of an image" controller. Crop UV is in [0,1]
+	// "User picks a sub-rectangle of an image" controller. Crop UV is in [0,1]
 	// of the source the caller passes to GetPixelRegion(). Hosts that want
 	// preset-based eye selection seed Left/Right/Full Frame via SeedDefaultPresets.
 	//
@@ -96,7 +96,7 @@ struct StereoPixelRegions
 		 */
 		void SeedDefaultPresets(std::vector<Preset> defaults);
 
-// Toggles right-eye UV tracking. Off by default (mono).
+		// Toggles right-eye UV tracking. Off by default (mono).
 		// When enabled, edits to the primary UV auto-mirror to the right-eye
 		// UV (around x=0.5), and SaveSettings emits the extra right-eye keys.
 		void SetStereoEnabled(bool enabled);
@@ -131,7 +131,7 @@ struct StereoPixelRegions
 		 */
 		PixelRegion GetPixelRegion(uint32_t width, uint32_t height) const;
 
-// In stereo mode, resolves both eyes' UVs against an SBS texture by
+		// In stereo mode, resolves both eyes' UVs against an SBS texture by
 		// dividing width by 2. In mono mode, both eyes resolve from currentUV.
 		//
 		// Coordinate space: both leftEye.x and rightEye.x are in PER-EYE

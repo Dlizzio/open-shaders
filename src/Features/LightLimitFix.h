@@ -332,6 +332,7 @@ public:
 	}
 	/**
 	 * @brief Checks whether a BSLight is valid (non-null and not hidden).
+	 */
 	static inline bool IsValidLight(RE::BSLight* a_light);
 	/**
 	 * @brief Checks whether a BSLight is a global (non-portal-strict) light.

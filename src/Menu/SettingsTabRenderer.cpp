@@ -995,7 +995,7 @@ void SettingsTabRenderer::RenderFontsTab()
 				ImGui::TextUnformatted(descriptor.displayName.data());
 			}
 
-MenuFonts::Selector::RenderRolePickers(*menuInstance, themeSettings, fontCatalog, role, roleIndex);
+			MenuFonts::Selector::RenderRolePickers(*menuInstance, themeSettings, fontCatalog, role, roleIndex);
 
 			ImGui::Separator();
 			ImGui::PopID();

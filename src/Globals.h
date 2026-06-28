@@ -154,7 +154,7 @@ namespace globals
 		float4 DynamicResolutionParams2;
 	};
 
-struct FrameBufferVR
+	struct FrameBufferVR
 	{
 		// Must match HLSL VR layout exactly - packoffsets c0 to c86
 		Matrix CameraView[2];
@@ -174,7 +174,7 @@ struct FrameBufferVR
 		float4 DynamicResolutionParams2;
 	};
 
-union FrameBufferCache
+	union FrameBufferCache
 	{
 		FrameBuffer nonVR;
 		FrameBufferVR vr;

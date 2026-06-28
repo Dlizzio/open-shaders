@@ -27,6 +27,7 @@ on:
             - "features/**"
             - "src/Features/**"
             - "package/Shaders/**"
+            - "tests/shaders/**"
             - ".github/configs/**"
 
 # Least-privilege defaults; individual jobs override where needed.
@@ -86,6 +87,7 @@ jobs:
                         - 'include/**'
                         - '!**.hlsl'
                         - '!**.hlsli'
+                        - '!tests/shaders/**'
                       build:
                         - 'CMakeLists.txt'
                         - 'CMakePresets.json'

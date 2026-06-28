@@ -72,7 +72,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 
-virtual bool SupportsVR() override { return true; }
+	virtual bool SupportsVR() override { return true; }
 	/** @brief Installs the engine hook for binding the shared shadow map SRV. */
 	virtual void PostPostLoad() override;
 

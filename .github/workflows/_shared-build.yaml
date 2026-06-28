@@ -107,6 +107,7 @@ jobs:
               uses: lukka/run-cmake@v10
               with:
                   configurePreset: ${{ matrix.compiler.cmake-preset }}
+                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF']"
                   buildPreset: ${{ matrix.compiler.cmake-preset }}
 
             - name: Extract version from CMake
@@ -301,7 +302,6 @@ jobs:
                       build/ShaderCache/*.log
                   retention-days: 7
                   if-no-files-found: ignore
-
 
     shader-unit-tests:
         name: Run Shader Unit Tests

@@ -117,7 +117,7 @@ public:
 
 	/** @brief Acquires a new frame token from Streamline for the current frame. */
 	bool EnsureFrameToken();
-bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0);
+	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0);
 
 	/**
 	 * @brief Detects whether the GPU is an NVIDIA RTX card below the 40-series generation.

@@ -125,7 +125,7 @@ public:
 
 	virtual void RestoreDefaultSettings() override;
 
-virtual bool SupportsVR() override { return true; };
+	virtual bool SupportsVR() override { return true; };
 
 	/** @brief Returns the weather analysis configuration for the debug weather analysis panel. */
 	virtual WeatherAnalysisConfig GetWeatherAnalysisConfig() const override

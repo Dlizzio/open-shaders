@@ -1,19 +1,6 @@
 cmake_minimum_required(VERSION 4.2)
-
-set(VCPKG_BUILD_TYPE release CACHE STRING "")
-
-# devbench bridge — declared before project() so the vcpkg toolchain (loaded at project())
-# sees the manifest-feature selection. The devbench-api dependency lives behind the
-# `devbench-bridge` vcpkg feature, so -DDEVBENCH_BRIDGE=OFF actually drops it (not just the
-# find_package/link/define below).
-option(
-    DEVBENCH_BRIDGE
-    "Register the plugin's tools into the devbench test bench (requires the devbench-api port; runtime no-op when no devbench host is present)"
-    ON
-)
-if(DEVBENCH_BRIDGE)
-    list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
-endif()
+cmake_policy(SET CMP0116 NEW)
+set(CMAKE_POLICY_WARNING_CMP0116 OFF)
 
 # devbench bridge — declared before project() so the vcpkg toolchain (loaded at project())
 # sees the manifest-feature selection. The devbench-api dependency lives behind the
@@ -56,12 +43,12 @@ option(
 )
 option(
     ZIP_TO_DIST
-    "Zip the base mod and addons to their own zip file in dist."
+    "Zip the base mod and addons to their own 7z file in dist."
     ON
 )
 option(
     AIO_ZIP_TO_DIST
-    "Zip the base mod and addons to a AIO zip file in dist."
+    "Zip the base mod and addons to a AIO 7z file in dist."
     ON
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
@@ -72,15 +59,15 @@ option(
 )
 option(
     AIO_INCLUDE_NON_AUTOUPLOAD
-    "Include features whose .ini has autoupload != true in the AIO. Off by default - the AIO ships only release-ready features. Turn on for local dev builds that want every feature regardless of release status."
+    "Include features whose .ini has autoupload != true in the AIO. Off by default — the AIO ships only release-ready features. Turn on for local dev builds that want every feature regardless of release status."
     OFF
 )
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
-message("	Shader tests: ${BUILD_SHADER_TESTS}")
-message("	AIO include non-autoupload features: ${AIO_INCLUDE_NON_AUTOUPLOAD}")
+message("\tShader tests: ${BUILD_SHADER_TESTS}")
+message("\tAIO include non-autoupload features: ${AIO_INCLUDE_NON_AUTOUPLOAD}")
 
 # #######################################################################################################################
 # # Build version info from git
@@ -238,6 +225,7 @@ if(MSVC)
     # full feature + editor headers) exceed the default COFF section limit; /bigobj.
     target_compile_options(${PROJECT_NAME} PRIVATE "/bigobj")
 endif()
+
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
 if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
     # When using /std:c++latest, "Build ISO C++23 Standard Library Modules" defaults to "Yes".
@@ -744,7 +732,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
     )
 
-    # If AIO was manually (or programmatically) deleted, the stamp is stale â€”
+    # If AIO was manually (or programmatically) deleted, the stamp is stale —
     # clear it so cmake --build re-runs PREPARE_AIO to recreate the directory.
     if(NOT EXISTS "${AIO_DIR}")
         file(
@@ -1056,15 +1044,15 @@ if(AUTO_PLUGIN_DEPLOYMENT)
     endif()
 
     # Lightweight target for fast shader dev iteration
-    # Deploys ONLY shaders to game directory (no DLL build)
+    # Deploys ONLY shaders to game directory (no DLL build, no tests)
     add_custom_target(
         COPY_SHADERS
         DEPENDS ${SHADER_ONLY_HASHES}
-        COMMENT "Fast shader-only deploy to game directory (no DLL)"
+        COMMENT "Fast shader-only deploy to game directory (no DLL, no tests)"
     )
 
     # Full deployment target for packaging/CI
-    # Builds DLL, prepares AIO, deploys everything
+    # Builds DLL, prepares AIO, deploys everything, runs tests
     add_custom_target(
         DEPLOY_ALL
         ALL
@@ -1079,7 +1067,7 @@ if(NOT DEFINED ENV{CommunityShadersOutputDir})
     )
 endif()
 
-# Zip base CommunityShaders and all addons as their own zip in dist folder
+# Zip base CommunityShaders and all addons as their own 7z in dist folder
 if(ZIP_TO_DIST)
     set(ZIP_DIR "${CMAKE_CURRENT_BINARY_DIR}/zip")
     message("Copying base CommunityShader into ${ZIP_DIR}.")
@@ -1120,14 +1108,14 @@ if(ZIP_TO_DIST)
         COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}/Shaders/Tests"
     )
 
-    set(TARGET_ZIP "${PROJECT_NAME}-${UTC_NOW}.zip")
+    set(TARGET_ZIP "${PROJECT_NAME}-${UTC_NOW}.7z")
     message("Zipping ${ZIP_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}")
     add_custom_command(
         TARGET ${PROJECT_NAME}
         POST_BUILD
         COMMAND
             ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}
-            --format=zip -- .
+            --format=7zip -- .
         WORKING_DIRECTORY ${ZIP_DIR}
     )
 
@@ -1137,14 +1125,14 @@ if(ZIP_TO_DIST)
         endif()
         get_filename_component(FEATURE ${FEATURE_PATH} NAME)
         message(
-            "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.zip"
+            "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z"
         )
         add_custom_command(
             TARGET ${PROJECT_NAME}
             POST_BUILD
             COMMAND
                 ${CMAKE_COMMAND} -E tar cf
-                ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.zip --format=zip
+                ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z --format=7zip
                 -- .
             WORKING_DIRECTORY ${FEATURE_PATH}
         )
@@ -1167,7 +1155,7 @@ if(AIO_ZIP_TO_DIST)
     # only rebuilds the archive when its inputs change. The archive filename
     # keeps the UTC timestamp as before, but the command writes a stable
     # stamp file that CMake can track as OUTPUT.
-    set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.zip")
+    set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
     set(AIO_ARCHIVE "${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP}")
     set(AIO_ZIP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/aio_package.stamp")
     set(AIO_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio_stage")
@@ -1276,13 +1264,12 @@ endif()
 set(DIST_PATH "${CMAKE_SOURCE_DIR}/dist")
 file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
 
-set(CORE_PACKAGE "${DIST_PATH}/${PROJECT_NAME}-${UTC_NOW}.zip")
+set(CORE_PACKAGE "${DIST_PATH}/${PROJECT_NAME}-${UTC_NOW}.7z")
 
-# CORE_SOURCES = all content copied to the AIO directory + the SKSE plugin dll.
-# No CONFIGURE_DEPENDS: packaging runs from a fresh CI configure, and omitting
-# it keeps these globs out of the VS generator's per-build VerifyGlobs walk.
+# CORE_SOURCES = all content copied to the AIO directory + the SKSE plugin dll
 file(
     GLOB_RECURSE CORE_SOURCES
+    CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/package/*"
 )
 # Add SKSE plugin dll as dependency (use target-file generator expression so CMake
@@ -1294,7 +1281,7 @@ set(CORE_FEATURE_PATHS "${CMAKE_SOURCE_DIR}/package/")
 foreach(FEATURE_PATH ${FEATURE_PATHS})
     if(EXISTS "${FEATURE_PATH}/CORE")
         list(APPEND CORE_FEATURE_PATHS "${FEATURE_PATH}/")
-        file(GLOB_RECURSE FEATURE_SOURCES "${FEATURE_PATH}/*")
+        file(GLOB_RECURSE FEATURE_SOURCES CONFIGURE_DEPENDS "${FEATURE_PATH}/*")
         list(APPEND CORE_SOURCES ${FEATURE_SOURCES})
     endif()
 endforeach()
@@ -1304,15 +1291,15 @@ set(FEATURE_PATH "${CMAKE_BINARY_DIR}/Core")
 file(MAKE_DIRECTORY ${FEATURE_PATH})
 add_custom_command(
     OUTPUT ${CORE_PACKAGE}
-    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
+    DEPENDS ${CORE_SOURCES}
     COMMAND
-        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG> --prefix ${FEATURE_PATH}
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE
     COMMAND
         ${CMAKE_COMMAND} -E copy_directory ${CORE_FEATURE_PATHS} ${FEATURE_PATH}
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PATH}/Shaders/Tests"
-    COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=zip -- .
+    COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=7zip -- .
     WORKING_DIRECTORY ${FEATURE_PATH}
     COMMENT "Creating Core zip package"
 )
@@ -1325,16 +1312,16 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
     endif()
 
     list(APPEND CORE_FEATURE_PATHS "${FEATURE_PATH}/")
-    file(GLOB_RECURSE FEATURE_SOURCES "${FEATURE_PATH}/*")
+    file(GLOB_RECURSE FEATURE_SOURCES CONFIGURE_DEPENDS "${FEATURE_PATH}/*")
     list(APPEND CORE_SOURCES ${FEATURE_SOURCES})
 
     get_filename_component(FEATURE ${FEATURE_PATH} NAME)
-    set(FEATURE_PACKAGE "${DIST_PATH}/${FEATURE}-${UTC_NOW}.zip")
+    set(FEATURE_PACKAGE "${DIST_PATH}/${FEATURE}-${UTC_NOW}.7z")
 
     add_custom_command(
         OUTPUT ${FEATURE_PACKAGE}
         COMMAND
-            ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=zip -- .
+            ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip -- .
         WORKING_DIRECTORY "${FEATURE_PATH}"
         DEPENDS ${FEATURE_SOURCES}
         COMMENT "Creating ${FEATURE} zip package"
@@ -1346,24 +1333,13 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
 endforeach()
 
 # AIO Folder target
-# When the incremental AIO system (PREPARE_AIO) is active, reuse it instead
-# of running a full cmake --install (which does REMOVE_RECURSE + full copy).
-if(TARGET PREPARE_AIO)
-    add_custom_target(
-        "AIO"
-        DEPENDS
-            ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
-            copy_shaders.stamp
-    )
-else()
-    add_custom_command(
-        OUTPUT ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll
-        DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
-        COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG> --prefix ${AIO_DIR}
-        COMMENT "Installing to AIO folder"
-    )
-    add_custom_target("AIO" DEPENDS ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll)
-endif()
+add_custom_command(
+    OUTPUT ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll
+    DEPENDS ${CORE_SOURCES}
+    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
+    COMMENT "Installing to AIO folder"
+)
+add_custom_target("AIO" DEPENDS ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll)
 
 # Manual AIO package target. Strips non-autoupload features at archive
 # time (mirroring AIO_ZIP_PACKAGE) so the manual path produces the same
@@ -1490,8 +1466,32 @@ if(BUILD_SHADER_TESTS)
         COMMENT "Running shader unit tests..."
         VERBATIM
     )
-endif()
 
+    # Make all package targets depend on shader tests passing
+    add_dependencies("Package-Core" run_shader_tests)
+    add_dependencies("Package-AIO-Manual" run_shader_tests)
+    foreach(FEATURE_PATH ${FEATURE_PATHS})
+        get_filename_component(FEATURE ${FEATURE_PATH} NAME)
+        string(REPLACE " " "" FEATURE ${FEATURE})
+        string(REPLACE "-" "" FEATURE ${FEATURE})
+        if(TARGET "Package-${FEATURE}")
+            add_dependencies("Package-${FEATURE}" run_shader_tests)
+        endif()
+    endforeach()
+
+    # Make shader deployment targets depend on tests passing
+    if(TARGET prepare_shaders)
+        add_dependencies(prepare_shaders run_shader_tests)
+    endif()
+    if(TARGET DEPLOY_ALL)
+        add_dependencies(DEPLOY_ALL run_shader_tests)
+    endif()
+
+    message(
+        STATUS
+        "Package and shader deployment targets will automatically run shader tests before deploying"
+    )
+endif()
 
 message("*************************************************************")
 message("Open Shaders configuration complete (fork of Community Shaders)")
@@ -1502,5 +1502,11 @@ message("    - Package-AIO-Manual: AIO package (manual)")
 message("    - Package-<Feature>: Individual feature packages")
 message("  Or use cmake --install for custom deployment:")
 message("    cmake --install ./build/ALL --prefix <TARGET_DIR>")
+if(BUILD_SHADER_TESTS)
+    message("To run shader tests manually:")
+    message(
+        "  cmake --build build/<preset> --config <Debug|Release> --target run_shader_tests"
+    )
+endif()
 message("Try switching to build preset 'Dev' for faster iteration time")
 message("*************************************************************")

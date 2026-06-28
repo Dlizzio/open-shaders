@@ -5,12 +5,12 @@
 #include "../Menu.h"
 #include "../Utils/UI.h"
 #include "EditorWindow.h"
-#include "imgui_internal.h"
 #include "RE/B/BSLight.h"
 #include "RE/B/BSShadowLight.h"
 #include "RE/E/ExtraEmittanceSource.h"
 #include "RE/T/TESRegion.h"
 #include "WeatherUtils.h"
+#include "imgui_internal.h"
 
 #define I18N_KEY_PREFIX "feature.light_editor."
 

@@ -148,28 +148,28 @@
             "description": "Default build preset for developers, generate an AIO folder thats ready to copy",
             "configurePreset": "ALL",
             "configuration": "Release",
-            "targets": ["AIO"]
+            "targets": ["CommunityShaders", "AIO"]
         },
         {
             "name": "ALL",
             "description": "(Deprecated), kept for CI, use Package instead",
             "configurePreset": "ALL",
             "configuration": "Release",
-            "targets": ["Package-AIO-Manual"]
+            "targets": ["CommunityShaders", "Package-AIO-Manual"]
         },
         {
             "name": "ALL-VS2022",
             "description": "Same as ALL but using Visual Studio 17 2022 toolchain",
             "configurePreset": "ALL-VS2022",
             "configuration": "Release",
-            "targets": ["Package-AIO-Manual"]
+            "targets": ["CommunityShaders", "Package-AIO-Manual"]
         },
         {
             "name": "Package",
             "description": "Build preset to generate a AIO zip package in <SRC>/dist folder, mostly for CI",
             "configurePreset": "ALL",
             "configuration": "Release",
-            "targets": ["Package-AIO-Manual"]
+            "targets": ["CommunityShaders", "Package-AIO-Manual"]
         },
         {
             "name": "Shaders",
@@ -183,7 +183,7 @@
             "description": "Debug build for CS SKSE plugin, generate an AIO folder thats ready to copy",
             "configurePreset": "ALL-DEBUG",
             "configuration": "Debug",
-            "targets": ["AIO"]
+            "targets": ["CommunityShaders", "AIO"]
         },
         {
             "name": "Dev-Fast",
@@ -196,7 +196,7 @@
             "description": "CI build for pull requests: mildly optimized package without LTCG or full debug info",
             "configurePreset": "PR",
             "configuration": "Release",
-            "targets": ["Package-AIO-Manual"]
+            "targets": ["CommunityShaders", "Package-AIO-Manual"]
         }
     ]
 }

@@ -31,7 +31,7 @@ public:
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kMaterials; }
 	/** @brief Indicates this is a core feature bundled with the main mod. */
 	virtual bool IsCore() const override { return true; }
-virtual bool SupportsVR() override { return true; }
+	virtual bool SupportsVR() override { return true; }
 	/** @brief Indicates this feature appears in the in-game settings menu. */
 	virtual bool IsInMenu() const override { return true; }
 	/** @brief Suppresses the fail-to-load message for this always-available feature. */

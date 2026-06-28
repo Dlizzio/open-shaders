@@ -36,12 +36,12 @@ struct Feature
  * @param jsonKey The JSON key identifying which boot value to retrieve.
  * @returns A pointer to the boot configuration value, or nullptr if not defined.
  */
-virtual const void* GetBootValue(std::string_view /*jsonKey*/) const { return nullptr; }
+	virtual const void* GetBootValue(std::string_view /*jsonKey*/) const { return nullptr; }
 	/**
  * Retrieves the raw settings data blob.
  * @return Pointer to the settings blob data, or nullptr if unavailable.
  */
-virtual const void* GetSettingsBlob() const { return nullptr; }
+	virtual const void* GetSettingsBlob() const { return nullptr; }
 	virtual size_t GetSettingsBlobSize() const { return 0; }
 
 	// True if any restart-gated setting's live value differs from the

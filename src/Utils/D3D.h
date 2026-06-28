@@ -69,7 +69,7 @@ namespace Util
 	 */
 	HRESULT CreateOverlayTextureAndRTV(ID3D11Device* device, int width, int height, ID3D11Texture2D** outTex, ID3D11RenderTargetView** outRTV);
 
-// VR-aware counts for render targets
+	// VR-aware counts for render targets
 	inline int GetRenderTargetCount()
 	{
 		return globals::game::isVR ? RE::RENDER_TARGETS::kVRTOTAL : RE::RENDER_TARGETS::kTOTAL;

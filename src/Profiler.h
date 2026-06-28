@@ -103,7 +103,7 @@ public:
 
 	/** @brief Begins a new profiling frame; collects results from the oldest in-flight frame. */
 	void BeginFrame();
-void BeginPass(const std::string& name, bool fireCallbacks = true);
+	void BeginPass(const std::string& name, bool fireCallbacks = true);
 	void EndPass(bool fireCallbacks = true);
 	void EndFrame();
 

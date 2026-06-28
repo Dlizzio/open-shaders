@@ -19,7 +19,7 @@ struct ScreenshotFeature : public Feature
 	virtual std::string GetShortName() override { return "Screenshot"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 
-virtual bool SupportsVR() override { return true; }  // fork: VR screenshots (per-eye Subrect presets)
+	virtual bool SupportsVR() override { return true; }  // fork: VR screenshots (per-eye Subrect presets)
 
 	/** @brief Returns true, indicating this feature's settings are always visible in the menu. */
 	virtual bool IsInMenu() const override;
