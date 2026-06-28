@@ -8,6 +8,13 @@
 // `devbench-api` port is available); otherwise this file compiles to an empty Install().
 // When built in, Install() is still a runtime no-op if no devbench host is present — so
 // it is always safe to call.
+/**
+ * Registers the project's tools with the devbench host.
+ *
+ * Fetches the devbench interface and registers the project's tools for remote
+ * control. If the devbench host is not present or the bridge was compiled with
+ * the feature disabled, this function is a no-op.
+ */
 namespace DevBenchBridge
 {
 	// Fetch the devbench interface (after kPostLoad) and register our tools. No-op if

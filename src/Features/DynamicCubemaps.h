@@ -3,7 +3,34 @@
 #include "Buffer.h"
 #include "Utils/BootSnapshot.h"
 
-struct DynamicCubemaps : Feature
+/**
+ * Handles menu open and close events.
+ */
+class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+{
+public:
+	/**
+	 * Processes a menu open/close event notification.
+	 * @param a_event The menu open/close event.
+	 * @param a_eventSource The event source.
+	 * @return The event notification control value.
+	 */
+	virtual RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>* a_eventSource);
+
+	/**
+	 * Registers this handler to receive menu events.
+	 * @return `true` if registration succeeds, `false` otherwise.
+	 */
+	static bool Register();
+};
+
+/**
+	 * Feature that generates dynamic cube maps for environment mapping and reflections.
+	 * 
+	 * Manages GPU resources and compute passes to capture and process environmental
+	 * data into cube maps for real-time reflections and specular irradiance calculations.
+	 */
+	struct DynamicCubemaps : Feature
 {
 public:
 	const std::string defaultDynamicCubeMapSavePath = "Data\\textures\\DynamicCubemaps";
@@ -66,17 +93,15 @@ public:
 
 	enum class NextTask
 	{
-		kCapture,
-		kInferrence,
-		kIrradiance,
-		kBC6HCompress,
-		kCapture2,
-		kInferrence2,
-		kIrradiance2,
-		kBC6HCompress2
+		kCaptureInferAndIrradianceA,
+		kIrradianceBA,
+		kIrradianceBBAndBC6H,
+		kCaptureInferAndIrradianceA2,
+		kIrradianceBA2,
+		kIrradianceBBAndBC6H2,
 	};
 
-	NextTask nextTask = NextTask::kCapture;
+	NextTask nextTask = NextTask::kCaptureInferAndIrradianceA;
 
 	// BC6H compression
 	struct alignas(16) BC6HEncodeCB
@@ -149,8 +174,15 @@ public:
 
 	virtual std::vector<std::pair<std::string_view, std::string_view>> GetShaderDefineOptions() override;
 
-	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
+	/**
+ * Indicates whether the feature applies shader defines to the given shader type.
+ * @returns Always `true`.
+ */
+bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
+	/**
+	 * Initialize Direct3D resources required for dynamic cubemap generation.
+	 */
 	virtual void SetupResources() override;
 	virtual void Reset() override;
 	virtual void OnSceneTransitionReset(bool opening) override;
@@ -191,7 +223,7 @@ public:
 
 	void Inferrence(bool a_reflections);
 
-	void Irradiance(bool a_reflections);
+	void Irradiance(bool a_reflections, uint32_t a_startLevel, uint32_t a_endLevel, bool a_doSetup);
 
 	void CompressToBC6H(bool a_reflections);
 

@@ -4,7 +4,16 @@
 #include <cstddef>
 #include <span>
 #include <string_view>
+#include <cstddef>
 
+/**
+ * @brief Type-erased descriptor for restart-gated settings fields.
+ * 
+ * Metadata container for a settings field that supports restart-based gating.
+ * The jsonKey field must match the corresponding field name in NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE
+ * declarations, allowing external tools such as MCP and RemoteControl to reference settings
+ * without requiring feature-specific integration code.
+ */
 namespace Util::Settings
 {
 	// Type-erased field descriptor for restart-gated settings.
@@ -18,8 +27,7 @@ namespace Util::Settings
 		size_t offset = 0;
 		size_t size = 0;
 	};
-
-	template <typename SettingsT, size_t N>
+template <typename SettingsT, size_t N>
 	using RestartTable = std::array<RestartFieldInfo, N>;
 
 	inline constexpr const RestartFieldInfo* FindRestartField(std::span<const RestartFieldInfo> fields, std::string_view jsonKey) noexcept
@@ -35,5 +43,4 @@ namespace Util::Settings
 
 // Convenience macro for building a RestartFieldInfo entry without duplicating
 // the member name string. Requires SettingsT to be standard-layout.
-#define UTIL_RESTART_FIELD(SettingsT, member, userLabel) \
-	Util::Settings::RestartFieldInfo { #member, userLabel, offsetof(SettingsT, member), sizeof(decltype(SettingsT::member)) }
+#define UTIL_RESTART_FIELD(SettingsT, member, userLabel) 	Util::Settings::RestartFieldInfo { #member, userLabel, offsetof(SettingsT, member), sizeof(decltype(SettingsT::member)) }

@@ -20,7 +20,7 @@
 
 namespace SIE
 {
-	// Chrono-free snapshot of compile counters for consumers that can't include
+// Chrono-free snapshot of compile counters for consumers that can't include
 	// ShaderCache.h (see ShaderCompileStatus.h). Thread-safe: atomics + the
 	// shader-map lock inside GetCurrentFailedCount.
 	ShaderCompileStatus GetShaderCompileStatus()
@@ -42,7 +42,6 @@ namespace SIE
 		status.currentFailedCount = cache->GetCurrentFailedCount();
 		return status;
 	}
-
 	// Custom include handler to track all includes during shader compilation
 	class TrackingIncludeHandler : public ID3DInclude
 	{
@@ -1369,6 +1368,19 @@ namespace SIE
 			return type;
 		}
 
+		/**
+		 * @brief Compiles or retrieves a cached shader.
+		 *
+		 * Checks the in-memory shader cache, then the disk cache (if enabled and valid),
+		 * and compiles from HLSL source if necessary. Records include dependencies for
+		 * hot-reload invalidation.
+		 *
+		 * @param useDiskCache Whether to use disk cache for reading and writing compiled shaders.
+		 * @param dependencyTracker Optional tracker for include dependency registration;
+		 *                          enables cache invalidation when dependencies change.
+		 *
+		 * @return Compiled shader blob, or nullptr if compilation failed or source file not found.
+		 */
 		static ID3DBlob* CompileShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, bool useDiskCache, ShaderFileDependencyTracker* dependencyTracker)
 		{
 			if (!SShaderCache::ResolveImageSpaceDescriptor(shader, descriptor)) {
@@ -3375,6 +3387,15 @@ namespace SIE
 		}
 	}
 
+	/**
+	 * @brief Marks a shader compilation task as complete and updates compilation state.
+	 *
+	 * Updates task completion counters, tracks compilation timing and cache behavior,
+	 * detects batch-level completion, and emits notifications and events when the
+	 * entire compilation session finishes.
+	 *
+	 * @param task The compilation task that has completed.
+	 */
 	void CompilationSet::Complete(const ShaderCompilationTask& task)
 	{
 		auto& cache = ShaderCache::Instance();
@@ -3383,6 +3404,14 @@ namespace SIE
 
 		bool shouldLogCompletion = false;
 		double completionTimeMs = 0.0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		// Snapshot of the counters latched under the lock at the moment completion is
+		// detected, so the emitted event reflects that exact state — not whatever a
+		// concurrent Complete()/Clear() may have changed it to after we release the lock.
+		uint64_t completedSnapshot = 0;
+		uint64_t failedSnapshot = 0;
+		uint64_t totalSnapshot = 0;
+#endif
 
 		// Determine whether this task was resolved from the disk cache or actually compiled.
 		bool wasDiskHit = cache.IsShaderLoadedFromDisk(key);
@@ -3433,6 +3462,11 @@ namespace SIE
 				completionTime.store(now.QuadPart, std::memory_order_relaxed);
 				completionTimeMs = static_cast<double>(now.QuadPart - lastReset.QuadPart) * 1000.0 / frequency.QuadPart;
 				shouldLogCompletion = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				completedSnapshot = completedTasks.load(std::memory_order_relaxed);
+				failedSnapshot = failedTasks.load(std::memory_order_relaxed);
+				totalSnapshot = totalTasks.load(std::memory_order_relaxed);
+#endif
 			}
 
 			// Update task tracking
@@ -3451,7 +3485,7 @@ namespace SIE
 			// without polling. Guarded on the devbench host being present.
 			if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 				const nlohmann::json payload{
-					{ "completedTasks", completedTasks.load(std::memory_order_relaxed) },
+{ "completedTasks", completedTasks.load(std::memory_order_relaxed) },
 					{ "failedTasks", failedTasks.load(std::memory_order_relaxed) },
 					{ "totalTasks", totalTasks.load(std::memory_order_relaxed) },
 					{ "durationMs", completionTimeMs },

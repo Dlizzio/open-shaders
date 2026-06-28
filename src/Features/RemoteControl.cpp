@@ -10,7 +10,7 @@
 
 #include "Features/RemoteControl/DevBenchBridge.h"
 #include "Globals.h"
-#include "I18n/I18n.h"
+#include "I18n/I18n.h""
 #include "Menu.h"
 
 #include <imgui.h>
@@ -19,8 +19,7 @@
 #include <filesystem>
 #include <fstream>
 
-#define I18N_KEY_PREFIX "feature.remote_control."
-
+#define I18N_KEY_PREFIX "feature.remote_control.""
 using json = nlohmann::json;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -33,7 +32,10 @@ namespace
 	// display; the bridge itself talks to devbench in-process via the C-ABI, not the port.
 	constexpr const char* kRuntimeJsonPath = "Data/SKSE/Plugins/devbench/runtime.json";
 
-	// Returns the bound port from devbench's runtime.json, or 0 if absent/unreadable.
+	/**
+	 * @brief Retrieves the bound port from devbench's runtime configuration.
+	 * @return The port number from runtime.json, or 0 if the file is missing, unreadable, or malformed.
+	 */
 	int ReadDevBenchPort()
 	{
 		std::error_code ec;
@@ -53,11 +55,20 @@ namespace
 	}
 }
 
+/**
+ * @brief Obtains the singleton instance.
+ * @return RemoteControl* The global singleton instance.
+ */
 RemoteControl* RemoteControl::GetSingleton()
 {
 	return &globals::features::remoteControl;
 }
 
+/**
+ * @brief Registers the plugin's tools into the devbench host.
+ *
+ * Idempotent and inert when the host is absent or the devbench bridge is disabled.
+ */
 void RemoteControl::DataLoaded()
 {
 	// Register the plugin's tools into the devbench host. This feature owns the install; it runs at
@@ -67,6 +78,14 @@ void RemoteControl::DataLoaded()
 	DevBenchBridge::Install();
 }
 
+/**
+ * @brief Renders the devbench integration status panel and tool list.
+ *
+ * Displays connection status, host build number, bound port, and the set of devbench-exposed tools
+ * (feature management, engine inspection, shader cache control, capture, and settings). Shows a
+ * warning if the devbench host is not detected or if the build was compiled without the devbench
+ * bridge.
+ */
 void RemoteControl::DrawSettings()
 {
 	const auto& theme = Menu::GetSingleton()->GetTheme().StatusPalette;
@@ -75,7 +94,7 @@ void RemoteControl::DrawSettings()
 								 "Registers graphics-feature, inspect, capture, shader-cache, and settings tools "
 								 "into the external devbench host so AI assistants (Claude Code, Cursor, etc.) can "
 								 "toggle features, inspect engine state, trigger captures, and save/load settings "
-								 "over MCP and REST. There is no in-game server — install the devbench SKSE plugin "
+								 "over MCP and REST. There is no in-game server - install the devbench SKSE plugin "
 								 "to enable the integration."));
 	ImGui::Spacing();
 
@@ -100,7 +119,7 @@ void RemoteControl::DrawSettings()
 			ImGui::Text(T(TKEY("port_bound"), "Host bound on port %d (from %s)"), cachedPort, kRuntimeJsonPath);
 		} else {
 			ImGui::TextDisabled(
-				T(TKEY("port_unknown"), "Port unknown — devbench writes it to %s once it binds."),
+				T(TKEY("port_unknown"), "Port unknown - devbench writes it to %s once it binds."),
 				kRuntimeJsonPath);
 		}
 	} else {
@@ -112,11 +131,11 @@ void RemoteControl::DrawSettings()
 
 	ImGui::Separator();
 	ImGui::TextUnformatted(T(TKEY("tools_header"), "Tools exposed through devbench:"));
-	ImGui::BulletText("%s", T(TKEY("tool_feature"), "openshaders.feature — list / get / set / reset / toggle features"));
-	ImGui::BulletText("%s", T(TKEY("tool_inspect"), "openshaders.inspect — engine state and shader-cache status"));
-	ImGui::BulletText("%s", T(TKEY("tool_shadercache"), "openshaders.shadercache — clear / delete the compiled cache"));
-	ImGui::BulletText("%s", T(TKEY("tool_capture"), "openshaders.capture — RenderDoc / screenshot capture"));
-	ImGui::BulletText("%s", T(TKEY("tool_settings"), "openshaders.settings — save / load / reset the global config"));
+	ImGui::BulletText("%s", T(TKEY("tool_feature"), "openshaders.feature - list / get / set / reset / toggle features"));
+	ImGui::BulletText("%s", T(TKEY("tool_inspect"), "openshaders.inspect - engine state and shader-cache status"));
+	ImGui::BulletText("%s", T(TKEY("tool_shadercache"), "openshaders.shadercache - clear / delete the compiled cache"));
+	ImGui::BulletText("%s", T(TKEY("tool_capture"), "openshaders.capture - RenderDoc / screenshot capture"));
+	ImGui::BulletText("%s", T(TKEY("tool_settings"), "openshaders.settings - save / load / reset the global config"));
 	ImGui::TextDisabled("%s",
 		T(TKEY("console_note"), "Note: the console tool is provided by devbench itself, not this plugin."));
 #else
