@@ -14,6 +14,7 @@
 #include "Feature.h"
 #include "FeatureIssues.h"
 #include "Features/RenderDoc.h"
+#include "Features/VR.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
@@ -24,7 +25,6 @@
 
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
-#include "Features/VR.h"
 
 namespace
 {
@@ -137,12 +137,7 @@ void OverlayRenderer::RenderOverlay(
 	float& cachedFontSize,
 	float currentFontSize)
 {
-	HandleVRSetup();
 	processInputEventQueue();
-
-	if (globals::features::vr.IsOpenVRCompatible()) {
-		globals::features::vr.ProcessControllerInputForImGui();
-	}
 
 	if (ShouldSkipRendering()) {
 		auto& io = ImGui::GetIO();
@@ -172,9 +167,14 @@ void OverlayRenderer::RenderOverlay(
 		if (flying)
 			io.MousePos = { -FLT_MAX, -FLT_MAX };  // prevent hover/tooltips during active flying
 		editorWindow->Draw();
-	} else if (menu.IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup()) {
+	} else if (menu.IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup() ||
+			   globals::features::vr.HelperRequestsRender()) {
 		ImGui::GetIO().MouseDrawCursor = true;
-		if (menu.IsEnabled) {
+		// Helper-requested render: the helper's in-scene focus model routed
+		// focus here. Draw the settings UI even though Menu::IsEnabled hasn't
+		// been flipped by the local TAB hotkey. This honors the
+		// kClientFlag_RendersOnFocus contract we advertised at registration.
+		if (menu.IsEnabled || globals::features::vr.HelperRequestsRender()) {
 			drawSettings();
 		}
 	} else {
@@ -186,13 +186,6 @@ void OverlayRenderer::RenderOverlay(
 	HandleABTesting();
 	PatchOverlappingWindowBackgrounds();
 	FinalizeImGuiFrame();
-}
-
-void OverlayRenderer::HandleVRSetup()
-{
-	if (globals::features::vr.IsOpenVRCompatible()) {
-		globals::features::vr.RecreateOverlayTexturesIfNeeded();
-	}
 }
 
 bool OverlayRenderer::ShouldSkipRendering()
@@ -209,7 +202,9 @@ bool OverlayRenderer::ShouldSkipRendering()
 			 abTestingManager->IsEnabled() ||
 			 (failed && !hide) ||
 			 globals::features::performanceOverlay.settings.ShowInOverlay ||
-			 renderDoc->IsAvailable());
+			 renderDoc->IsAvailable() ||
+			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
+			 globals::features::vr.HelperRequestsRender());
 }
 
 void OverlayRenderer::HandleFontReload(Menu& menu, float& cachedFontSize, float currentFontSize)
@@ -236,12 +231,30 @@ void OverlayRenderer::InitializeImGuiFrame(Menu& menu)
 
 	const float displayW = static_cast<float>(desc.BufferDesc.Width);
 	const float displayH = static_cast<float>(desc.BufferDesc.Height);
-	Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH);
+
+	uint32_t panelW = 0, panelH = 0;
+	const bool vrPanel = globals::game::isVR && globals::features::vr.GetHelperPanelSize(panelW, panelH);
+	if (vrPanel) {
+		// VR: lay the menu out in the helper panel's logical space — a fixed
+		// kOverlayHeight tall, panel aspect wide — so font sizing (tuned to
+		// kOverlayHeight) is correct regardless of the desktop-mirror window, and
+		// the layout is supersample-invariant (aspect from GetPanel survives a
+		// uniformly supersampled panel; the helper upscales the 1080 raster).
+		// The wand drives the cursor (VR::UpdateHelper -> PumpInput), so skip the
+		// desktop cursor injection here — feeding it would fight the wand position.
+		auto& io = ImGui::GetIO();
+		const float logicalH = static_cast<float>(VR::Config::kOverlayHeight);
+		io.DisplaySize = ImVec2(logicalH * static_cast<float>(panelW) / static_cast<float>(panelH), logicalH);
+	} else {
+		Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH);
+	}
 
 	ImGui::NewFrame();
 
-	// Detect display size change (cross-session via ini handler, mid-session via member)
-	const float2 currentDisplaySize{ displayW, displayH };
+	// Detect display size change (cross-session via ini handler, mid-session via
+	// member). Use the resolved ImGui canvas, which is the panel-logical size in
+	// VR (stable) and the swapchain size on desktop.
+	const float2 currentDisplaySize{ ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y };
 	if (menu.lastDisplaySize.x > 0.f && menu.lastDisplaySize != currentDisplaySize) {
 		logger::info("Display size changed: {}x{} -> {}x{}, resetting window layout",
 			menu.lastDisplaySize.x, menu.lastDisplaySize.y, currentDisplaySize.x, currentDisplaySize.y);
@@ -415,9 +428,10 @@ void OverlayRenderer::FinalizeImGuiFrame()
 
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-	if (globals::features::vr.IsOpenVRCompatible()) {
-		globals::features::vr.SubmitOverlayFrame();
-	}
+	// Render the same draw data into the ImGuiVRHelper's panel RTV so the
+	// helper can composite our menu as a 3D quad in the HMD. The helper owns
+	// VR overlay compositing — Community Shaders no longer submits its own.
+	globals::features::vr.RenderHelperToPanel();
 }
 
 void OverlayRenderer::RenderFirstTimeSetupOverlay()

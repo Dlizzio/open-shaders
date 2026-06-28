@@ -13,35 +13,14 @@
 #include <imgui_impl_dx11.h>
 #include <openvr.h>
 
-using AttachMode = VR::Settings::OverlayAttachMode;
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
 	EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
 	MinOccludeeBoxExtent,
-	VRMenuScale,
-	VRMenuPositioningMethod,
-	attachMode,
-	VRMenuAttachController,
-	VRMenuOffsetX,
-	VRMenuOffsetY,
-	VRMenuOffsetZ,
-	VRMenuControllerOffsetX,
-	VRMenuControllerOffsetY,
-	VRMenuControllerOffsetZ,
 	mouseDeadzone,
-	mouseSpeed,
-	dragHighlightColor,
-	VRMenuOpenKeys,
-	VRMenuCloseKeys,
 	VROverlayOpenKeys,
 	VROverlayCloseKeys,
-	comboTimeout,
-	EnableDragToReposition,
-	kAutoHideSeconds,
-	VRMenuAutoResetDistance,
-	EnableWandPointing,
 	EnableStereoBlend,
 	StereoBlendDepthSigma,
 	StereoBlendMaxFactor,
@@ -170,6 +149,10 @@ void VR::PostPostLoad()
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xD9) + 0x2, 0x148);
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xE5) + 0x2, 0x14C);
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xF1) + 0x2, 0x150);
+
+	// Connect to ImGuiVRHelper here (kPostPostLoad): the helper has registered its
+	// handshake listener by now, so this reaches it regardless of load order.
+	ConnectHelper();
 }
 
 void VR::DataLoaded()
@@ -191,56 +174,8 @@ void VR::EarlyPrepass()
 }
 
 //=============================================================================
-// OVERLAY SUBMIT AND DEPTH BUFFER CULLING
+// DEPTH BUFFER CULLING
 //=============================================================================
-
-void VR::RecreateOverlayTexturesIfNeeded()
-{
-	Util::CreateOverlayTextureAndRTV(globals::d3d::device, Config::kOverlayWidth, Config::kOverlayHeight, menuTexture.put(), menuRTV.put());
-}
-
-bool VR::IsWelcomeOverlayVisible() const
-{
-	return settings.kAutoHideSeconds > 0 &&
-	       globals::game::ui &&
-	       globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) &&
-	       globals::menu &&
-	       !globals::menu->IsEnabled;
-}
-
-void VR::SubmitOverlayFrame()
-{
-	InstallSubmitHook();
-
-	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
-	if (!openvr || !openvr->vrSystem) {
-		return;
-	}
-
-	auto& enabled = globals::menu->IsEnabled;
-	auto& overlayVisible = globals::menu->overlayVisible;
-
-	if ((enabled || overlayVisible || IsWelcomeOverlayVisible()) && menuTexture.get() && menuRTV.get()) {
-		UpdateFixedWorldPositioning();
-		UpdateOverlayDrag();
-
-		ID3D11RenderTargetView* oldRTV = nullptr;
-		globals::d3d::context->OMGetRenderTargets(1, &oldRTV, nullptr);
-		ID3D11RenderTargetView* menuRTVPtr = menuRTV.get();
-		globals::d3d::context->OMSetRenderTargets(1, &menuRTVPtr, nullptr);
-		float clearColor[4] = { 0, 0, 0, 0 };
-		globals::d3d::context->ClearRenderTargetView(menuRTV.get(), clearColor);
-		ImGui::Render();
-		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-		globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
-
-		bool beingDragged = settings.EnableDragToReposition && overlayDragState.dragging;
-		Util::ApplyHighlightTintToTexture(menuTexture.get(), beingDragged, settings.dragHighlightColor);
-
-		if (oldRTV)
-			oldRTV->Release();
-	}
-}
 
 // Helper to centralize VR depth buffer culling logic, reducing duplication between DataLoaded, EarlyPrepass, and Settings UI.
 void VR::UpdateDepthBufferCulling()

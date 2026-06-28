@@ -148,6 +148,25 @@ target_include_directories(
         ${EXPRTK_INCLUDE_DIRS}
 )
 
+# ImGuiVRHelper client API — fetched from upstream so the dependency and its
+# pinned version are explicit instead of a vendored copy. Configures only the
+# helper's api/ CMake target (SOURCE_SUBDIR) and skips its submodules. The
+# INTERFACE target compiles the client-side handshake stub
+# (GetImGuiVRHelperInterface001 — one SKSE messaging Dispatch on first call,
+# cached vtable thereafter, no link dependency on the helper plugin; resolves at
+# runtime via SKSE messaging) into SCS and exposes the SDK headers, inheriting
+# our ImGui / DX11 / json. Override with
+# -DFETCHCONTENT_SOURCE_DIR_IMGUIVRHELPER=<path> for local helper development.
+include(FetchContent)
+FetchContent_Declare(
+    ImGuiVRHelper
+    GIT_REPOSITORY https://github.com/alandtse/imgui-vr-helper.git
+    GIT_TAG v1.2.0
+    GIT_SUBMODULES "" SOURCE_SUBDIR api
+)
+FetchContent_MakeAvailable(ImGuiVRHelper)
+target_link_libraries(${PROJECT_NAME} PRIVATE ImGuiVRHelper::api)
+
 # stb_image_write impl (incl. ReShade's vendored HDR-PNG extension) builds as C, like
 # upstream's deps/stb_impl.c: the extension passes unsigned char* where stb's
 # encode_png_line takes signed char* (legal in C, an error in C++). Not picked up by the

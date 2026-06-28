@@ -24,6 +24,7 @@
 #include "FeatureVersions.h"
 #include "Features/RenderDoc.h"
 #include "Features/Upscaling.h"
+#include "Features/VR.h"
 #include "I18n/I18n.h"
 #include "Menu/AdvancedSettingsRenderer.h"
 #include "Menu/BackgroundBlur.h"
@@ -47,7 +48,6 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
-#include "Features/VR.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -998,6 +998,11 @@ void Menu::DrawOverlay()
 		},
 		cachedFontSize,
 		ThemeManager::ResolveFontSize(*this));
+
+	// Always-on VR status HUD (shader-compilation progress, etc.) into its own
+	// helper HUD panel, so it composites over the scene without the menu being
+	// focused. No-op on desktop / without the helper.
+	globals::features::vr.RenderStatusHud();
 }
 
 /**
@@ -1054,12 +1059,17 @@ void Menu::ProcessInputEventQueue()
 		}
 	}
 
-	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
+	std::vector<KeyEvent> queuedEvents;
+	{
+		std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
+		queuedEvents.swap(_keyEventQueue);
+	}
+
 	ImGuiIO& io = ImGui::GetIO();
 	// Split the queue into VR and non-VR events
 	std::vector<KeyEvent> vrEvents;
 	std::vector<KeyEvent> nonVREvents;
-	for (auto& event : _keyEventQueue) {
+	for (auto& event : queuedEvents) {
 		bool isVRController = ((event.device == RE::INPUT_DEVICE::kVivePrimary || event.device == RE::INPUT_DEVICE::kViveSecondary ||
 								event.device == RE::INPUT_DEVICE::kOculusPrimary || event.device == RE::INPUT_DEVICE::kOculusSecondary ||
 								event.device == RE::INPUT_DEVICE::kWMRPrimary || event.device == RE::INPUT_DEVICE::kWMRSecondary));
@@ -1070,11 +1080,30 @@ void Menu::ProcessInputEventQueue()
 			nonVREvents.push_back(event);
 		}
 	}
-	// Process VR events in VR
+	// Process VR events
 	if (!vrEvents.empty()) {
-		globals::features::vr.ProcessVREvents(vrEvents);
-		globals::features::vr.UpdateOverlayMenuStateFromInput();
+		// Helper-required: forward raw VR controller events to the helper,
+		// which owns wand pointing, combo matching, drag and overlay focus.
+		// Without the helper the events are dropped — VR menus are desktop-only
+		// (no built-in VR overlay fallback).
+		if (globals::features::vr.IsHelperRegistered()) {
+			for (const auto& event : vrEvents) {
+				globals::features::vr.FeedHelperEvent(
+					static_cast<uint32_t>(event.device),
+					event.keyCode,
+					event.IsPressed(),
+					event.thumbstickX,
+					event.thumbstickY);
+			}
+		}
 	}
+
+	// Per-frame VR input pump (runs every frame, not just when there are events):
+	// polls helper combos to open/close the menu, syncs helper focus to
+	// Menu::IsEnabled, and feeds the wand pointer + controller buttons into ImGui
+	// IO. Must run before ImGui::NewFrame (InitializeImGuiFrame), which it does —
+	// ProcessInputEventQueue is called first in OverlayRenderer::RenderOverlay.
+	globals::features::vr.UpdateHelper();
 
 	// Process non-VR events in Menu
 	for (auto& event : nonVREvents) {
@@ -1291,8 +1320,6 @@ void Menu::ProcessInputEventQueue()
 			}
 		}
 	}
-
-	_keyEventQueue.clear();
 }
 
 bool Menu::IsCapturingHotkeyInput() const
