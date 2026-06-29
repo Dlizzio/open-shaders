@@ -5,6 +5,14 @@
 #include <span>
 #include <string_view>
 
+/**
+ * @brief Type-erased descriptor for restart-gated settings fields.
+ *
+ * Metadata container for a settings field that supports restart-based gating.
+ * The jsonKey field must match the corresponding field name in NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE
+ * declarations, allowing external tools such as MCP and RemoteControl to reference settings
+ * without requiring feature-specific integration code.
+ */
 namespace Util::Settings
 {
 	// Type-erased field descriptor for restart-gated settings.
@@ -18,7 +26,6 @@ namespace Util::Settings
 		size_t offset = 0;
 		size_t size = 0;
 	};
-
 	template <typename SettingsT, size_t N>
 	using RestartTable = std::array<RestartFieldInfo, N>;
 

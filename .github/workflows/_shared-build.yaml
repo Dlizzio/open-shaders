@@ -59,6 +59,10 @@ on:
                 description: "JSON array of changed paths for incremental shader validation; empty => full validation"
                 type: string
                 default: ""
+            cmake-preset:
+                description: "CMake configure/build preset for the C++ build (ALL = full LTCG shipping flags; PR = mild optimization without LTCG or full debug info)"
+                type: string
+                default: "ALL"
         outputs:
             version:
                 description: "CMake project version extracted from the build"
@@ -80,8 +84,8 @@ jobs:
             matrix:
                 compiler:
                     - name: vs2026
-                      cmake-preset: ALL
-                      build-dir: build/ALL
+                      cmake-preset: ${{ inputs.cmake-preset }}
+                      build-dir: build/${{ inputs.cmake-preset }}
             fail-fast: false
         steps:
             - name: Checkout code
@@ -213,6 +217,8 @@ jobs:
                     }
                   }
 
+            # --shader-dir stays on build/ALL: prepare-shaders always populates
+            # the ALL preset; inputs.cmake-preset only selects the C++ tier.
             - name: Validate shader compilation (${{ matrix.config.name }})
               if: steps.check-hlsl.outputs.skip != 'true'
               shell: bash
@@ -363,7 +369,7 @@ jobs:
                   repository: ${{ inputs.repository }}
                   submodules: recursive
 
-            # Inline gate (no composite action — the logic is one branch).
+            # Inline gate (no composite action - the logic is one branch).
             # PR events skip when no relevant files changed; push / dispatch /
             # release always run.
             - name: Check if cpp_tests should run

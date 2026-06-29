@@ -19,6 +19,7 @@
 #include <sl_version.h>
 #pragma warning(pop)
 
+/** @brief Manages NVIDIA Streamline integration for DLSS upscaling and Reflex latency reduction. */
 class Streamline
 {
 public:
@@ -26,6 +27,7 @@ public:
 
 	Streamline() = default;
 
+	/** @brief Returns the short identifier used for logging. */
 	inline std::string GetShortName() { return "Streamline"; }
 
 	bool initialized = false;
@@ -87,10 +89,10 @@ public:
 	uint32_t lastReflexSleepFrame = UINT32_MAX;
 
 	// Helper: Execute DLSS for a single viewport with given resources.
-	// outputHeight defaults to 0 → SetDLSSOptions uses full per-eye DisplayRes height
+	// outputHeight defaults to 0 -> SetDLSSOptions uses full per-eye DisplayRes height
 	// (matches the standard upscale path where every eval is full eye). FoveatedRender's
 	// subrect path must pass the actual subrect height so DLSS isn't configured for
-	// `subOutW × eyeHeightOut` while extentOut says `subOutW × subOutH` — that mismatch
+	// `subOutW x eyeHeightOut` while extentOut says `subOutW x subOutH` - that mismatch
 	// makes NGX return zeroed output and the subrect region renders black.
 	void EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
@@ -101,23 +103,44 @@ public:
 	// Cached DLL version info for Streamline plugin directory
 	static std::vector<std::pair<std::string, std::string>> dllVersions;
 
+	/** @brief Loads the Streamline interposer DLL and initializes the SDK with feature preferences. */
 	void LoadInterposer();
 
+	/**
+	 * @brief Queries available Streamline features (DLSS, Reflex, PCL) on the given adapter.
+	 * @param a_adapter The DXGI adapter to check feature support against.
+	 */
 	void CheckFeatures(IDXGIAdapter* a_adapter);
 
+	/** @brief Binds DLSS and Reflex feature functions after the D3D device is created. */
 	void PostDevice();
 
+	/** @brief Acquires a new frame token from Streamline for the current frame. */
 	bool EnsureFrameToken();
 	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0);
 
+	/**
+	 * @brief Detects whether the GPU is an NVIDIA RTX card below the 40-series generation.
+	 * @param a_adapter The DXGI adapter to inspect.
+	 * @return True if the adapter is RTX 20xx or 30xx series.
+	 */
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 
-	// height = 0 → use full per-eye DisplayRes height (default for the standard
+	// height = 0 -> use full per-eye DisplayRes height (default for the standard
 	// upscale path). Non-zero is the subrect height the FoveatedRender route needs.
 	void SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t width, uint32_t height = 0);
 
+	/**
+	 * @brief Dispatches DLSS upscaling for the current frame.
+	 * @param a_upscalingTexture The input color texture to upscale.
+	 * @param a_reactiveMask Reactive mask for temporal stability hints.
+	 * @param a_transparencyCompositionMask Mask for transparency handling.
+	 * @param a_motionVectors Per-pixel motion vectors for temporal reprojection.
+	 */
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
+	/** @brief Updates Reflex latency reduction state and performs the Reflex sleep call. */
 	void UpdateReflex();
 
+	/** @brief Frees DLSS viewport resources through the Streamline SDK. */
 	void DestroyDLSSResources();
 };

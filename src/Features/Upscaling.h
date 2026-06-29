@@ -286,7 +286,7 @@ public:
 
 	/// Set by MenuOpenCloseEventHandler when LoadingMenu closes (cell/worldspace transitions,
 	/// initial load). Consumed at the start of Upscale() to force a one-frame DLSS feature
-	/// rebuild — works around a VR-only persistent ~2-3ms GPU regression after worldspace
+	/// rebuild - works around a VR-only persistent ~2-3ms GPU regression after worldspace
 	/// loads that otherwise only clears when the user manually toggles DLSS/preset. VR+DLSS
 	/// only; flat has no repro and per-eye extent asymmetry doesn't apply.
 	std::atomic<bool> pendingDLSSReset{ false };

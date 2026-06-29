@@ -11,11 +11,6 @@ shadertoolsconfig.json
 **/.DS_Store
 .claude/settings.local.json
 
-# Shader test artifacts
-tests/shaders/build/
-tests/shaders/*.exe
-tests/shaders/*.pdb
-tests/shaders/Shaders/
 tools/__pycache__/
 
 # clangd compile database (machine-specific absolute paths; regenerate with
