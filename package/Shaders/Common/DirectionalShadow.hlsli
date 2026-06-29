@@ -9,8 +9,8 @@ namespace DirectionalShadow
 	// can't read the stale engine mask under SLF. Under LIGHT_LIMIT_FIX the engine
 	// mask is a no-op, so sample LLF cascades directly (fully lit past range);
 	// otherwise return the engine mask as-is. Also owns the PCF noise-rotation so
-	// callers skip the sincos boilerplate. Lighting.hlsl deliberately bypasses this
-	// (feeds the mask into LLF as the past-cascade fallback). Needs LightLimitFix.hlsli first.
+	// callers skip the sincos boilerplate. Lighting.hlsl uses LLF's coverage
+	// overload for VSM merging. Needs LightLimitFix.hlsli first.
 	float GetSceneDirectionalShadow(float3 worldPosition, float3 worldPositionWS, uint eyeIndex, float a_screenNoise, float a_engineMaskShadow)
 	{
 #if defined(LIGHT_LIMIT_FIX)

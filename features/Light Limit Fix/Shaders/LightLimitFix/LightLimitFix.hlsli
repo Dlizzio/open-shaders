@@ -161,7 +161,7 @@ namespace LightLimitFix
 
 	// LLF has directional data only for cascades 0/1. The engine mask can be
 	// stale or zeroed under LLF, so pixels past cascade 1 must fade to lit.
-	float GetDirectionalShadow(float3 worldPosition, float3 worldPositionWS, float2x2 rotationMatrix, uint eyeIndex, float engineMaskShadow)
+	float GetDirectionalShadow(float3 worldPosition, float3 worldPositionWS, float2x2 rotationMatrix, uint eyeIndex, float engineMaskShadow, out float llfCoverage)
 	{
 		DirectionalShadowLightData shadowLightData = DirectionalShadowLights[0];
 
@@ -169,8 +169,10 @@ namespace LightLimitFix
 		const float farFallbackShadow = 1.0;
 
 		// Past cascade 1 there is no LLF cascade data.
-		if (shadowMapDepth > shadowLightData.EndSplitDistances.y)
+		if (shadowMapDepth > shadowLightData.EndSplitDistances.y) {
+			llfCoverage = 0.0;
 			return farFallbackShadow;
+		}
 
 		// Blend from LLF PCF deep in cascade 1 toward lit as we approach
 		// cascade 1's far edge, avoiding a hard discontinuity.
@@ -187,6 +189,7 @@ namespace LightLimitFix
 		float fadeFactor = smoothstep(shadowLightData.EndSplitDistances.y * 0.8,
 			shadowLightData.EndSplitDistances.y,
 			shadowMapDepth);
+		llfCoverage = 1.0 - fadeFactor;
 
 		// Compute cascade blend factor
 		float cascadeSelect = smoothstep(shadowLightData.StartSplitDistances.y, shadowLightData.EndSplitDistances.x, shadowMapDepth);
@@ -279,6 +282,12 @@ namespace LightLimitFix
 		}
 
 		return shadow;
+	}
+
+	float GetDirectionalShadow(float3 worldPosition, float3 worldPositionWS, float2x2 rotationMatrix, uint eyeIndex, float engineMaskShadow)
+	{
+		float llfCoverage;
+		return GetDirectionalShadow(worldPosition, worldPositionWS, rotationMatrix, eyeIndex, engineMaskShadow, llfCoverage);
 	}
 
 	// Convenience overload: callers without TexShadowMaskSampler bound
