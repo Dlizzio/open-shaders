@@ -34,6 +34,14 @@ namespace
 
 		return settings.DALCMode;
 	}
+
+	void DrawEnableCheckbox(const char* label, bool& disableSetting)
+	{
+		bool enableSetting = !disableSetting;
+		if (ImGui::Checkbox(label, &enableSetting)) {
+			disableSetting = !enableSetting;
+		}
+	}
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -58,13 +66,20 @@ void IBL::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("enable_ibl_tooltip"), "Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system."));
 	}
-	ImGui::SameLine();
-	bool enableInteriorIBL = !settings.DisableInInteriors;
-	if (ImGui::Checkbox(T(TKEY("enable_interior_ibl"), "Enable Interior IBL"), &enableInteriorIBL)) {
-		settings.DisableInInteriors = !enableInteriorIBL;
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("enable_interior_ibl_tooltip"), "Enables IBL in interior cells."));
+	if (ImGui::TreeNodeEx(T(TKEY("enable_ibl_options"), "Enable IBL Options"), ImGuiTreeNodeFlags_None)) {
+		DrawEnableCheckbox(T(TKEY("enable_in_interiors"), "Enable Interior IBL"), settings.DisableInInteriors);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("enable_in_interiors_tooltip"), "Enables IBL in interior cells."));
+		}
+		DrawEnableCheckbox(T(TKEY("enable_in_world_map"), "Enable World Map IBL"), settings.DisableInWorldMap);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("enable_in_world_map_tooltip"), "Enables IBL while the world map is open."));
+		}
+		DrawEnableCheckbox(T(TKEY("enable_in_loading_screen"), "Enable Loading Screen IBL"), settings.DisableInLoadingScreen);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("enable_in_loading_screen_tooltip"), "Enables IBL during loading screens and the main menu."));
+		}
+		ImGui::TreePop();
 	}
 	Util::WeatherUI::SliderFloat(T(TKEY("env_ibl_scale"), "Env IBL Scale"), this, "EnvIBLScale", &settings.EnvIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -145,18 +160,6 @@ void IBL::DrawSettings()
 	ImGui::Checkbox(T(TKEY("preserve_fog_luminance"), "Preserve Fog Luminance"), (bool*)&settings.PreserveFogLuminance);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("preserve_fog_luminance_tooltip"), "When Fog Mix is active, rescales the IBL-tinted fog to keep the original fog brightness.\nPrevents fog from becoming too bright or too dark."));
-	}
-	ImGui::Checkbox(T(TKEY("disable_in_interiors"), "Disable in interiors"), &settings.DisableInInteriors);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("disable_in_interiors_tooltip"), "Disables IBL in interior cells."));
-	}
-	ImGui::Checkbox(T(TKEY("disable_in_world_map"), "Disable in world map"), &settings.DisableInWorldMap);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("disable_in_world_map_tooltip"), "Disables IBL while the world map is open."));
-	}
-	ImGui::Checkbox(T(TKEY("disable_in_loading_screen"), "Disable in loading screens"), &settings.DisableInLoadingScreen);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("disable_in_loading_screen_tooltip"), "Disables IBL during loading screens and the main menu."));
 	}
 }
 
@@ -269,10 +272,13 @@ bool IBL::IsDisabledForCurrentScene() const
 	if (!state)
 		return false;
 
-	const bool inLoadingScreen = settings.DisableInLoadingScreen && state->IsMainOrLoadingMenuOpen();
-	const bool inWorldMap = settings.DisableInWorldMap && state->isMapMenuOpen;
-	const bool inInterior = settings.DisableInInteriors && Util::IsInterior();
-	return inLoadingScreen || inWorldMap || inInterior;
+	if (state->IsMainOrLoadingMenuOpen())
+		return settings.DisableInLoadingScreen;
+
+	if (state->isMapMenuOpen)
+		return settings.DisableInWorldMap;
+
+	return settings.DisableInInteriors && Util::IsInterior();
 }
 
 void IBL::ReflectionsPrepass()
