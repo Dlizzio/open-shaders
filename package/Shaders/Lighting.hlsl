@@ -2642,10 +2642,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 	float3 worldPositionWS = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 
-	// Engine pre-renders the 4-cascade directional shadow into a screen-space
-	// mask at t14. LLF samples only cascades 0/1; we pass the engine mask
-	// through so LLF::GetDirectionalShadow can fall back to it past
-	// EndSplitDistances.y instead of returning fully-lit.
+	// Engine pre-renders the directional shadow into a screen-space mask at
+	// t14. Under LLF this mask can be stale or zeroed, so LLF treats pixels
+	// past its cascade data as lit and reports coverage for VSM merging.
 	float4 shadowColor = (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) ? TexShadowMaskSampler.Load(int3(input.Position.xy, 0)) : 1.0;
 
 	// Use HasDirectionalShadows() (= !IsInterior() || InteriorSun::IsActive) instead of
@@ -2656,8 +2655,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if !defined(LOD)
 		// On non-deferred passes, use the cheaper VSM shadows if available
 #		if defined(LIGHT_LIMIT_FIX) && (defined(DEFERRED) || !defined(VOLUMETRIC_SHADOWS))
+#			if defined(DEFERRED) && defined(VOLUMETRIC_SHADOWS)
+		float llfDirectionalCoverage = 0.0;
+		dirDetailedShadow = LightLimitFix::GetDirectionalShadow(input.WorldPosition.xyz, worldPositionWS, rotationMatrix, eyeIndex,
+			(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir) ? shadowColor.x : 1.0,
+			llfDirectionalCoverage);
+#			else
 		dirDetailedShadow = LightLimitFix::GetDirectionalShadow(input.WorldPosition.xyz, worldPositionWS, rotationMatrix, eyeIndex,
 			(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir) ? shadowColor.x : 1.0);
+#			endif
 #		elif !defined(LIGHT_LIMIT_FIX)
 		dirDetailedShadow = (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir) ? shadowColor.x : 1.0;
 #		endif  // LIGHT_LIMIT_FIX
@@ -2665,7 +2671,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(VOLUMETRIC_SHADOWS)
 		float vsmDetailedShadow = 1.0;
 		dirSoftShadow = VolumetricShadows::GetVSMShadow2D(input.WorldPosition.xyz, worldPositionWS, eyeIndex, vsmDetailedShadow);
+#			if defined(LIGHT_LIMIT_FIX) && defined(DEFERRED)
+		dirSoftShadow = lerp(dirSoftShadow, max(dirSoftShadow, dirDetailedShadow), llfDirectionalCoverage);
+#			else
 		dirSoftShadow = max(dirSoftShadow, dirDetailedShadow);
+#			endif
 
 #			if !defined(LIGHT_LIMIT_FIX)
 		if (!(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir))

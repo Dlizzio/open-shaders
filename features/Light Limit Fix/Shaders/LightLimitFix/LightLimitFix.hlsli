@@ -159,26 +159,23 @@ namespace LightLimitFix
 	Texture2DArray<float> ShadowMaps : register(t103);
 	Texture2DArray<float> DirectionalShadowCascades : register(t99);
 
-	// engineMaskShadow: the engine's pre-rendered 4-cascade shadow mask sample
-	// at this pixel (TexShadowMaskSampler.Load(int3(Position.xy, 0)).x). LLF's
-	// DirectionalShadowLightData carries only cascades 0/1 (ShadowProj[2] /
-	// EndSplitDistances.xy); past EndSplitDistances.y we have no LLF data and
-	// must fall through to the engine mask. Returning 1.0 there leaves distant
-	// pixels fully lit -- visible as global scene brightening with shadows
-	// disappearing past a depth that varies with camera position.
-	float GetDirectionalShadow(float3 worldPosition, float3 worldPositionWS, float2x2 rotationMatrix, uint eyeIndex, float engineMaskShadow)
+	// LLF has directional data only for cascades 0/1. The engine mask can be
+	// stale or zeroed under LLF, so pixels past cascade 1 must fade to lit.
+	float GetDirectionalShadow(float3 worldPosition, float3 worldPositionWS, float2x2 rotationMatrix, uint eyeIndex, float engineMaskShadow, out float llfCoverage)
 	{
 		DirectionalShadowLightData shadowLightData = DirectionalShadowLights[0];
 
 		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(worldPosition, eyeIndex));
+		const float farFallbackShadow = 1.0;
 
-		// Past cascade 1 -- defer to the engine's 4-cascade mask.
-		if (shadowMapDepth > shadowLightData.EndSplitDistances.y)
-			return engineMaskShadow;
+		// Past cascade 1 there is no LLF cascade data.
+		if (shadowMapDepth > shadowLightData.EndSplitDistances.y) {
+			llfCoverage = 0.0;
+			return farFallbackShadow;
+		}
 
-		// Blend from LLF PCF deep in cascade 1 toward the engine mask as we
-		// approach cascade 1's far edge, avoiding a hard discontinuity at the
-		// boundary where LLF stops and engine sampling takes over.
+		// Blend from LLF PCF deep in cascade 1 toward lit as we approach
+		// cascade 1's far edge, avoiding a hard discontinuity.
 		//
 		// Previous formula used `dot(worldPosition, worldPosition) /
 		// EndSplitDistances.y` -- dimensionally wrong (length^2 / length)
@@ -192,6 +189,7 @@ namespace LightLimitFix
 		float fadeFactor = smoothstep(shadowLightData.EndSplitDistances.y * 0.8,
 			shadowLightData.EndSplitDistances.y,
 			shadowMapDepth);
+		llfCoverage = 1.0 - fadeFactor;
 
 		// Compute cascade blend factor
 		float cascadeSelect = smoothstep(shadowLightData.StartSplitDistances.y, shadowLightData.EndSplitDistances.x, shadowMapDepth);
@@ -238,10 +236,8 @@ namespace LightLimitFix
 			shadow = lerp(shadow, shadowBlend, cascadeSelect);
 		}
 
-		// Within cascade 1's far edge, blend LLF's PCF toward the engine
-		// mask instead of fading to fully-lit -- avoids a hard brightness
-		// discontinuity at the cascade boundary.
-		shadow = lerp(shadow, engineMaskShadow, fadeFactor);
+		// Within cascade 1's far edge, fade LLF's PCF out before data ends.
+		shadow = lerp(shadow, farFallbackShadow, fadeFactor);
 
 		// Focus shadows: high-resolution actor shadows the engine renders to
 		// kSHADOWMAPS slices [kFocusShadowBaseSlotIndex .. +FocusShadowCount).
@@ -286,6 +282,12 @@ namespace LightLimitFix
 		}
 
 		return shadow;
+	}
+
+	float GetDirectionalShadow(float3 worldPosition, float3 worldPositionWS, float2x2 rotationMatrix, uint eyeIndex, float engineMaskShadow)
+	{
+		float llfCoverage;
+		return GetDirectionalShadow(worldPosition, worldPositionWS, rotationMatrix, eyeIndex, engineMaskShadow, llfCoverage);
 	}
 
 	// Convenience overload: callers without TexShadowMaskSampler bound
