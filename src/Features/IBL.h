@@ -86,7 +86,7 @@ public:
 
 	/** @brief Builds the GPU constant-buffer data, forcing EnableIBL off when IsDisabledForCurrentScene(). */
 	PerFrame GetCommonBufferData() const;
-	/** @brief Returns true when IBL should be suppressed in the current scene per the DisableIn* toggles (loading screens, world map, interiors). */
+	/** @brief Returns true when IBL should be suppressed in the current scene for menus or interior cells. */
 	bool IsDisabledForCurrentScene() const;
 	/** @brief Returns the diffuse IBL spherical harmonics compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetDiffuseIBLCS();
