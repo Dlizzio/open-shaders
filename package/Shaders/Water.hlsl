@@ -1154,7 +1154,9 @@ PS_OUTPUT main(PS_INPUT input)
 		float lightFade = saturate(length(lightVector) / LightPos[lightIndex].w);
 		float lightColorMul = (1 - lightFade * lightFade);
 		float LdotN = saturate(dot(lightDirection, normal));
-		float3 lightColor = (Color::PointLight(LightColor[lightIndex].xyz) * pow(LdotN, FresnelRI.z)) * lightColorMul;
+		uint lightFlags = Color::GetVanillaPointLightFlags(lightIndex);
+		bool isPointLightLinear = (lightFlags & Color::PointLightFlagLinear) != 0;
+		float3 lightColor = (Color::PointLight(LightColor[lightIndex].xyz, isPointLightLinear, lightFlags) * pow(LdotN, FresnelRI.z)) * lightColorMul;
 		finalColor += lightColor;
 	}
 

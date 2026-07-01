@@ -3,8 +3,12 @@
 #include "CSUtility/PointLightFlags.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "LightLimitFix.h"
 #include "LinearLighting.h"
 #include "Utils/UI.h"
+
+#include <algorithm>
+#include <cmath>
 
 #define I18N_KEY_PREFIX "feature.cs_utility."
 
@@ -18,9 +22,29 @@ namespace
 	constexpr uint32_t kVanillaPointLightCBRegister = 3;
 	constexpr uint32_t kFirstPointLightSceneIndex = 1;
 
+	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
+	{
+		if (!std::isfinite(a_value))
+			return a_default;
+		return std::clamp(a_value, a_min, a_max);
+	}
+
+	void SanitizeSettings(CSUtility::Settings& a_settings)
+	{
+		const CSUtility::Settings defaults{};
+		a_settings.skyBrightness = ClampFiniteOrDefault(a_settings.skyBrightness, kSkyBrightnessMin, kSkyBrightnessMax, defaults.skyBrightness);
+		a_settings.directionalLightMult = ClampFiniteOrDefault(a_settings.directionalLightMult, kMultiplierMin, kMultiplierMax, defaults.directionalLightMult);
+		a_settings.pointLightMult = ClampFiniteOrDefault(a_settings.pointLightMult, kMultiplierMin, kMultiplierMax, defaults.pointLightMult);
+		a_settings.linearPointLightMult = ClampFiniteOrDefault(a_settings.linearPointLightMult, kMultiplierMin, kMultiplierMax, defaults.linearPointLightMult);
+		a_settings.spotlightMult = ClampFiniteOrDefault(a_settings.spotlightMult, kMultiplierMin, kMultiplierMax, defaults.spotlightMult);
+		a_settings.linearSpotlightMult = ClampFiniteOrDefault(a_settings.linearSpotlightMult, kMultiplierMin, kMultiplierMax, defaults.linearSpotlightMult);
+		a_settings.omnidirectionalBulbMult = ClampFiniteOrDefault(a_settings.omnidirectionalBulbMult, kMultiplierMin, kMultiplierMax, defaults.omnidirectionalBulbMult);
+		a_settings.linearOmnidirectionalBulbMult = ClampFiniteOrDefault(a_settings.linearOmnidirectionalBulbMult, kMultiplierMin, kMultiplierMax, defaults.linearOmnidirectionalBulbMult);
+	}
+
 	void DrawMultiplierSlider(const char* a_label, float& a_value, float a_max = kMultiplierMax)
 	{
-		ImGui::SliderFloat(a_label, &a_value, kMultiplierMin, a_max, "%.2f");
+		ImGui::SliderFloat(a_label, &a_value, kMultiplierMin, a_max, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 
 	void DrawLinearMultiplierSlider(const char* a_label, float& a_value, bool a_linearLightingEnabled)
@@ -52,7 +76,7 @@ void CSUtility::DrawSettings()
 {
 	if (ImGui::BeginTabBar("##CSUtilityTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_atmosphere"), "Atmosphere"))) {
-			ImGui::SliderFloat(T(TKEY("sky_brightness"), "Sky Brightness"), &settings.skyBrightness, kSkyBrightnessMin, kSkyBrightnessMax, "%.2f");
+			ImGui::SliderFloat(T(TKEY("sky_brightness"), "Sky Brightness"), &settings.skyBrightness, kSkyBrightnessMin, kSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			ImGui::EndTabItem();
 		}
 
@@ -78,10 +102,12 @@ void CSUtility::DrawSettings()
 void CSUtility::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SanitizeSettings(settings);
 }
 
 void CSUtility::SaveSettings(json& o_json)
 {
+	SanitizeSettings(settings);
 	o_json = settings;
 }
 
@@ -97,15 +123,18 @@ void CSUtility::SetupResources()
 
 CSUtility::PerFrameData CSUtility::GetCommonBufferData() const
 {
+	Settings sanitizedSettings = settings;
+	SanitizeSettings(sanitizedSettings);
+
 	PerFrameData data{};
-	data.skyBrightness = settings.skyBrightness;
-	data.directionalLightMult = settings.directionalLightMult;
-	data.pointLightMult = settings.pointLightMult;
-	data.linearPointLightMult = settings.linearPointLightMult;
-	data.spotlightMult = settings.spotlightMult;
-	data.linearSpotlightMult = settings.linearSpotlightMult;
-	data.omnidirectionalBulbMult = settings.omnidirectionalBulbMult;
-	data.linearOmnidirectionalBulbMult = settings.linearOmnidirectionalBulbMult;
+	data.skyBrightness = sanitizedSettings.skyBrightness;
+	data.directionalLightMult = sanitizedSettings.directionalLightMult;
+	data.pointLightMult = sanitizedSettings.pointLightMult;
+	data.linearPointLightMult = sanitizedSettings.linearPointLightMult;
+	data.spotlightMult = sanitizedSettings.spotlightMult;
+	data.linearSpotlightMult = sanitizedSettings.linearSpotlightMult;
+	data.omnidirectionalBulbMult = sanitizedSettings.omnidirectionalBulbMult;
+	data.linearOmnidirectionalBulbMult = sanitizedSettings.linearOmnidirectionalBulbMult;
 	return data;
 }
 
@@ -133,6 +162,36 @@ void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a
 
 	ID3D11Buffer* buffer = vanillaPointLightCB->CB();
 	globals::d3d::context->PSSetConstantBuffers(kVanillaPointLightCBRegister, 1, &buffer);
+}
+
+struct CSUtility::Hooks
+{
+	struct BSWaterShader_SetupGeometry
+	{
+		static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags)
+		{
+			func(a_shader, a_pass, a_renderFlags);
+
+			auto& csUtility = globals::features::csUtility;
+			if (!csUtility.loaded || globals::features::lightLimitFix.loaded)
+				return;
+
+			const uint32_t lightCount = a_pass && a_pass->numLights > 0 ? a_pass->numLights - kFirstPointLightSceneIndex : 0;
+			csUtility.UpdateVanillaPointLightData(a_pass, lightCount);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	static void Install()
+	{
+		stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
+		logger::info("[CSUtility] Installed hooks");
+	}
+};
+
+void CSUtility::PostPostLoad()
+{
+	Hooks::Install();
 }
 
 #undef I18N_KEY_PREFIX

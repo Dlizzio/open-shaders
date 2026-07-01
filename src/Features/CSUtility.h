@@ -17,7 +17,7 @@ struct CSUtility : Feature
 	virtual inline std::string GetShortName() override { return "CSUtility"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CS_UTILITY"; }
 	virtual inline std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
-	virtual bool HasShaderDefine(RE::BSShader::Type a_shaderType) override { return a_shaderType == RE::BSShader::Type::Lighting; }
+	virtual bool HasShaderDefine(RE::BSShader::Type a_shaderType) override { return a_shaderType == RE::BSShader::Type::Lighting || a_shaderType == RE::BSShader::Type::Water; }
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsCore() const override { return true; }
 	virtual bool IsInMenu() const override { return true; }
@@ -70,7 +70,10 @@ struct CSUtility : Feature
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
+	virtual void PostPostLoad() override;
 
 	PerFrameData GetCommonBufferData() const;
 	void UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount);
+
+	struct Hooks;
 };

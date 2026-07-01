@@ -15,7 +15,7 @@ cbuffer LLPerGeometry : register(b8)
 };
 #endif
 
-#if defined(PSHADER) && defined(LIGHTING) && defined(CS_UTILITY) && !defined(LIGHT_LIMIT_FIX)
+#if defined(PSHADER) && defined(CS_UTILITY) && !defined(LIGHT_LIMIT_FIX)
 cbuffer CSUtilityPerGeometry : register(b3)
 {
 	uint4 CSUtilityPointLightFlags0;
@@ -33,6 +33,8 @@ namespace Color
 	static const uint PointLightFlagLinear = POINT_LIGHT_FLAG_LINEAR;
 	static const uint PointLightFlagSpot = POINT_LIGHT_FLAG_SPOT;
 	static const uint PointLightFlagOmnidirectionalBulb = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
+	static const uint PackedPointLightFlagVectorSize = 4;
+	static const uint MaxVanillaPointLightFlags = 8;
 
 	// Copyright 2019 Google LLC.
 	// SPDX-License-Identifier: Apache-2.0
@@ -262,8 +264,10 @@ namespace Color
 
 	uint GetVanillaPointLightFlags(uint lightIndex)
 	{
-#	if defined(PSHADER) && defined(LIGHTING) && defined(CS_UTILITY) && !defined(LIGHT_LIMIT_FIX)
-		return lightIndex < 4 ? CSUtilityPointLightFlags0[lightIndex] : CSUtilityPointLightFlags1[lightIndex - 4];
+#	if defined(PSHADER) && defined(CS_UTILITY) && !defined(LIGHT_LIMIT_FIX)
+		if (lightIndex >= MaxVanillaPointLightFlags)
+			return 0;
+		return lightIndex < PackedPointLightFlagVectorSize ? CSUtilityPointLightFlags0[lightIndex] : CSUtilityPointLightFlags1[lightIndex - PackedPointLightFlagVectorSize];
 #	else
 		return 0;
 #	endif
