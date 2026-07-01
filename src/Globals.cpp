@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "Features/CSEditor.h"
+#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
@@ -90,6 +91,7 @@ namespace globals
 		RemoteControl remoteControl{};
 		ScreenshotFeature screenshotFeature{};
 		CSEditor csEditor{};
+		CSUtility csUtility{};
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
 		Skin skin{};

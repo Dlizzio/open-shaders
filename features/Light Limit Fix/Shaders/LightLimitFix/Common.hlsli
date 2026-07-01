@@ -10,17 +10,21 @@
 // larger cap here can overrun the pool.
 #define MAX_CLUSTER_LIGHTS 128
 
+#include "CSUtility/PointLightFlags.hlsli"
+
 namespace LightFlags
 {
-	static const uint PortalStrict = (1 << 0);
-	static const uint Shadow = (1 << 1);
-	static const uint Simple = (1 << 2);
+	static const uint PortalStrict = POINT_LIGHT_FLAG_PORTAL_STRICT;
+	static const uint Shadow = POINT_LIGHT_FLAG_SHADOW;
+	static const uint Simple = POINT_LIGHT_FLAG_SIMPLE;
 
-	static const uint Initialised = (1 << 8);
-	static const uint Disabled = (1 << 9);
-	static const uint InverseSquare = (1 << 10);
-	static const uint Linear = (1 << 11);
-	static const uint Particle = (1 << 12);
+	static const uint Initialised = POINT_LIGHT_FLAG_INITIALISED;
+	static const uint Disabled = POINT_LIGHT_FLAG_DISABLED;
+	static const uint InverseSquare = POINT_LIGHT_FLAG_INVERSE_SQUARE;
+	static const uint Linear = POINT_LIGHT_FLAG_LINEAR;
+	static const uint Particle = POINT_LIGHT_FLAG_PARTICLE;
+	static const uint Spot = POINT_LIGHT_FLAG_SPOT;
+	static const uint OmniDirectional = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
 }
 
 struct ClusterAABB
@@ -52,7 +56,7 @@ struct Light
 };
 
 // ---------------------------------------------------------------------------
-// LLFDEBUG visualization helpers — only compiled when the debug macro is set
+// LLFDEBUG visualization helpers, only compiled when the debug macro is set
 // (pixel shaders only; compute shaders that include this file don't define it)
 // ---------------------------------------------------------------------------
 #if defined(LLFDEBUG)
@@ -120,11 +124,11 @@ void LLFDebugAccumulate(inout LLFDebugInfo di, Light light, float shadowComponen
 
 // Returns the debug visualization color for this pixel.
 // Callers supply the small set of per-shader-variant values:
-//   mode0Color  — output for mode 0 (e.g. TurboColormap(strictLightsOverflow))
-//   mode1Color  — output for mode 1 (e.g. TurboColormap(strictLightCount/15))
-//   mode2Color  — output for mode 2 (e.g. TurboColormap(clusteredCount/MAX))
-//   mode3Color  — output for mode 3 (e.g. float3(dirSoftShadow, dirDetailedShadow, 0))
-//   lumaColor   — accumulated lighting color used as luma source for mode 8
+//   mode0Color  - output for mode 0 (e.g. TurboColormap(strictLightsOverflow))
+//   mode1Color  - output for mode 1 (e.g. TurboColormap(strictLightCount/15))
+//   mode2Color  - output for mode 2 (e.g. TurboColormap(clusteredCount/MAX))
+//   mode3Color  - output for mode 3 (e.g. float3(dirSoftShadow, dirDetailedShadow, 0))
+//   lumaColor   - accumulated lighting color used as luma source for mode 8
 float3 LLFDebugGetVizColor(LLFDebugInfo di,
 	float3 mode0Color, float3 mode1Color, float3 mode2Color, float3 mode3Color,
 	float3 lumaColor)
@@ -170,7 +174,7 @@ float3 LLFDebugGetVizColor(LLFDebugInfo di,
 		float3 rgb = saturate(abs(frac(hue + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
 		return rgb * luma;
 	} else {
-		// Mode 9 — light type visualization
+		// Mode 9, light type visualization
 		if (di.OverflowCount > 0)
 			return float3(1.0, 0.0, 0.0);
 		float scale = 1.0 / 4.0;

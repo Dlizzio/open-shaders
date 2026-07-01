@@ -254,6 +254,8 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 #		endif
 
+	float skyBrightnessMultiplier = SharedData::csUtilitySettings.skyBrightness;
+
 #		if defined(DITHER)
 	float2 noiseGradUv = float2(0.125, 0.125) * input.Position.xy;
 	float noiseGrad =
@@ -263,10 +265,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 skyVertColor = ENABLE_LL ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
 	float3 sunGlareColor = Color::Sky(skyVertColor) * baseColor.xyz;
 	// Dither/noise term is the legacy sky path contribution for gradient smoothing.
-	psout.Color.xyz = (sunGlareColor + skyScale) + (ENABLE_LL ? 0.0 : noiseGrad);
+	psout.Color.xyz = ((sunGlareColor + skyScale) * skyBrightnessMultiplier) + (ENABLE_LL ? 0.0 : noiseGrad);
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
-	psout.Color.xyz = skyScale + Color::Sky(input.Color.xyz + noiseGrad);
+	psout.Color.xyz = (skyScale + Color::Sky(input.Color.xyz + noiseGrad)) * skyBrightnessMultiplier;
 	psout.Color.w = input.Color.w;
 #			endif  // TEX
 
@@ -278,11 +280,11 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		elif defined(HORIZFADE)
-	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale);
+	psout.Color.xyz = float3(1.5, 1.5, 1.5) * ((Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale) * skyBrightnessMultiplier);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else  // not DITHER, not MOONMASK, not HORIZFADE
 	psout.Color.w = input.Color.w * baseColor.w;
-	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale;
+	psout.Color.xyz = (Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale) * skyBrightnessMultiplier;
 #		endif
 
 #	else

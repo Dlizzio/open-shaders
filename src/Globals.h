@@ -34,6 +34,7 @@ struct ExtendedTranslucency;
 struct Upscaling;
 class Profiler;
 struct CSEditor;
+struct CSUtility;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct ScreenshotFeature;
@@ -123,6 +124,7 @@ namespace globals
 		extern RemoteControl remoteControl;
 		extern ScreenshotFeature screenshotFeature;
 		extern CSEditor csEditor;
+		extern CSUtility csUtility;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
 		extern Skin skin;
