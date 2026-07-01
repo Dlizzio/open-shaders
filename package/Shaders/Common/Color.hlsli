@@ -250,16 +250,12 @@ namespace Color
 		return 1.0f;
 	}
 
-	float3 PointLight(float3 color, bool isLinear = false)
+	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0)
 	{
 		return Light(color, isLinear) *
 		       ((ENABLE_LL && !isLinear) ? Math::PI : 1.0f) *
-		       GetPointLightMultiplier(isLinear);
-	}
-
-	float3 PointLight(float3 color, bool isLinear, uint lightFlags)
-	{
-		return PointLight(color, isLinear) * GetPointLightTypeMultiplier(isLinear, lightFlags);
+		       GetPointLightMultiplier(isLinear) *
+		       GetPointLightTypeMultiplier(isLinear, lightFlags);
 	}
 
 	uint GetVanillaPointLightFlags(uint lightIndex)
