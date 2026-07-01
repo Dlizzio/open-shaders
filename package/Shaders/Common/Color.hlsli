@@ -1,8 +1,8 @@
 #ifndef __COLOR_DEPENDENCY_HLSL__
 #define __COLOR_DEPENDENCY_HLSL__
 
-#include "Common/Math.hlsli"
 #include "CSUtility/PointLightFlags.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 
 #define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
