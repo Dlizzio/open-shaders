@@ -98,6 +98,11 @@ void State::Draw()
 			truePBR.SetShaderResources(context);
 		}
 
+		if (volumetricShadows.loaded) {
+			ZoneScopedN("VolumetricShadows::SetShaderResources");
+			volumetricShadows.SetShaderResources(context);
+		}
+
 		if (permutationData != permutationDataPrevious) {
 			permutationCB->Update(permutationData);
 			permutationDataPrevious = permutationData;

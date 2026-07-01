@@ -596,15 +596,27 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	ExtractEffectLighting(color, dirColor, ambientColor, 1.0);
 #		endif
 
-	float3 viewDirection = normalize(worldPosition.xyz);
-
-	float unusedSurfaceShadow;
 	float dirShadow = 1.0;
+#		if !defined(SOFT) || !defined(LIGHT_LIMIT_FIX)
+	float3 viewDirection = normalize(worldPosition.xyz);
+	float unusedSurfaceShadow;
+#		endif
 
 	const bool inWorld = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
 
-	if (inWorld && ShadowSampling::HasDirectionalShadows())
+	if (inWorld && ShadowSampling::HasDirectionalShadows()) {
+#		if defined(SOFT) && defined(LIGHT_LIMIT_FIX)
+		float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(screenPosition, SharedData::BufferDim.xy), SharedData::FrameCount);
+		float2 rotation;
+		sincos(Math::TAU * screenNoise, rotation.y, rotation.x);
+		float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
+		float3 worldPositionWS = worldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+		dirShadow = LightLimitFix::GetDirectionalShadow(worldPosition.xyz, worldPositionWS, rotationMatrix, eyeIndex);
+		dirShadow *= ShadowSampling::GetWorldShadow(worldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+#		else
 		dirShadow = ShadowSampling::Get3DFilteredShadow(worldPosition.xyz, viewDirection, screenPosition, eyeIndex, unusedSurfaceShadow);
+#		endif
+	}
 
 	shadowVariance = 1.0 - sqrt(saturate(fwidth(dirShadow)));
 

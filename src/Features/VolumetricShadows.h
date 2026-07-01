@@ -67,6 +67,8 @@ public:
 
 	/** @brief Copies and downsamples the directional shadow map, then applies Gaussian blur filtering. */
 	void CopyShadowLightData();
+	/** @brief Binds the current shared shadow map for pixel shaders. */
+	void SetShaderResources(ID3D11DeviceContext* a_context);
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

@@ -325,6 +325,12 @@ void VolumetricShadows::SetSharedShadowMapSRV(ID3D11DeviceContext* a_context, ID
 	a_context->PSSetShaderResources(kSharedShadowMapShaderSlot, 1, &a_srv);
 }
 
+void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context)
+{
+	ID3D11ShaderResourceView* srv = globals::state->HasDirectionalShadows() ? shadowCopySRV : nullptr;
+	SetSharedShadowMapSRV(a_context, srv);
+}
+
 void VolumetricShadows::DrawSettings()
 {
 	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
