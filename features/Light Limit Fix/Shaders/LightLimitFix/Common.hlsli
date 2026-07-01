@@ -10,7 +10,7 @@
 // larger cap here can overrun the pool.
 #define MAX_CLUSTER_LIGHTS 128
 
-#include "CSUtility/PointLightFlags.hlsli"
+#include "Common/PointLightFlags.hlsli"
 
 namespace LightFlags
 {

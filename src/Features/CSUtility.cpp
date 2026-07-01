@@ -1,10 +1,10 @@
 #include "CSUtility.h"
 
-#include "CSUtility/PointLightFlags.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "LightLimitFix.h"
 #include "LinearLighting.h"
+#include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
 
 #include <algorithm>

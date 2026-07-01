@@ -1,7 +1,7 @@
 #ifndef __COLOR_DEPENDENCY_HLSL__
 #define __COLOR_DEPENDENCY_HLSL__
 
-#include "CSUtility/PointLightFlags.hlsli"
+#include "Common/PointLightFlags.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 

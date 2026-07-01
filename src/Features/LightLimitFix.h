@@ -1,10 +1,10 @@
 #pragma once
 
 #include "Buffer.h"
-#include "CSUtility/PointLightFlags.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "LightLimitFix/ShadowCasterManager.h"
 #include "OverlayFeature.h"
+#include "Utils/PointLightFlags.h"
 
 #include <mutex>
 #include <shared_mutex>
