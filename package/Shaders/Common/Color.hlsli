@@ -2,6 +2,7 @@
 #define __COLOR_DEPENDENCY_HLSL__
 
 #include "Common/Math.hlsli"
+#include "Common/PointLightFlags.hlsli"
 #include "Common/SharedData.hlsli"
 
 #define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
@@ -14,6 +15,14 @@ cbuffer LLPerGeometry : register(b8)
 };
 #endif
 
+#if defined(PSHADER) && defined(CS_UTILITY) && !defined(LIGHT_LIMIT_FIX)
+cbuffer CSUtilityPerGeometry : register(b3)
+{
+	uint4 CSUtilityPointLightFlags0;
+	uint4 CSUtilityPointLightFlags1;
+};
+#endif
+
 // Float limits
 #define FLT_MIN asfloat(0x00800000)  // 1.175494351e-38f
 #define FLT_MAX asfloat(0x7F7FFFFF)  // 3.402823466e+38f
@@ -21,6 +30,11 @@ cbuffer LLPerGeometry : register(b8)
 namespace Color
 {
 	static float GammaCorrectionValue = 2.2;
+	static const uint PointLightFlagLinear = POINT_LIGHT_FLAG_LINEAR;
+	static const uint PointLightFlagSpot = POINT_LIGHT_FLAG_SPOT;
+	static const uint PointLightFlagOmnidirectionalBulb = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
+	static const uint PackedPointLightFlagVectorSize = 4;
+	static const uint MaxVanillaPointLightFlags = 8;
 
 	// Copyright 2019 Google LLC.
 	// SPDX-License-Identifier: Apache-2.0
@@ -217,13 +231,42 @@ namespace Color
 	float3 DirectionalLight(float3 color, bool isLinear = false)
 	{
 		return Light(color, isLinear) *
-		       ((ENABLE_LL && !isLinear) ? Math::PI * SharedData::linearLightingSettings.directionalLightMult : 1.0f);
+		       ((ENABLE_LL && !isLinear) ? Math::PI : 1.0f) *
+		       SharedData::csUtilitySettings.directionalLightMult;
 	}
 
-	float3 PointLight(float3 color, bool isLinear = false)
+	float GetPointLightMultiplier(bool isLinear)
+	{
+		return (ENABLE_LL && isLinear) ? SharedData::csUtilitySettings.linearPointLightMult : SharedData::csUtilitySettings.pointLightMult;
+	}
+
+	float GetPointLightTypeMultiplier(bool isLinear, uint lightFlags)
+	{
+		const bool useLinearMultiplier = ENABLE_LL && isLinear;
+		if ((lightFlags & PointLightFlagSpot) != 0)
+			return useLinearMultiplier ? SharedData::csUtilitySettings.linearSpotlightMult : SharedData::csUtilitySettings.spotlightMult;
+		if ((lightFlags & PointLightFlagOmnidirectionalBulb) != 0)
+			return useLinearMultiplier ? SharedData::csUtilitySettings.linearOmnidirectionalBulbMult : SharedData::csUtilitySettings.omnidirectionalBulbMult;
+		return 1.0f;
+	}
+
+	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0)
 	{
 		return Light(color, isLinear) *
-		       ((ENABLE_LL && !isLinear) ? Math::PI * SharedData::linearLightingSettings.pointLightMult : 1.0f);
+		       ((ENABLE_LL && !isLinear) ? Math::PI : 1.0f) *
+		       GetPointLightMultiplier(isLinear) *
+		       GetPointLightTypeMultiplier(isLinear, lightFlags);
+	}
+
+	uint GetVanillaPointLightFlags(uint lightIndex)
+	{
+#	if defined(PSHADER) && defined(CS_UTILITY) && !defined(LIGHT_LIMIT_FIX)
+		if (lightIndex >= MaxVanillaPointLightFlags)
+			return 0;
+		return lightIndex < PackedPointLightFlagVectorSize ? CSUtilityPointLightFlags0[lightIndex] : CSUtilityPointLightFlags1[lightIndex - PackedPointLightFlagVectorSize];
+#	else
+		return 0;
+#	endif
 	}
 #	if defined(LIGHTING)
 	float3 EmitColor(float3 color)
@@ -243,7 +286,8 @@ namespace Color
 
 	float3 Ambient(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) * SharedData::linearLightingSettings.ambientMult : color;
+		color = ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) : color;
+		return ENABLE_LL ? color * SharedData::linearLightingSettings.ambientMult : color;
 	}
 
 	float3 Fog(float3 color)

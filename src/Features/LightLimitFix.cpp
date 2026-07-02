@@ -76,6 +76,11 @@ namespace
 		if (a_resetRoomIndex)
 			a_data.RoomIndex = -1;
 	}
+
+	void SetPointLightTypeFlags(LightLimitFix::LightData& a_light, RE::BSLight* a_bsLight)
+	{
+		PointLightFlags::SetPointLightTypeFlags(a_light.lightFlags, a_bsLight);
+	}
 }
 
 // Debug visualisation state (EnableLightsVisualisation / LightsVisualisationMode)
@@ -665,6 +670,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 				light.fade = runtimeData.fade;
 			}
 
+			SetPointLightTypeFlags(light, bsLight);
 			light.fade *= bsLight->lodDimmer;
 			const bool isPortalStrict = !IsGlobalLight(bsLight);
 			ApplyJsonPlacedLightIntensityScale(light, bsLight, niLight, isPortalStrict, isInterior);
@@ -975,6 +981,7 @@ void LightLimitFix::UpdateLights()
 						light.fade = runtimeData.fade;
 					}
 
+					SetPointLightTypeFlags(light, bsLight);
 					light.fade *= bsLight->lodDimmer;
 					const bool isPortalStrict = !IsGlobalLight(bsLight);
 
@@ -1020,6 +1027,7 @@ void LightLimitFix::UpdateLights()
 					light.fade = runtimeData.fade;
 				}
 
+				SetPointLightTypeFlags(light, shadowLight);
 				light.fade *= shadowLight->lodDimmer;
 
 				if (!IsGlobalLight(shadowLight)) {
