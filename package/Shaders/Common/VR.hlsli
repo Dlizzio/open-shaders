@@ -147,8 +147,9 @@ namespace Stereo
 		float2 clampedMono = prevUVmono;
 
 #ifdef VR
-		// VR logic: mono.x < 0 is clamped to 0, not rejected. OOB fires for mono.x >= 1 or mono.y outside [0, 1] inclusive.
-		isOutOfBounds = (prevUVmono.x >= 1.0) || (prevUVmono.y <= 0.0) || (prevUVmono.y >= 1.0);
+		// Reject the left edge (mono.x <= 0) too, not clamp-and-sample: clamping smears a
+		// stretched history column at each eye's left/centre-seam edge on fast head turns.
+		isOutOfBounds = (prevUVmono.x >= 1.0) || (prevUVmono.x <= 0.0) || (prevUVmono.y <= 0.0) || (prevUVmono.y >= 1.0);
 		clampedMono.x = saturate(prevUVmono.x);
 #else
 		// SE logic: inclusive boundaries on both sides.
