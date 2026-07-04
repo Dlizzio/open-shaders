@@ -1284,6 +1284,19 @@ ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS()
 	return underwaterMaskUpscalePS.get();
 }
 
+ID3D11PixelShader* Upscaling::GetCameraMotionVectorsPS()
+{
+	if (!cameraMotionVectorsPS) {
+		logger::debug("Compiling CameraMotionVectorsPS.hlsl");
+		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
+		if (globals::game::isVR)
+			defines.push_back({ "VR", "" });
+		cameraMotionVectorsPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl", defines, "ps_5_0"));
+	}
+
+	return cameraMotionVectorsPS.get();
+}
+
 ID3D11VertexShader* Upscaling::GetUpscaleVS()
 {
 	if (!upscaleVS) {
@@ -1645,6 +1658,9 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 			auto phaseCount = GetJitterPhaseCount(renderWidth, displayWidth);
 			GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
+			// Loading screens reset the upscaler every frame; unintegrated jitter only wobbles the image.
+			if (globals::state->isLoadingMenuOpen)
+				jitter = { 0.0f, 0.0f };
 
 			if (globals::game::isVR)
 				a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
@@ -1667,6 +1683,9 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 			auto phaseCount = GetJitterPhaseCount(renderWidth, screenWidth);
 
 			GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
+			// Loading screens reset the upscaler every frame; unintegrated jitter only wobbles the image.
+			if (globals::state->isLoadingMenuOpen)
+				jitter = { 0.0f, 0.0f };
 
 			if (globals::game::isVR)
 				a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
@@ -1761,6 +1780,9 @@ void Upscaling::SetupResources()
 	// Create upscaling data constant buffer for encode textures compute shader
 	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>());
 
+	// Create camera reprojection matrices constant buffer for menu motion vectors
+	cameraMotionVectorsCB = new ConstantBuffer(ConstantBufferDesc<CameraMotionVectorsCB>(), "Upscaling::CameraMotionVectorsCB");
+
 	// Create blend state for depth upscaling
 	D3D11_BLEND_DESC blendDesc = {};
 	blendDesc.AlphaToCoverageEnable = false;
@@ -1808,6 +1830,7 @@ void Upscaling::ClearShaderCache()
 
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
+	cameraMotionVectorsPS = nullptr;     // com_ptr automatically releases
 	upscaleVS = nullptr;                 // com_ptr automatically releases
 }
 
@@ -2151,6 +2174,75 @@ Upscaling::BlurResources Upscaling::GetBlurResources() const
 	return {};
 }
 
+void Upscaling::FillMenuCameraMotionVectors()
+{
+	menuCameraMVsValid = false;
+
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
+	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+
+	auto* pixelShader = GetCameraMotionVectorsPS();
+	auto* vertexShader = GetUpscaleVS();
+	if (!pixelShader || !vertexShader || !cameraMotionVectorsCB ||
+		!motionVector.RTV || !motionVector.texture || !depth.depthSRV)
+		return;
+
+	CS_GPU_PASS("Upscaling::MenuCameraMotionVectors");
+
+	CameraMotionVectorsCB cbData{};
+	const uint32_t numEyes = globals::game::isVR ? 2 : 1;
+	for (uint32_t eyeIndex = 0; eyeIndex < numEyes; ++eyeIndex) {
+		// Inversion is convention-safe on the raw cb12 bytes; composition with the previous
+		// view-proj stays in the shader so the mul() convention matches FrameBuffer usage.
+		cbData.curViewProjUnjitteredInverse[eyeIndex] =
+			globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex).Invert();
+		cbData.prevViewProjUnjittered[eyeIndex] =
+			globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex);
+	}
+	cameraMotionVectorsCB->Update(cbData);
+
+	{
+		Util::FullscreenPassScope stateScope(context);
+
+		context->IASetInputLayout(nullptr);
+		context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
+		context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+		context->VSSetShader(vertexShader, nullptr, 0);
+		context->PSSetShader(pixelShader, nullptr, 0);
+		context->GSSetShader(nullptr, nullptr, 0);
+		context->HSSetShader(nullptr, nullptr, 0);
+		context->DSSetShader(nullptr, nullptr, 0);
+
+		ID3D11ShaderResourceView* srvs[] = { depth.depthSRV };
+		context->PSSetShaderResources(0, 1, srvs);
+		// b1: the slot FullscreenPassScope saves and restores.
+		auto* constantBuffer = cameraMotionVectorsCB->CB();
+		context->PSSetConstantBuffers(1, 1, &constantBuffer);
+
+		context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+		context->OMSetDepthStencilState(nullptr, 0);
+		context->RSSetState(nullptr);
+
+		D3D11_TEXTURE2D_DESC mvDesc{};
+		static_cast<ID3D11Texture2D*>(motionVector.texture)->GetDesc(&mvDesc);
+		D3D11_VIEWPORT viewport = {};
+		viewport.Width = static_cast<float>(mvDesc.Width);
+		viewport.Height = static_cast<float>(mvDesc.Height);
+		viewport.MaxDepth = 1.0f;
+		context->RSSetViewports(1, &viewport);
+
+		ID3D11RenderTargetView* rtv = motionVector.RTV;
+		context->OMSetRenderTargets(1, &rtv, nullptr);
+		context->Draw(3, 0);
+	}
+
+	menuCameraMVsValid = true;
+}
+
 void Upscaling::Upscale()
 {
 	ZoneScoped;
@@ -2163,6 +2255,14 @@ void Upscaling::Upscale()
 
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+
+	// The main menu's only motion is the camera, so synthesized camera MVs give the upscalers
+	// valid reprojection there. Loading screens animate geometry (the rotating model) that
+	// camera-derived MVs cannot represent — those keep the per-frame reset instead.
+	if (globals::state->isMainMenuOpen && !globals::state->isLoadingMenuOpen)
+		FillMenuCameraMotionVectors();
+	else
+		menuCameraMVsValid = false;
 
 	{
 		CS_GPU_PASS("Upscaling::EncodeTextures");
