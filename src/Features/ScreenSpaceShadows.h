@@ -58,6 +58,12 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(RaymarchCB);
 
 	bool enableStereoSync = true;
+	// Route the VR stereo step through the view-independent reproject path (transfer eye 0's
+	// shadow to eye 1) instead of the bilateral sync. Default on for the perf win (eye-1
+	// raymarch skipped).
+	bool useStereoReproject = true;
+	// Dev viz: paint true-disocclusion eye-1 pixels black to measure the reproject gap.
+	bool debugReprojectDisocclusion = false;
 
 	struct alignas(16) StereoSyncCB
 	{
@@ -78,6 +84,15 @@ public:
 	Texture2D* stereoSyncCopyTex = nullptr;
 	ConstantBuffer* stereoSyncCB = nullptr;
 	ID3D11ComputeShader* stereoSyncCS = nullptr;
+	ID3D11ComputeShader* stereoReprojectCS = nullptr;
+	ID3D11ComputeShader* stereoReprojectDebugCS = nullptr;
+	// Per-variant latches: a dev-only debug-variant compile failure must not disable the
+	// production reproject path.
+	bool stereoReprojectCompileFailed = false;
+	bool stereoReprojectDebugCompileFailed = false;
+
+	/** @brief Lazily compiles and returns the active reproject variant; null (latched) on compile failure. */
+	ID3D11ComputeShader* GetStereoReprojectCS();
 
 	/** @brief Creates the raymarch constant buffer, point border sampler, and shadow output texture. */
 	virtual void SetupResources() override;
