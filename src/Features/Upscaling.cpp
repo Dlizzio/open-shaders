@@ -189,6 +189,142 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	return ret;
 }
 
+// VR PerfMode: on-by-default performance feature. The setting persists across method
+// switches (we don't auto-flip it when the user picks TAA/NONE), but the checkbox is
+// disabled outside upscalers that can target a separate displayRes output (DLSS, FSR);
+// kept visible-but-greyed so users see the option exists. Restart-gated: the BSOpenVR
+// size hook reads this at world load and sizes every engine RT off the boot value.
+void Upscaling::DrawPerfModeToggle()
+{
+	const auto upscaleMethod = GetUpscaleMethod();
+	const bool methodSupportsPerf =
+		upscaleMethod == UpscaleMethod::kDLSS ||
+		upscaleMethod == UpscaleMethod::kFSR;
+	if (!methodSupportsPerf)
+		ImGui::BeginDisabled();
+	ImGui::Checkbox(T(TKEY("render_at_upscale_res"), "Render engine at upscaled resolution"), &settings.renderAtUpscaleRes);
+	if (!methodSupportsPerf)
+		ImGui::EndDisabled();
+	// Hover tooltip always renders (so users learn what the option does even when greyed out).
+	// The pending-restart banner fires only when DLSS or FSR is the active upscaler; the
+	// feature can't take effect otherwise, so a "pending restart" hint there would mislead.
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("render_at_upscale_res_tooltip"),
+							  "On by default. The engine pipeline allocates render targets at the upscaled-render\n"
+							  "resolution instead of the HMD display resolution; the upscaler (DLSS or FSR) writes\n"
+							  "its output to a private DisplayRes texture. Substantial VRAM and bandwidth savings,\n"
+							  "especially at high HMD resolutions.\n"
+							  "\n"
+							  "Locked to the Upscale Preset selected at launch: changing the preset (or this\n"
+							  "toggle) takes effect after a game restart. At Native AA (1.0x) there is no\n"
+							  "render-res reduction, so the lock stays off and preset changes apply live.\n"
+							  "\n"
+							  "Requires DLSS or FSR. Sharpness / model preset / Reflex remain live."));
+	}
+	if (!methodSupportsPerf && settings.renderAtUpscaleRes)
+		Util::Text::Disabled(T(TKEY("render_at_upscale_res_requires"), "Render-at-upscaled-resolution requires DLSS or FSR. Switch upscaler Method to activate."));
+	// At Native AA (1x) there's nothing to bank, so the size hook stays dormant even while
+	// checked; surface the no-op rather than implying the toggle does something.
+	if (methodSupportsPerf && settings.renderAtUpscaleRes &&
+		GetQualityModeRatio(settings.qualityMode) <= 1.0f)
+		Util::Text::Disabled(T(TKEY("render_at_upscale_res_native_noop"), "No effect at Native AA (1x): renders at full resolution; raise the Upscale Preset to engage."));
+	if (methodSupportsPerf)
+		Util::UI::DrawSettingDiff(bootSnapshot, settings, &Settings::renderAtUpscaleRes);
+}
+
+// FoveatedRender: foveated subrect DLSS, VR-only, opt-in. Enable lives at the top level
+// for discoverability; the body knobs are collapsed by default and greyed until opted in.
+void Upscaling::DrawFoveationControls(bool showTuning)
+{
+	ImGui::Separator();
+	foveatedRender.DrawEnable();
+	// Hub view shows just the enable; the deep tuning tree lives in the Upscaling panel.
+	if (!showTuning)
+		return;
+	const bool enabled = foveatedRender.settings.enabled != 0;
+	if (!enabled)
+		ImGui::BeginDisabled();
+	if (ImGui::TreeNodeEx(T(TKEY("foveated_tuning"), "Foveated DLSS Tuning"))) {
+		foveatedRender.DrawSettings();
+		ImGui::TreePop();
+	}
+	if (!enabled)
+		ImGui::EndDisabled();
+}
+
+// Narrower than the feature name: the hub section only covers the VR perf knobs.
+std::string Upscaling::GetVRPerformanceSectionLabel()
+{
+	return T(TKEY("vr_perf_upscaling_header"), "Upscaling & Foveation");
+}
+
+// Central VR Performance hub view: the render-res PerfMode toggle and Foveated DLSS,
+// the two upscaler-owned VR perf knobs, bound to the same settings the upscaler panel shows.
+void Upscaling::DrawVRPerformanceSettings()
+{
+	DrawPerfModeToggle();
+	// The upscale preset is only meaningful when an upscaler is active; match the same
+	// gate DrawSettings uses so the hub doesn't show an inert value for None/TAA.
+	const auto upscaleMethod = GetUpscaleMethod();
+	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
+		ImGui::Text("%s: %s", T(TKEY("vr_perf_upscale_preset"), "Upscale preset"), GetQualityModeName(settings.qualityMode));
+		if (perfMode.IsHookActive())
+			Util::UI::DrawSettingDiff(bootSnapshot, settings, &Settings::qualityMode);
+	}
+	DrawFoveationControls(false);
+}
+
+uint Upscaling::VRProfileQualityMode(VRPerfProfile profile)
+{
+	switch (profile) {
+	case VRPerfProfile::Performance:
+		return (uint)QualityMode::kPerformance;
+	case VRPerfProfile::Balanced:
+		return (uint)QualityMode::kBalanced;
+	default:
+		return (uint)QualityMode::kQuality;
+	}
+}
+
+// Foveated DLSS trades peripheral sharpness for speed, so only Performance opts into it.
+bool Upscaling::VRProfileFoveation(VRPerfProfile profile)
+{
+	return profile == VRPerfProfile::Performance;
+}
+
+// Single source for preset display names; the native tier reads DLAA under DLSS, Native AA otherwise.
+const char* Upscaling::GetQualityModeName(uint qualityMode) const
+{
+	switch (std::min(qualityMode, (uint)QualityMode::kUltraPerformance)) {
+	case (uint)QualityMode::kNativeAA:
+		return GetUpscaleMethod() == UpscaleMethod::kDLSS ? T(TKEY("preset_dlaa"), "DLAA") : T(TKEY("preset_native_aa"), "Native AA");
+	case (uint)QualityMode::kQuality:
+		return T(TKEY("preset_quality"), "Quality");
+	case (uint)QualityMode::kBalanced:
+		return T(TKEY("preset_balanced"), "Balanced");
+	case (uint)QualityMode::kPerformance:
+		return T(TKEY("preset_performance"), "Performance");
+	default:
+		return T(TKEY("preset_ultra_performance"), "Ultra Performance");
+	}
+}
+
+// PerfMode (renderAtUpscaleRes) stays on for every profile; qualityMode and foveation
+// latch at boot (restart-gated).
+void Upscaling::ApplyVRPerformanceProfile(VRPerfProfile profile)
+{
+	settings.renderAtUpscaleRes = true;
+	settings.qualityMode = VRProfileQualityMode(profile);
+	foveatedRender.settings.enabled = VRProfileFoveation(profile) ? 1 : 0;
+}
+
+bool Upscaling::MatchesVRPerformanceProfile(VRPerfProfile profile) const
+{
+	return settings.renderAtUpscaleRes &&
+	       settings.qualityMode == VRProfileQualityMode(profile) &&
+	       (foveatedRender.settings.enabled != 0) == VRProfileFoveation(profile);
+}
+
 void Upscaling::DrawSettings()
 {
 	// Force method to None up front so the picker reflects the locked state.
@@ -289,36 +425,7 @@ void Upscaling::DrawSettings()
 
 	// Display upscaling settings if applicable
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
-		const char* upscalePresetsDLSS[] = {
-			T(TKEY("preset_ultra_performance"), "Ultra Performance"),
-			T(TKEY("preset_performance"), "Performance"),
-			T(TKEY("preset_balanced"), "Balanced"),
-			T(TKEY("preset_quality"), "Quality"),
-			T(TKEY("preset_dlaa"), "DLAA")
-		};
-		const char* upscalePresets[] = {
-			T(TKEY("preset_ultra_performance"), "Ultra Performance"),
-			T(TKEY("preset_performance"), "Performance"),
-			T(TKEY("preset_balanced"), "Balanced"),
-			T(TKEY("preset_quality"), "Quality"),
-			T(TKEY("preset_native_aa"), "Native AA")
-		};
-
-		// Compute a safe preset index (4 - qualityMode) clamped to [0,4] to avoid negative/overflow indexing
-		int presetIndex = 0;
-		if (settings.qualityMode <= 4)
-			presetIndex = 4 - static_cast<int>(settings.qualityMode);
-		presetIndex = std::clamp(presetIndex, 0, 4);
-
-		// Choose preset name set and the corresponding scales once, then show a
-		// single SliderInt to avoid duplicated calls.
-		const char* baseLabel = nullptr;
-
-		if (upscaleMethod == UpscaleMethod::kFSR) {
-			baseLabel = upscalePresets[presetIndex];
-		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
-			baseLabel = upscalePresetsDLSS[presetIndex];
-		}
+		const char* baseLabel = GetQualityModeName(settings.qualityMode);
 
 		if (baseLabel) {
 			// Derive scale from live `settings.qualityMode` — `resolution-
@@ -335,7 +442,7 @@ void Upscaling::DrawSettings()
 			if (perfMode.IsHookActive() &&
 				bootSnapshot.HasPendingChange(settings, &Settings::qualityMode)) {
 				const uint bm = std::clamp<uint>(bootSnapshot.Boot(&Settings::qualityMode), 0u, 4u);
-				const char* bootLabel = (upscaleMethod == UpscaleMethod::kDLSS) ? upscalePresetsDLSS[std::clamp<int>(4 - (int)bm, 0, 4)] : upscalePresets[std::clamp<int>(4 - (int)bm, 0, 4)];
+				const char* bootLabel = GetQualityModeName(bm);
 				Util::Text::RestartNeeded(
 					"Pending restart: currently active = %s ( %.2fx ). Change applies after game restart.",
 					bootLabel, 1.0f / GetQualityModeRatio(bm));
@@ -363,52 +470,10 @@ void Upscaling::DrawSettings()
 			}
 		}
 
-		// VR PerfMode: on-by-default performance feature. Lives in the main
-		// upscaler section (not Backend Diagnostics) so users discover it
-		// alongside the rest of the upscaler controls. Restart-gated —
-		// the BSOpenVR size hook reads this at world load and sizes every
-		// engine RT off the boot value.
-		//
-		// The setting persists across method switches (we don't auto-flip
-		// it when the user picks TAA/NONE), but the checkbox itself is
-		// disabled outside upscalers that can target a separate displayRes
-		// output (DLSS, FSR). Keep visible-but-greyed so users see the
-		// option exists and understand why it isn't live.
-		if (globals::game::isVR) {
-			const bool methodSupportsPerf =
-				upscaleMethod == UpscaleMethod::kDLSS ||
-				upscaleMethod == UpscaleMethod::kFSR;
-			if (!methodSupportsPerf)
-				ImGui::BeginDisabled();
-			ImGui::Checkbox(T(TKEY("render_at_upscale_res"), "Render engine at upscaled resolution"), &settings.renderAtUpscaleRes);
-			if (!methodSupportsPerf)
-				ImGui::EndDisabled();
-			// Hover tooltip always renders (so users learn what the option does even when greyed out).
-			// The pending-restart banner fires only when DLSS or FSR is the active upscaler — the
-			// feature can't take effect otherwise, so a "pending restart" hint there would mislead.
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("%s", T(TKEY("render_at_upscale_res_tooltip"),
-									  "On by default. The engine pipeline allocates render targets at the upscaled-render\n"
-									  "resolution instead of the HMD display resolution; the upscaler (DLSS or FSR) writes\n"
-									  "its output to a private DisplayRes texture. Substantial VRAM and bandwidth savings,\n"
-									  "especially at high HMD resolutions.\n"
-									  "\n"
-									  "Locked to the Upscale Preset selected at launch: changing the preset (or this\n"
-									  "toggle) takes effect after a game restart. At Native AA (1.0x) there is no\n"
-									  "render-res reduction, so the lock stays off and preset changes apply live.\n"
-									  "\n"
-									  "Requires DLSS or FSR. Sharpness / model preset / Reflex remain live."));
-			}
-			if (!methodSupportsPerf && settings.renderAtUpscaleRes)
-				Util::Text::Disabled(T(TKEY("render_at_upscale_res_requires"), "Render-at-upscaled-resolution requires DLSS or FSR — switch upscaler Method to activate."));
-			// At Native AA (1x) there's nothing to bank, so the size hook stays dormant even while
-			// checked — surface the no-op rather than implying the toggle does something.
-			if (methodSupportsPerf && settings.renderAtUpscaleRes &&
-				GetQualityModeRatio(settings.qualityMode) <= 1.0f)
-				Util::Text::Disabled(T(TKEY("render_at_upscale_res_native_noop"), "No effect at Native AA (1x) — renders at full resolution; raise the Upscale Preset to engage."));
-			if (methodSupportsPerf)
-				Util::UI::DrawSettingDiff(bootSnapshot, settings, &Settings::renderAtUpscaleRes);
-		}
+		// VR PerfMode toggle, discovered here alongside the upscaler controls,
+		// and mirrored in the VR Performance hub.
+		if (globals::game::isVR)
+			DrawPerfModeToggle();
 	}
 
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
@@ -549,24 +614,10 @@ void Upscaling::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	// FoveatedRender: foveated subrect DLSS — VR-only, opt-in mode of this
-	// feature. Like DLSSperf, lives here rather than as a peer Feature so
-	// all DLSS surfaces share one settings panel. Enable lives at the top
-	// level for discoverability; the body knobs are collapsed by default and
-	// greyed out until the user opts in.
-	if (globals::game::isVR) {
-		ImGui::Separator();
-		foveatedRender.DrawEnable();
-		const bool enabled = foveatedRender.settings.enabled != 0;
-		if (!enabled)
-			ImGui::BeginDisabled();
-		if (ImGui::TreeNodeEx(T(TKEY("foveated_tuning"), "Foveated DLSS — Tuning"))) {
-			foveatedRender.DrawSettings();
-			ImGui::TreePop();
-		}
-		if (!enabled)
-			ImGui::EndDisabled();
-	}
+	// Foveated DLSS lives here rather than as a peer Feature so all DLSS surfaces share
+	// one settings panel; also mirrored in the VR Performance hub.
+	if (globals::game::isVR)
+		DrawFoveationControls();
 
 	if (ImGui::TreeNodeEx(T(TKEY("backend_diagnostics"), "Backend Diagnostics"))) {
 		// Streamline log level selection

@@ -53,11 +53,22 @@ public:
 		kDLSS
 	};
 
+	// Upscale preset indexed by numeric value: lower values (Quality) mean higher internal
+	// render resolution; higher values (Ultra Performance) upscale more. Matches FfxFsr3QualityMode.
+	enum class QualityMode : uint
+	{
+		kNativeAA = 0,
+		kQuality = 1,
+		kBalanced = 2,
+		kPerformance = 3,
+		kUltraPerformance = 4,
+	};
+
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
-		uint qualityMode = 1;  // Default to Quality (1=Quality, 2=Balanced, 3=Performance, 4=Ultra Performance, 0=Native AA)
+		uint qualityMode = (uint)QualityMode::kQuality;
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 1;
 		uint frameGenerationForceEnable = 0;
@@ -171,6 +182,20 @@ public:
 	size_t GetSettingsBlobSize() const override { return sizeof(settings); }
 
 	virtual void DrawSettings() override;
+	virtual void DrawVRPerformanceSettings() override;
+	std::string GetVRPerformanceSectionLabel() override;
+	int GetVRPerformanceOrder() const override { return 10; }
+	virtual void ApplyVRPerformanceProfile(VRPerfProfile profile) override;
+	bool MatchesVRPerformanceProfile(VRPerfProfile profile) const override;
+	/// @brief Renders the VR PerfMode (render-at-upscaled-res) toggle. Shared by the
+	/// upscaler panel and the VR Performance hub. VR-only; caller guards on isVR.
+	void DrawPerfModeToggle();
+	/// @brief Renders the Foveated DLSS enable + tuning tree. Shared by the upscaler
+	/// panel and the VR Performance hub. VR-only; caller guards on isVR.
+	void DrawFoveationControls(bool showTuning = true);
+	static uint VRProfileQualityMode(VRPerfProfile profile);
+	static bool VRProfileFoveation(VRPerfProfile profile);
+	const char* GetQualityModeName(uint qualityMode) const;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;

@@ -45,6 +45,37 @@ void ScreenSpaceGI::RestoreDefaultSettings()
 	recompileFlag = true;
 }
 
+void ScreenSpaceGI::DrawReprojectToggle()
+{
+	auto reprojectGuard = Util::DisableGuard(settings.EnableExperimentalSpecularGI);
+	ImGui::Checkbox(T(TKEY("vr_stereo_reproject"), "Stereo Reprojection"), &settings.UseStereoReproject);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("vr_stereo_reproject_tooltip"),
+							  "Reprojects Eye 0 (left)'s diffuse GI into Eye 1 (right) and skips the Eye 1 "
+							  "march where it can, reducing GPU cost. Requires HQ Specular IL off (specular "
+							  "is view-dependent). Disoccluded pixels are marched natively instead."));
+}
+
+// Hub view: the SSGI stereo reprojection toggle, bound to the same setting the SSGI panel shows.
+void ScreenSpaceGI::DrawVRPerformanceSettings()
+{
+	DrawReprojectToggle();
+}
+
+// Reprojection is the GI perf win with a minor disocclusion artifact: on for
+// Performance/Balanced, off for Quality (max fidelity). Ignored when specular GI is on.
+void ScreenSpaceGI::ApplyVRPerformanceProfile(VRPerfProfile profile)
+{
+	settings.UseStereoReproject = VRProfileEnablesReproject(profile);
+}
+
+bool ScreenSpaceGI::MatchesVRPerformanceProfile(VRPerfProfile profile) const
+{
+	// Specular GI forces bilateral sync (view-dependent), so the reproject setting is moot
+	// then, so don't veto the hub's active-profile detection for a knob the user can't apply.
+	return settings.EnableExperimentalSpecularGI || settings.UseStereoReproject == VRProfileEnablesReproject(profile);
+}
+
 void ScreenSpaceGI::DrawSettings()
 {
 	static bool showAdvanced;
@@ -86,17 +117,8 @@ void ScreenSpaceGI::DrawSettings()
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("hq_specular_il_tooltip"), "An experimental specular GI that is more accurate but requires more samples. Won't be blurred."));
 
-			// User-facing (not dev-gated): the perf win ships default-on, so users need a
-			// non-debug way to opt out; this stays the feature-local source of truth.
-			if (globals::game::isVR) {
-				auto reprojectGuard = Util::DisableGuard(settings.EnableExperimentalSpecularGI);
-				ImGui::Checkbox(T(TKEY("vr_stereo_reproject"), "VR Stereo Reprojection"), &settings.UseStereoReproject);
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("vr_stereo_reproject_tooltip"),
-										  "Reprojects Eye 0 (left)'s diffuse GI into Eye 1 (right) and skips the Eye 1 "
-										  "march where it can, reducing GPU cost. Requires HQ Specular IL off (specular "
-										  "is view-dependent). Disoccluded pixels are marched natively instead."));
-			}
+			if (globals::game::isVR)
+				DrawReprojectToggle();
 		}
 
 		ImGui::EndTable();

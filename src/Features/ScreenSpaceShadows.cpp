@@ -23,6 +23,54 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BilinearThreshold,
 	ShadowContrast)
 
+void ScreenSpaceShadows::DrawStereoToggles()
+{
+	// Backing state is two bools (enableStereoSync umbrella + useStereoReproject method);
+	// surface them as one 3-state selector so the modes don't read as rival toggles.
+	int mode = !enableStereoSync ? 0 : (useStereoReproject ? 2 : 1);
+	const char* modes[] = {
+		T(TKEY("vr_stereo_mode_off"), "Off"),
+		T(TKEY("vr_stereo_mode_sync"), "Bilateral Sync"),
+		T(TKEY("vr_stereo_mode_reproject"), "Reprojection")
+	};
+	if (ImGui::Combo(T(TKEY("vr_stereo_mode"), "Stereo Consistency"), &mode, modes, IM_ARRAYSIZE(modes))) {
+		enableStereoSync = mode != 0;
+		useStereoReproject = mode == 2;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("vr_stereo_mode_tooltip"),
+							  "Off: each eye computes shadows independently (may mismatch between eyes).\n"
+							  "Bilateral Sync: both eyes compute, then reconcile (highest quality, highest cost).\n"
+							  "Reprojection: compute Eye 0 and transfer to Eye 1, skipping its raymarch. "
+							  "Fastest; disoccluded pixels fall back to unshadowed."));
+	if (enableStereoSync && useStereoReproject && globals::state->IsDeveloperMode()) {
+		ImGui::Checkbox(T(TKEY("vr_stereo_reproject_debug"), "Show Reprojection Disocclusion"), &debugReprojectDisocclusion);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("vr_stereo_reproject_debug_tooltip"),
+								  "Paints Eye 1 pixels Eye 0 cannot see black to visualize the "
+								  "reprojection coverage gap."));
+	}
+}
+
+// Hub view: the SSS stereo sync/reprojection toggles, bound to the same settings the SSS panel shows.
+void ScreenSpaceShadows::DrawVRPerformanceSettings()
+{
+	DrawStereoToggles();
+}
+
+// A profile drives the whole stereo mode, so enable the umbrella (else it can't engage from
+// Off): Performance/Balanced reproject (fast), Quality uses bilateral sync (both eyes, max fidelity).
+void ScreenSpaceShadows::ApplyVRPerformanceProfile(VRPerfProfile profile)
+{
+	enableStereoSync = true;
+	useStereoReproject = VRProfileEnablesReproject(profile);
+}
+
+bool ScreenSpaceShadows::MatchesVRPerformanceProfile(VRPerfProfile profile) const
+{
+	return enableStereoSync && useStereoReproject == VRProfileEnablesReproject(profile);
+}
+
 void ScreenSpaceShadows::DrawSettings()
 {
 	if (ImGui::TreeNodeEx(T(TKEY("general"), "General"), ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -46,29 +94,8 @@ void ScreenSpaceShadows::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shadow_contrast_tooltip"), "Contrast boost for the shadow transition. Higher values produce harder shadow edges."));
 
-		if (globals::game::isVR) {
-			ImGui::Checkbox(T(TKEY("vr_stereo_sync"), "VR Stereo Sync"), &enableStereoSync);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("vr_stereo_sync_tooltip"),
-									  "Reconciles shadow data between Eye 0 (left) and Eye 1 (right) via bilateral "
-									  "reprojection and a depth-weighted blur to reduce per-eye noise. Min-blend "
-									  "preserves a shadow if either eye detects an occluder."));
-			if (enableStereoSync) {
-				ImGui::Checkbox(T(TKEY("vr_stereo_reproject"), "VR Stereo Reprojection"), &useStereoReproject);
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("vr_stereo_reproject_tooltip"),
-										  "Reprojects Eye 0 (left)'s view-independent shadow into Eye 1 (right) and "
-										  "skips the Eye 1 raymarch, reducing GPU cost. Disoccluded pixels (visible "
-										  "only to Eye 1) fall back to unshadowed."));
-				if (useStereoReproject && globals::state->IsDeveloperMode()) {
-					ImGui::Checkbox(T(TKEY("vr_stereo_reproject_debug"), "Show Reprojection Disocclusion"), &debugReprojectDisocclusion);
-					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text("%s", T(TKEY("vr_stereo_reproject_debug_tooltip"),
-											  "Paints Eye 1 pixels Eye 0 cannot see black to visualize the "
-											  "reprojection coverage gap."));
-				}
-			}
-		}
+		if (globals::game::isVR)
+			DrawStereoToggles();
 
 		ImGui::Spacing();
 		ImGui::Spacing();

@@ -99,6 +99,14 @@ public:
 
 	/** @brief Draws the ImGui settings UI for screen-space shadow configuration. */
 	virtual void DrawSettings() override;
+	virtual void DrawVRPerformanceSettings() override;
+	std::string GetVRPerformanceSectionLabel() override { return GetDisplayName(); }
+	int GetVRPerformanceOrder() const override { return 30; }
+	virtual void ApplyVRPerformanceProfile(VRPerfProfile profile) override;
+	bool MatchesVRPerformanceProfile(VRPerfProfile profile) const override;
+	/// @brief Renders the VR stereo sync/reprojection toggles. Shared by the SSS panel and
+	/// the VR Performance hub. VR-only; caller guards on isVR.
+	void DrawStereoToggles();
 
 	/** @brief Releases the compiled raymarch compute shader for recompilation. */
 	virtual void ClearShaderCache() override;
