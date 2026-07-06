@@ -508,8 +508,8 @@ namespace
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", hasLiveValues ?
-				               T(TKEY("dof_unlock_tooltip"), "Unlock depth of field for manual editing.") :
-				               T(TKEY("dof_unlock_unavailable_tooltip"), "No live image space values are available."));
+								  T(TKEY("dof_unlock_tooltip"), "Unlock depth of field for manual editing.") :
+								  T(TKEY("dof_unlock_unavailable_tooltip"), "No live image space values are available."));
 		}
 	}
 
