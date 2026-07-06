@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <optional>
 #include <string_view>
 
@@ -146,22 +145,12 @@ namespace
 		return result;
 	}
 
-	uint32_t DecodeUnderwaterPackedValue(const DepthOfField& a_depthOfField)
-	{
-		const uint32_t rawValue = static_cast<uint32_t>(a_depthOfField.flags) |
-		                          (static_cast<uint32_t>(a_depthOfField.skyBlurRadius.underlying()) << 16);
-		float packedValue = 0.0f;
-		std::memcpy(&packedValue, &rawValue, sizeof(packedValue));
-		return std::isfinite(packedValue) && packedValue > 0.0f ? static_cast<uint32_t>(packedValue) : 0;
-	}
-
 	DofSettings DecodeUnderwaterDepthOfField(const DepthOfField& a_depthOfField)
 	{
-		DofSettings result = DecodeDofPackedValue(
-			a_depthOfField.strength,
-			a_depthOfField.distance,
-			a_depthOfField.range,
-			static_cast<float>(DecodeUnderwaterPackedValue(a_depthOfField)));
+		DofSettings result{};
+		result.strength = a_depthOfField.strength;
+		result.distance = a_depthOfField.distance;
+		result.range = a_depthOfField.range;
 		result.mode = kDofModeBack;
 
 		const uint16_t rawRadius = a_depthOfField.skyBlurRadius.underlying();
@@ -169,25 +158,32 @@ namespace
 			if (rawRadius == kSkyBlurRadiusValues[index]) {
 				result.excludeSky = false;
 				result.blurRadius = index;
+				CSUtility::SanitizeDepthOfFieldSettings(result);
 				return result;
 			}
 			if (rawRadius == kNoSkyBlurRadiusValues[index]) {
 				result.excludeSky = true;
 				result.blurRadius = index;
+				CSUtility::SanitizeDepthOfFieldSettings(result);
 				return result;
 			}
 		}
 
+		CSUtility::SanitizeDepthOfFieldSettings(result);
 		return result;
 	}
 
-	void WriteUnderwaterPackedValue(DepthOfField& a_depthOfField, const DofSettings& a_settings)
+	SkyBlurRadius GetUnderwaterSkyBlurRadius(const DofSettings& a_settings)
 	{
-		const float packedValue = static_cast<float>(EncodeDofPackedValue(a_settings));
-		uint32_t rawValue = 0;
-		std::memcpy(&rawValue, &packedValue, sizeof(rawValue));
-		a_depthOfField.flags = static_cast<uint16_t>(rawValue & 0xFFFF);
-		a_depthOfField.skyBlurRadius = static_cast<SkyBlurRadius>(static_cast<uint16_t>(rawValue >> 16));
+		const uint32_t blurRadius = ClampDofBlurRadius(a_settings.blurRadius);
+		const uint16_t rawRadius = a_settings.excludeSky ? kNoSkyBlurRadiusValues[blurRadius] : kSkyBlurRadiusValues[blurRadius];
+		return static_cast<SkyBlurRadius>(rawRadius);
+	}
+
+	void WriteUnderwaterFlagsAndRadius(DepthOfField& a_depthOfField, const DofSettings& a_settings)
+	{
+		a_depthOfField.flags = 0;
+		a_depthOfField.skyBlurRadius = GetUnderwaterSkyBlurRadius(a_settings);
 	}
 
 	RE::Setting* FindDofSetting(std::string_view a_name)
@@ -294,11 +290,12 @@ namespace
 		DofSettings sanitizedSettings = a_settings;
 		CSUtility::SanitizeDepthOfFieldSettings(sanitizedSettings);
 		sanitizedSettings.mode = kDofModeBack;
+		sanitizedSettings.autoFocus = false;
 
 		a_depthOfField.strength = sanitizedSettings.strength;
 		a_depthOfField.distance = sanitizedSettings.distance;
 		a_depthOfField.range = sanitizedSettings.range;
-		WriteUnderwaterPackedValue(a_depthOfField, sanitizedSettings);
+		WriteUnderwaterFlagsAndRadius(a_depthOfField, sanitizedSettings);
 	}
 
 	const char* GetDofModeLabel(uint32_t a_mode)
@@ -430,13 +427,17 @@ namespace
 		return changed;
 	}
 
-	bool DrawDepthOfFieldControls(DofSettings& a_values, bool a_enabled, bool a_allowMode)
+	bool DrawDepthOfFieldControls(DofSettings& a_values, bool a_enabled, bool a_allowMode, bool a_allowAutoFocus)
 	{
 		bool changed = false;
 		Util::DisableGuard disabled(!a_enabled);
 
-		changed |= ImGui::Checkbox(T(TKEY("dof_auto_focus"), "Auto Focus"), &a_values.autoFocus);
-		DrawDofTooltip(T(TKEY("dof_auto_focus_tooltip"), "Uses Skyrim's dynamic DOF path, which shifts focus from the sampled scene depth. bDoDepthOfField can still disable the effect, and fDDOFFocusCenterweightExt changes sample weighting."));
+		if (a_allowAutoFocus) {
+			changed |= ImGui::Checkbox(T(TKEY("dof_auto_focus"), "Auto Focus"), &a_values.autoFocus);
+			DrawDofTooltip(T(TKEY("dof_auto_focus_tooltip"), "Uses Skyrim's dynamic DOF path, which shifts focus from the sampled scene depth. bDoDepthOfField can still disable the effect, and fDDOFFocusCenterweightExt changes sample weighting."));
+		} else {
+			a_values.autoFocus = false;
+		}
 
 		if (a_values.autoFocus) {
 			changed |= DrawDofAutoFocusControls(a_values.autoFocusSettings);
@@ -520,6 +521,7 @@ namespace
 		const std::optional<DofSettings>& a_liveValues,
 		Util::ConfirmationPopup& a_popup,
 		bool a_allowMode,
+		bool a_allowAutoFocus,
 		const char* a_missingDataText)
 	{
 		if (!ImGui::TreeNodeEx(a_label, ImGuiTreeNodeFlags_DefaultOpen))
@@ -540,9 +542,9 @@ namespace
 		DofSettings displayValues = a_override.locked ? a_override.values : a_liveValues.value_or(a_override.values);
 		const bool controlsEnabled = a_override.locked && a_liveValues.has_value();
 		if (controlsEnabled) {
-			DrawDepthOfFieldControls(a_override.values, true, a_allowMode);
+			DrawDepthOfFieldControls(a_override.values, true, a_allowMode, a_allowAutoFocus);
 		} else {
-			DrawDepthOfFieldControls(displayValues, false, a_allowMode);
+			DrawDepthOfFieldControls(displayValues, false, a_allowMode, a_allowAutoFocus);
 		}
 
 		ImGui::PopID();
@@ -570,9 +572,7 @@ namespace
 
 			const bool currentUnderwater = IsCurrentUnderwaterImageSpace(imageSpaceManager);
 			const DofOverride* autoFocusOverride = nullptr;
-			if (currentUnderwater && a_csUtility.settings.underwaterDof.locked) {
-				autoFocusOverride = &a_csUtility.settings.underwaterDof;
-			} else if (!currentUnderwater && a_csUtility.settings.sceneDof.locked) {
+			if (!currentUnderwater && a_csUtility.settings.sceneDof.locked) {
 				autoFocusOverride = &a_csUtility.settings.sceneDof;
 			}
 			if (autoFocusOverride && autoFocusOverride->values.autoFocus) {
@@ -712,6 +712,7 @@ void CSUtility::DrawDepthOfFieldSettings()
 			ReadSceneDepthOfField(),
 			sceneLockPopup,
 			true,
+			true,
 			T(TKEY("dof_scene_no_data"), "No live scene image space data is available."));
 
 		ImGui::Separator();
@@ -722,6 +723,7 @@ void CSUtility::DrawDepthOfFieldSettings()
 			settings.underwaterDof,
 			ReadUnderwaterDepthOfField(),
 			underwaterLockPopup,
+			false,
 			false,
 			T(TKEY("dof_underwater_no_data"), "No underwater image space record is currently applied."));
 
