@@ -24,8 +24,8 @@ namespace
 	constexpr std::uint32_t kFogRangeOffset = 20;
 	constexpr std::uint32_t kDitherFlagOffset = kFogRangeOffset + 3;
 	constexpr std::uint32_t kDofParams6Offset = 24;
-	constexpr std::uint32_t kRequiredFogFloats = kFogRangeOffset + 4;
-	constexpr std::uint32_t kRequiredMaskedFloats = kDofParams6Offset + 4;
+	constexpr std::uint32_t kRequiredFogRegisters = 6;
+	constexpr std::uint32_t kRequiredMaskedRegisters = 7;
 
 	struct alignas(16) DepthOfFieldInputConstants
 	{
@@ -120,15 +120,12 @@ namespace
 		return true;
 	}
 
-	bool HasPixelConstantCount(const RE::ImageSpaceShaderParam* a_param, std::uint32_t a_requiredFloats)
+	bool HasPixelConstantRegisters(const RE::ImageSpaceShaderParam* a_param, std::uint32_t a_requiredRegisters)
 	{
 		if (!a_param || !a_param->pixelConstantGroup)
 			return false;
 
-		const std::uint32_t requiredFloat4 = (a_requiredFloats + 3) / 4;
-		return a_param->pixelConstantGroupSize >= a_requiredFloats ||
-		       a_param->pixelConstantGroupSize >= a_requiredFloats * sizeof(float) ||
-		       a_param->pixelConstantGroupSize >= requiredFloat4;
+		return a_param->pixelConstantGroupSize >= a_requiredRegisters;
 	}
 
 	bool GetOption(const RE::ImageSpaceEffectDepthOfField* a_effect, std::uint32_t a_index)
@@ -151,7 +148,7 @@ namespace
 			return false;
 
 		auto* shaderParam = skyrim_cast<RE::ImageSpaceShaderParam*>(a_param);
-		if (!HasPixelConstantCount(shaderParam, kRequiredFogFloats))
+		if (!HasPixelConstantRegisters(shaderParam, kRequiredFogRegisters))
 			return false;
 
 		const float* constants = shaderParam->pixelConstantGroup;
@@ -160,7 +157,7 @@ namespace
 		values.dofParams3 = ReadFloat4(constants, kDofParams3Offset);
 		values.fogColor = ReadFloat4(constants, kFogColorOffset);
 		values.fogRange = ReadFloat4(constants, kFogRangeOffset);
-		values.dofParams6 = HasPixelConstantCount(shaderParam, kRequiredMaskedFloats) ? ReadFloat4(constants, kDofParams6Offset) : values.dofParams;
+		values.dofParams6 = HasPixelConstantRegisters(shaderParam, kRequiredMaskedRegisters) ? ReadFloat4(constants, kDofParams6Offset) : values.dofParams;
 
 		if (values.fogColor.w <= 0.0f || values.fogRange.x == values.fogRange.y)
 			return false;
@@ -173,7 +170,7 @@ namespace
 	bool ReadDynamicFetchFlag(RE::ImageSpaceEffectParam* a_param)
 	{
 		auto* shaderParam = skyrim_cast<RE::ImageSpaceShaderParam*>(a_param);
-		return HasPixelConstantCount(shaderParam, 1) && shaderParam->pixelConstantGroup[0] > 0.5f;
+		return HasPixelConstantRegisters(shaderParam, 1) && shaderParam->pixelConstantGroup[0] > 0.5f;
 	}
 
 	ID3D11VertexShader* GetDepthOfFieldInputVS()
@@ -562,7 +559,7 @@ namespace
 				return;
 
 			auto* shaderParam = skyrim_cast<RE::ImageSpaceShaderParam*>(a_param);
-			if (!HasPixelConstantCount(shaderParam, kRequiredFogFloats))
+			if (!HasPixelConstantRegisters(shaderParam, kRequiredFogRegisters))
 				return;
 
 			pixelConstants = shaderParam->pixelConstantGroup;
