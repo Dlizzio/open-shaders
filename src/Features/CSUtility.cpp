@@ -1,5 +1,6 @@
 #include "CSUtility.h"
 
+#include "UnderwaterDepthOfField.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "LightLimitFix.h"
@@ -226,6 +227,11 @@ void CSUtility::PostPostLoad()
 {
 	Hooks::Install();
 	InstallDepthOfFieldHooks();
+}
+
+void CSUtility::DataLoaded()
+{
+	UnderwaterDepthOfField::InstallHooks();
 }
 
 #undef I18N_KEY_PREFIX

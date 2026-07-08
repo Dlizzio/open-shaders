@@ -105,6 +105,7 @@ struct CSUtility : Feature
 	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
+	virtual void DataLoaded() override;
 
 	PerFrameData GetCommonBufferData() const;
 	void UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount);
