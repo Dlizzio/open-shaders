@@ -1,6 +1,7 @@
 #include "Common/BlurDither.hlsli"
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
@@ -59,11 +60,6 @@ void CheckOffsetDepth(float2 center, float2 offset, inout float crossSection,
 	}
 	crossSection += crossSectionDelta;
 	totalDepth += depth;
-}
-
-float GetFinalDepth(float depth, float near, float far)
-{
-	return (2 * near * far) / ((far + near) - (depth * 2 - 1) * (far - near));
 }
 
 PS_OUTPUT main(PS_INPUT input)
@@ -137,7 +133,7 @@ PS_OUTPUT main(PS_INPUT input)
 			near = dofParams.z;
 			far = dofParams.w;
 		}
-		finalDepth = GetFinalDepth(depth, near, far);
+		finalDepth = Math::GetFinalDepth(depth, near, far);
 
 		float dofStrength = 0;
 #	if defined(DISTANT)

@@ -1,4 +1,5 @@
 #include "Common/FrameBuffer.hlsli"
+#include "Common/Math.hlsli"
 
 struct VS_OUTPUT
 {
@@ -37,11 +38,6 @@ cbuffer PerPass : register(b0)
 	float4 UnderwaterDepthOfFieldFlags;
 };
 
-float GetFinalDepth(float depth, float nearPlane, float farPlane)
-{
-	return (2.0 * nearPlane * farPlane) / ((farPlane + nearPlane) - (depth * 2.0 - 1.0) * (farPlane - nearPlane));
-}
-
 float GetResolvedFinalDepth(float rawDepth, float mask)
 {
 	if (rawDepth <= 1e-5)
@@ -61,7 +57,7 @@ float GetResolvedFinalDepth(float rawDepth, float mask)
 		farPlane = dofParams.w;
 	}
 
-	return GetFinalDepth(depth, nearPlane, farPlane);
+	return Math::GetFinalDepth(depth, nearPlane, farPlane);
 }
 
 float4 main(VS_OUTPUT input) : SV_Target0
