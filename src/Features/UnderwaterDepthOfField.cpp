@@ -10,6 +10,8 @@
 #include "RE/I/ImageSpaceEffectDepthOfField.h"
 #include "RE/I/ImageSpaceShaderParam.h"
 #include "RE/R/Renderer.h"
+#include "RE/T/TESWaterForm.h"
+#include "RE/T/TESWaterSystem.h"
 
 #include <DirectXMath.h>
 
@@ -80,24 +82,17 @@ namespace
 		RE::RENDER_TARGETS::kMAIN
 	};
 
-	float ReadRuntimeFloat(REL::VariantOffset a_offset)
-	{
-		const auto address = a_offset.address();
-		return address ? *reinterpret_cast<float*>(address) : 0.0f;
-	}
-
 	bool GetFallbackFogConstants(DepthOfFieldInputConstants& a_constants)
 	{
-		static constexpr REL::VariantOffset kFogColorR(0x3233660, 0x338ca90, 0x3485ca8);
-		static constexpr REL::VariantOffset kFogColorG(0x3233664, 0x338ca94, 0x3485cac);
-		static constexpr REL::VariantOffset kFogColorB(0x3233668, 0x338ca98, 0x3485cb0);
-		static constexpr REL::VariantOffset kFogAmount(0x323366c, 0x338ca9c, 0x3485cb4);
-		static constexpr REL::VariantOffset kFogFar(0x3233670, 0x338caa0, 0x3485cb8);
-		static constexpr REL::VariantOffset kFogNear(0x3233674, 0x338caa4, 0x3485cbc);
+		const auto* waterSystem = RE::TESWaterSystem::GetSingleton();
+		const auto* water = waterSystem ? waterSystem->currentWaterType : nullptr;
+		if (!water)
+			return false;
 
-		const float fogFar = ReadRuntimeFloat(kFogFar);
-		const float fogNear = ReadRuntimeFloat(kFogNear);
-		const float fogAmount = ReadRuntimeFloat(kFogAmount);
+		const auto& waterData = water->data;
+		const float fogFar = waterData.underwaterFogDistFar;
+		const float fogNear = waterData.underwaterFogDistNear;
+		const float fogAmount = waterData.underwaterFogAmount;
 		if (fogAmount <= 0.0f || fogFar == fogNear)
 			return false;
 
@@ -106,10 +101,11 @@ namespace
 		if (cameraNear <= 0.0f || cameraFar <= cameraNear)
 			return false;
 
+		const auto waterColor = Util::TryGetWaterData(0.0f, 0.0f);
 		a_constants.fogColor = {
-			ReadRuntimeFloat(kFogColorR),
-			ReadRuntimeFloat(kFogColorG),
-			ReadRuntimeFloat(kFogColorB),
+			waterColor.x,
+			waterColor.y,
+			waterColor.z,
 			fogAmount
 		};
 		a_constants.fogRange = { fogFar, fogNear, 0.0f, 0.0f };
