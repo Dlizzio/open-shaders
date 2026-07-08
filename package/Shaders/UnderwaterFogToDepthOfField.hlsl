@@ -2,8 +2,8 @@
 
 struct VS_OUTPUT
 {
-	float4 Position : SV_POSITION0;
-	float2 TexCoord : TEXCOORD0;
+	float4 Position: SV_POSITION0;
+	float2 TexCoord: TEXCOORD0;
 };
 
 #if defined(VSHADER)
@@ -67,8 +67,8 @@ float GetResolvedFinalDepth(float rawDepth, float mask)
 float4 main(VS_OUTPUT input) : SV_Target0
 {
 	float2 sampleTexCoord = UnderwaterDepthOfFieldFlags.y != 0.0 ?
-		FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord) :
-		input.TexCoord;
+	                            FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord) :
+	                            input.TexCoord;
 	float4 color = SourceTex.SampleLevel(LinearSampler, sampleTexCoord, 0.0);
 	float rawDepth = DepthTex.SampleLevel(PointSampler, sampleTexCoord, 0.0);
 	float mask = 1.0;

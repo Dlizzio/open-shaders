@@ -1,5 +1,5 @@
-#include "Common/DummyVSTexCoord.hlsl"
 #include "Common/BlurDither.hlsli"
+#include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
 
@@ -74,9 +74,12 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 imageColor = ImageTex.Sample(ImageSampler, adjustedTexCoord).xyz;
 	float3 blurColor;
-	[branch] if (params5.w > 0.5f) {
+	[branch] if (params5.w > 0.5f)
+	{
 		blurColor = SampleBlurredWithSoftening(adjustedTexCoord, input.Position.xy, invScreenRes.xy * DOF_DOWNSAMPLE_FACTOR);
-	} else {
+	}
+	else
+	{
 		blurColor = BlurredTex.Sample(BlurredSampler, adjustedTexCoord).xyz;
 	}
 

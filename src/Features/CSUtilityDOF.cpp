@@ -1,8 +1,8 @@
 #include "CSUtility.h"
 
-#include "UnderwaterDepthOfField.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "UnderwaterDepthOfField.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
