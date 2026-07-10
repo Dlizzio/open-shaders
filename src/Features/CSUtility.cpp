@@ -4,6 +4,7 @@
 #include "I18n/I18n.h"
 #include "LightLimitFix.h"
 #include "LinearLighting.h"
+#include "UnderwaterDepthOfField.h"
 #include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
 
@@ -226,6 +227,11 @@ void CSUtility::PostPostLoad()
 {
 	Hooks::Install();
 	InstallDepthOfFieldHooks();
+}
+
+void CSUtility::DataLoaded()
+{
+	UnderwaterDepthOfField::InstallHooks();
 }
 
 #undef I18N_KEY_PREFIX

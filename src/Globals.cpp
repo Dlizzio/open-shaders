@@ -32,6 +32,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
+#include "Features/UnderwaterDepthOfField.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
@@ -411,5 +412,7 @@ namespace globals
 		// size hook (ShouldEngagePerfMode), evaluated here at D3D init before IsHookActive() flips.
 		if (globals::features::upscaling.ShouldEngagePerfMode())
 			globals::features::upscaling.perfMode.InstallFadeOverlayHook(a_context);
+
+		UnderwaterDepthOfField::InstallD3DHooks(a_context);
 	}
 }
