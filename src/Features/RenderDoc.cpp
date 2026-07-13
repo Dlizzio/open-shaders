@@ -427,20 +427,20 @@ void RenderDoc::DrawSettings()
 								std::string tooltip = std::format("File: {}\nSize: {}\nCreated: {}",
 									std::format("Open Shaders Captures/{}", file.filename), file.sizeStr, currentTimeAgo);
 
-				// Add deletion error message if applicable
-				if (file.deletionFailed && !file.deletionErrorMessage.empty()) {
-					std::string displayError = file.deletionErrorMessage;
-					auto replaceAll = [&displayError](std::string_view from, std::string_view to) {
-						for (auto position = displayError.find(from); position != std::string::npos; position = displayError.find(from, position + to.size())) {
-							displayError.replace(position, from.size(), to);
-						}
-					};
-					replaceAll(file.fullPath.string(), std::format("Open Shaders Captures/{}", file.filename));
-					replaceAll(file.fullPath.parent_path().string(), "Open Shaders Captures");
-					replaceAll("Community Shaders", "Open Shaders");
-					replaceAll("CommunityShaders", "Open Shaders data");
-					tooltip += std::format("\n\nDeletion Failed: {}", displayError);
-				}
+								// Add deletion error message if applicable
+								if (file.deletionFailed && !file.deletionErrorMessage.empty()) {
+									std::string displayError = file.deletionErrorMessage;
+									auto replaceAll = [&displayError](std::string_view from, std::string_view to) {
+										for (auto position = displayError.find(from); position != std::string::npos; position = displayError.find(from, position + to.size())) {
+											displayError.replace(position, from.size(), to);
+										}
+									};
+									replaceAll(file.fullPath.string(), std::format("Open Shaders Captures/{}", file.filename));
+									replaceAll(file.fullPath.parent_path().string(), "Open Shaders Captures");
+									replaceAll("Community Shaders", "Open Shaders");
+									replaceAll("CommunityShaders", "Open Shaders data");
+									tooltip += std::format("\n\nDeletion Failed: {}", displayError);
+								}
 
 								ImGui::SetTooltip("%s", tooltip.c_str());
 							}
@@ -901,7 +901,8 @@ std::string RenderDoc::BuildAutomaticCaptureComments(const std::string& userComm
 		if (feature->loaded) {
 			std::string featVersion = feature->version.empty() ? "unknown" : feature->version;
 			const auto shortName = feature->GetShortName();
-			const auto featureName = shortName == "CSEditor" ? "OS Editor" : shortName == "CSUtility" ? "OS Utility" : shortName;
+			const auto featureName = shortName == "CSEditor" ? "OS Editor" : shortName == "CSUtility" ? "OS Utility" :
+			                                                                                            shortName;
 			enabledFeatures.push_back(std::format("{} ({})", featureName, featVersion));
 		}
 	}
