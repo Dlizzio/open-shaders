@@ -31,7 +31,7 @@ namespace FeatureConstraints
 							feature->GetName(), FormatConstraintValue(constraint.forcedValue),
 							result.sources[0].featureName, FormatConstraintValue(result.forcedValue));
 					}
-					result.sources.push_back({ feature->GetName(),
+					result.sources.push_back({ feature->GetDisplayName(),
 						feature->GetShortName(),
 						constraint.reason,
 						constraint.recommendDisableAtBoot });

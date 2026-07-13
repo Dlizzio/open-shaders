@@ -2609,7 +2609,7 @@ namespace SIE
 		std::map<std::string, Util::CacheInvalidation::CacheIniEntry> cacheEntries;
 		for (auto* feature : Feature::GetFeatureList()) {
 			const auto shortName = feature->GetShortName();
-			featureStates.push_back({ shortName, std::string(feature->GetName()), feature->loaded,
+			featureStates.push_back({ shortName, feature->GetDisplayName(), feature->loaded,
 				feature->version, std::string(feature->GetShaderDefineName()) });
 			Util::CacheInvalidation::CacheIniEntry entry;
 			entry.enabled = ini.GetBoolValue(shortName.c_str(), "Enabled", false);

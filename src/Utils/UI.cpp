@@ -1242,7 +1242,7 @@ namespace Util
 
 		// Get both short name and display name
 		std::string shortName = feat->GetShortName();
-		std::string displayName = feat->GetName();
+		std::string displayName = feat->GetDisplayName();
 		std::string query = searchQuery;
 
 		// Convert all to lowercase for case-insensitive search
@@ -2240,7 +2240,7 @@ namespace Util
 					ImGui::TextWrapped(T("ui.weather_setting_controlled", "This setting is controlled by the current weather (%s)."),
 						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
 					ImGui::Separator();
-					Util::Text::Success("%s", T("ui.click_to_open_cs_editor", "Click to open CS Editor"));
+					Util::Text::Success("%s", T("ui.click_to_open_cs_editor", "Click to open OS Editor"));
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}
@@ -2294,7 +2294,7 @@ namespace Util
 					ImGui::TextWrapped(T("ui.weather_setting_controlled", "This setting is controlled by the current weather (%s)."),
 						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
 					ImGui::Separator();
-					Util::Text::Success("%s", T("ui.click_to_open_cs_editor", "Click to open CS Editor"));
+					Util::Text::Success("%s", T("ui.click_to_open_cs_editor", "Click to open OS Editor"));
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}
@@ -2345,7 +2345,7 @@ namespace Util
 					ImGui::TextWrapped(T("ui.weather_setting_controlled", "This setting is controlled by the current weather (%s)."),
 						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
 					ImGui::Separator();
-					Util::Text::Success("%s", T("ui.click_to_open_cs_editor", "Click to open CS Editor"));
+					Util::Text::Success("%s", T("ui.click_to_open_cs_editor", "Click to open OS Editor"));
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}
@@ -2396,7 +2396,7 @@ namespace Util
 					ImGui::TextWrapped(T("ui.weather_setting_controlled", "This setting is controlled by the current weather (%s)."),
 						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
 					ImGui::Separator();
-					Util::Text::Success("%s", T("ui.click_to_open_cs_editor", "Click to open CS Editor"));
+					Util::Text::Success("%s", T("ui.click_to_open_cs_editor", "Click to open OS Editor"));
 					ImGui::PopTextWrapPos();
 					ImGui::EndTooltip();
 				}

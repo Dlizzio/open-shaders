@@ -910,9 +910,10 @@ void Menu::DrawDisableAtBootSettings()
 		// Display sorted features
 		for (auto* feature : featureList) {
 			const std::string featureName = feature->GetShortName();
+			const auto checkboxLabel = std::format("{}##DisableAtBoot{}", feature->GetDisplayName(), featureName);
 			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 
-			if (ImGui::Checkbox(featureName.c_str(), &isDisabled)) {
+			if (ImGui::Checkbox(checkboxLabel.c_str(), &isDisabled)) {
 				// Update the disabledFeatures map based on user interaction
 				disabledFeatures[featureName] = isDisabled;
 			}

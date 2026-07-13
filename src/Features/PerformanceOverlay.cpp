@@ -159,7 +159,7 @@ void PerformanceOverlay::DrawSettings()
 		ImGui::Checkbox(T(TKEY("show_fps"), "Show FPS Counter"), &this->settings.ShowFPS);
 		ImGui::Checkbox(T(TKEY("show_draw_calls"), "Show Draw Calls"), &this->settings.ShowDrawCalls);
 		ImGui::Checkbox(T(TKEY("show_vram"), "Show VRAM Usage"), &this->settings.ShowVRAM);
-		ImGui::Checkbox(T(TKEY("show_cs_passes"), "Show CS Render Passes"), &this->settings.ShowCSPasses);
+		ImGui::Checkbox(T(TKEY("show_cs_passes"), "Show OS Render Passes"), &this->settings.ShowCSPasses);
 
 		bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
 		if (this->settings.ShowFPS && isFrameGenerationActive) {
@@ -1222,6 +1222,9 @@ void PerformanceOverlay::DrawABTestSection(const std::vector<DrawCallRow>& allRo
 						Util::PathHelpers::GetSettingsUserPath(),
 						Util::PathHelpers::GetSettingsTestPath());
 				}
+				for (auto& entry : this->settingsDiff) {
+					entry.path = ABTestingManager::GetSettingsPathDisplayName(entry.path);
+				}
 				this->settingsDiffLoaded = true;
 			}
 			ImGui::TextUnformatted(T(TKEY("diff_header"), "Differences between USER (A) and TEST (B) configs:"));
@@ -1592,15 +1595,15 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 		totalTestCostPerCall = itTotal->second.costPerCall;
 	}
 	DrawCallRow csPassesRow = {
-		"CS Passes:", magic_enum::enum_integer(SpecialShaderType::CSPasses), kDrawCallsNotApplicable, csPassesTime, csPercent,
+		T(TKEY("cs_passes"), "OS Passes:"), magic_enum::enum_integer(SpecialShaderType::CSPasses), kDrawCallsNotApplicable, csPassesTime, csPercent,
 		0.0f,
-		std::string(T(TKEY("tip_cs_passes"), "GPU time spent in Community Shaders compute passes (profiled).")),
+		std::string(T(TKEY("tip_cs_passes"), "GPU time spent in Open Shaders compute passes (profiled).")),
 		true, std::nullopt, std::nullopt
 	};
 	DrawCallRow otherRow = {
 		"Other:", magic_enum::enum_integer(SpecialShaderType::Other), kDrawCallsNotApplicable, remainingOtherTime, remainingOtherPercent,
 		0.0f,
-		std::string(T(TKEY("tip_other"), "Frame time not attributed to any measured shader type or CS compute pass. This includes UI, post-processing, engine work, and any GPU activity not directly measured.")),
+		std::string(T(TKEY("tip_other"), "Frame time not attributed to any measured shader type or Open Shaders compute pass. This includes UI, post-processing, engine work, and any GPU activity not directly measured.")),
 		true, otherTestFrameTime, otherTestCostPerCall
 	};
 	float totalFrameTime = smoothedFrameTime;
