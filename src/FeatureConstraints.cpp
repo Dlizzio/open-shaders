@@ -28,8 +28,8 @@ namespace FeatureConstraints
 						// Log once so it surfaces during development / testing.
 						logger::warn("[FeatureConstraints] Conflict on {}.{}: {} wants {}, but {} already forced {}",
 							setting.featureShortName, setting.settingPath,
-							feature->GetName(), FormatConstraintValue(constraint.forcedValue),
-							result.sources[0].featureName, FormatConstraintValue(result.forcedValue));
+							feature->GetShortName(), FormatConstraintValue(constraint.forcedValue),
+							result.sources[0].featureShortName, FormatConstraintValue(result.forcedValue));
 					}
 					result.sources.push_back({ feature->GetDisplayName(),
 						feature->GetShortName(),

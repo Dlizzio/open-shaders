@@ -1222,9 +1222,6 @@ void PerformanceOverlay::DrawABTestSection(const std::vector<DrawCallRow>& allRo
 						Util::PathHelpers::GetSettingsUserPath(),
 						Util::PathHelpers::GetSettingsTestPath());
 				}
-				for (auto& entry : this->settingsDiff) {
-					entry.path = ABTestingManager::GetSettingsPathDisplayName(entry.path);
-				}
 				this->settingsDiffLoaded = true;
 			}
 			ImGui::TextUnformatted(T(TKEY("diff_header"), "Differences between USER (A) and TEST (B) configs:"));
@@ -1257,6 +1254,9 @@ void PerformanceOverlay::DrawABTestSection(const std::vector<DrawCallRow>& allRo
 
 				// Sort the settings diff if needed
 				std::vector<SettingsDiffEntry> sortedDiff = this->settingsDiff;
+				for (auto& entry : sortedDiff) {
+					entry.path = ABTestingManager::GetSettingsPathDisplayName(entry.path);
+				}
 				if (const ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs()) {
 					if (sortSpecs->SpecsCount > 0) {
 						int sortCol = sortSpecs->Specs->ColumnIndex;

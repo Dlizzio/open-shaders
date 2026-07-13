@@ -243,11 +243,7 @@ std::vector<SettingsDiffEntry> ABTestingManager::GetConfigDiffEntries(float epsi
 	if (!hasTestSnapshot || !hasUserSnapshot)
 		return {};
 
-	auto entries = Util::FileSystem::DiffJson(userConfigSnapshot, testConfigSnapshot, epsilon);
-	for (auto& entry : entries) {
-		entry.path = GetSettingsPathDisplayName(entry.path);
-	}
-	return entries;
+	return Util::FileSystem::DiffJson(userConfigSnapshot, testConfigSnapshot, epsilon);
 }
 
 void ABTestingManager::ClearCachedSnapshots()
