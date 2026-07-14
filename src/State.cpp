@@ -177,7 +177,7 @@ void State::Debug()
 	}
 
 	if (currentShader && updateShader && frameAnnotations) {
-		BeginPerfEvent(std::format("Draw: CS {}::{:x}::{}", magic_enum::enum_name(currentShader->shaderType.get()), permutationData.PixelShaderDescriptor, currentShader->fxpFilename));
+		BeginPerfEvent(std::format("Draw: OS {}::{:x}::{}", magic_enum::enum_name(currentShader->shaderType.get()), permutationData.PixelShaderDescriptor, currentShader->fxpFilename));
 		SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(*currentShader, permutationData.PixelShaderDescriptor)));
 		EndPerfEvent();
 	}
@@ -439,8 +439,8 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				}
 			} catch (const std::exception& e) {
 				feature->failedLoadedMessage = feature->failedLoadedMessage.empty() ?
-				                                   (feature->GetName() + " failed to load. Check CommunityShaders.log") :
-				                                   (feature->failedLoadedMessage + "\n" + feature->GetName() + " failed to load. Check CommunityShaders.log");
+				                                   (feature->GetDisplayName() + " failed to load. Check CommunityShaders.log") :
+				                                   (feature->failedLoadedMessage + "\n" + feature->GetDisplayName() + " failed to load. Check CommunityShaders.log");
 				logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
 			}
 		}

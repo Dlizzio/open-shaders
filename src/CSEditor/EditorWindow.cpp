@@ -199,7 +199,7 @@ std::string EditorWindow::ResolveEditorId(RE::TESForm* form, const WidgetVec& wi
 
 void EditorWindow::ShowObjectsWindow()
 {
-	Util::BeginWithRoundedClose(T(TKEY("weather_lighting_browser"), "CS Editor Browser"), nullptr);
+	Util::BeginWithRoundedClose(T(TKEY("weather_lighting_browser"), "OS Editor Browser"), nullptr);
 
 	// Reset filter state when the user switches categories so stale column
 	// selections (e.g. Status) don't hide all items in the new category.
@@ -1091,7 +1091,7 @@ void EditorWindow::RenderUI()
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu(T(TKEY("help"), "Help"))) {
-			ImGui::Text("%s", T(TKEY("cs_editor"), "CS Editor"));
+			ImGui::Text("%s", T(TKEY("cs_editor"), "OS Editor"));
 			ImGui::Separator();
 			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("keyboard_shortcuts"), "Keyboard Shortcuts:"));
 			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_f"), "Ctrl+F: Focus search"));
@@ -1317,7 +1317,7 @@ void EditorWindow::RenderUI()
 		ImGui::SetCursorScreenPos(ImVec2(xButtonX, cursorY));
 		if (Util::ErrorButton("X", ImVec2(closeButtonSize, closeButtonSize)))
 			open = false;
-		Util::AddTooltip(T(TKEY("close_cs_editor"), "Close CS Editor (Esc)"));
+		Util::AddTooltip(T(TKEY("close_cs_editor"), "Close OS Editor (Esc)"));
 
 		ImGui::PopClipRect();  // End bottom-border clip rect
 

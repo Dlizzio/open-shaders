@@ -377,7 +377,7 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 			"Change##OverlayToggle");
 
 		Util::InputComboWidget(
-			T("menu.settings.cs_editor_toggle_key", "CS Editor Toggle Key:"),
+			T("menu.settings.cs_editor_toggle_key", "OS Editor Toggle Key:"),
 			settings.CSEditorToggleKey,
 			state.settingCSEditorToggleKey,
 			"Change##CSEditorToggle");
@@ -449,7 +449,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 				ImGui::EndCombo();
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("%s", T("menu.settings.language_tooltip", "Select the display language for the Community Shaders interface."));
+				ImGui::Text("%s", T("menu.settings.language_tooltip", "Select the display language for the Open Shaders interface."));
 			}
 		}
 
@@ -471,7 +471,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 				ImGui::Text("%s", T("menu.settings.use_monochrome_icons_tooltip", "Uses white monochrome icons that adapt to your theme's text color"));
 			}
 			ImGui::SameLine();
-			if (ImGui::Checkbox(T("menu.settings.use_monochrome_cs_logo", "Use Monochrome CS Logo"), &themeSettings.UseMonochromeLogo)) {
+			if (ImGui::Checkbox(T("menu.settings.use_monochrome_cs_logo", "Use Monochrome OS Logo"), &themeSettings.UseMonochromeLogo)) {
 				globals::menu->pendingIconReload = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -982,7 +982,7 @@ void SettingsTabRenderer::RenderFontsTab()
 		SeparatorTextWithFont(T("menu.settings.font_roles", "Font Roles"), Menu::FontRole::Subheading);
 
 		if (fontCatalog.families.empty()) {
-			Util::Text::Warning("%s", T("menu.settings.no_fonts_found", "No fonts found. Place .ttf files in Interface/CommunityShaders/Fonts/"));
+			Util::Text::Warning("%s", T("menu.settings.no_fonts_found", "No fonts found. Place .ttf files in the Open Shaders fonts folder."));
 		}
 
 		for (size_t roleIndex = 0; roleIndex < Menu::FontRoleDescriptors.size(); ++roleIndex) {

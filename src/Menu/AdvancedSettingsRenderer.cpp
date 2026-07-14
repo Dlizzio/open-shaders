@@ -270,7 +270,7 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 				ImGui::Text("%s", T("menu.advanced.vertex_tooltip",
 									  "Replace Vertex Shaders. "
 									  "When false, will disable the custom Vertex Shaders for the types above. "
-									  "For developers to test whether CS shaders match vanilla behavior. "));
+									  "For developers to test whether custom shaders match vanilla behavior. "));
 			}
 
 			ImGui::Checkbox(T("menu.advanced.pixel", "Pixel"), &state->enablePShaders);
@@ -278,7 +278,7 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 				ImGui::Text("%s", T("menu.advanced.pixel_tooltip",
 									  "Replace Pixel Shaders. "
 									  "When false, will disable the custom Pixel Shaders for the types above. "
-									  "For developers to test whether CS shaders match vanilla behavior. "));
+									  "For developers to test whether custom shaders match vanilla behavior. "));
 			}
 
 			ImGui::Checkbox(T("menu.advanced.compute", "Compute"), &state->enableCShaders);
@@ -286,7 +286,7 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 				ImGui::Text("%s", T("menu.advanced.compute_tooltip",
 									  "Replace Compute Shaders. "
 									  "When false, will disable the custom Compute Shaders for the types above. "
-									  "For developers to test whether CS shaders match vanilla behavior. "));
+									  "For developers to test whether custom shaders match vanilla behavior. "));
 			}
 		}
 		ImGui::EndTable();

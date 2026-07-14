@@ -104,9 +104,9 @@ void VRPerformanceRenderer::Render(Feature* host)
 		try {
 			feature->DrawVRPerformanceSettings();
 		} catch (const std::exception& e) {
-			ImGui::TextColored(ImVec4(1, 0, 0, 1), "%s: draw error (%s)", feature->GetShortName().c_str(), e.what());
+			ImGui::TextColored(ImVec4(1, 0, 0, 1), "%s: draw error (%s)", feature->GetDisplayName().c_str(), e.what());
 		} catch (...) {
-			ImGui::TextColored(ImVec4(1, 0, 0, 1), "%s: draw error (unknown)", feature->GetShortName().c_str());
+			ImGui::TextColored(ImVec4(1, 0, 0, 1), "%s: draw error (unknown)", feature->GetDisplayName().c_str());
 		}
 		ImGui::PopID();
 	}
