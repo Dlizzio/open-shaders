@@ -1928,14 +1928,5 @@
     "ui.copy": "复制",
     "ui.dont_ask_again": "不再提示",
     "ui.search": "搜索...",
-    "ui.search_features": "搜索功能...",
-    "feature.weather_picker.collapse": "折叠",
-    "feature.weather_picker.expand": "展开",
-    "feature.weather_picker.feature_weather_analysis_tooltip_0": "天气分析提供方：",
-    "feature.weather_picker.feature_weather_analysis_tooltip_1": "功能类别：",
-    "feature.weather_picker.feature_weather_analysis_tooltip_2": "点击以%s此功能的天气数据",
-    "feature.weather_picker.has_custom_settings": "有自定义设置",
-    "feature.weather_picker.using_default_settings": "使用默认设置",
-    "feature.weather_picker.weather_controls": "天气控制",
-    "feature.weather_picker.weather_information": "天气信息"
+    "ui.search_features": "搜索功能..."
 }

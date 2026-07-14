@@ -2031,14 +2031,5 @@
     "ui.copy": "Копировать",
     "ui.dont_ask_again": "Больше не спрашивать",
     "ui.search": "Поиск...",
-    "ui.search_features": "Поиск функций...",
-    "feature.weather_picker.collapse": "свернуть",
-    "feature.weather_picker.expand": "развернуть",
-    "feature.weather_picker.feature_weather_analysis_tooltip_0": "Анализ погоды предоставлен: ",
-    "feature.weather_picker.feature_weather_analysis_tooltip_1": "Категория функции: ",
-    "feature.weather_picker.feature_weather_analysis_tooltip_2": "Нажмите, чтобы %s данные погоды этой функции",
-    "feature.weather_picker.has_custom_settings": "Есть пользовательские настройки",
-    "feature.weather_picker.using_default_settings": "Используются настройки по умолчанию",
-    "feature.weather_picker.weather_controls": "Управление погодой",
-    "feature.weather_picker.weather_information": "Информация о погоде"
+    "ui.search_features": "Поиск функций..."
 }
