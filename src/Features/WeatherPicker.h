@@ -27,6 +27,8 @@ public:
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;
 	virtual void Prepass() override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
 	virtual bool IsOverlayVisible() const override;
 
 	/**

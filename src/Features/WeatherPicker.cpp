@@ -13,12 +13,60 @@
 
 #include "CSEditor.h"
 #include "CSEditor/EditorWindow.h"
+#include <array>
 #include <cstring>
 #include <format>
 #include <nlohmann/json.hpp>
 
 namespace
 {
+	struct WeatherFlagInfo
+	{
+		RE::TESWeather::WeatherDataFlag flag;
+		std::string_view canonicalName;
+	};
+
+	constexpr std::array<WeatherFlagInfo, 6> kClassifiedWeatherFlags = { {
+		{ RE::TESWeather::WeatherDataFlag::kPleasant, "Pleasant" },
+		{ RE::TESWeather::WeatherDataFlag::kCloudy, "Cloudy" },
+		{ RE::TESWeather::WeatherDataFlag::kRainy, "Rainy" },
+		{ RE::TESWeather::WeatherDataFlag::kSnow, "Snow" },
+		{ RE::TESWeather::WeatherDataFlag::kPermAurora, "Aurora" },
+		{ RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun, "Aurora Sun" },
+	} };
+
+	const WeatherFlagInfo* FindWeatherFlagInfo(RE::TESWeather::WeatherDataFlag flag)
+	{
+		auto it = std::ranges::find(kClassifiedWeatherFlags, flag, &WeatherFlagInfo::flag);
+		return it != kClassifiedWeatherFlags.end() ? &*it : nullptr;
+	}
+
+	const WeatherFlagInfo* FindWeatherFlagInfo(std::string_view canonicalName)
+	{
+		auto it = std::ranges::find(kClassifiedWeatherFlags, canonicalName, &WeatherFlagInfo::canonicalName);
+		return it != kClassifiedWeatherFlags.end() ? &*it : nullptr;
+	}
+
+	const char* GetWeatherFilterLabel(const WeatherFlagInfo& info)
+	{
+		switch (info.flag) {
+		case RE::TESWeather::WeatherDataFlag::kPleasant:
+			return T(TKEY("pleasant"), "Pleasant");
+		case RE::TESWeather::WeatherDataFlag::kCloudy:
+			return T(TKEY("cloudy"), "Cloudy");
+		case RE::TESWeather::WeatherDataFlag::kRainy:
+			return T(TKEY("rainy"), "Rainy");
+		case RE::TESWeather::WeatherDataFlag::kSnow:
+			return T(TKEY("snow"), "Snow");
+		case RE::TESWeather::WeatherDataFlag::kPermAurora:
+			return T(TKEY("aurora"), "Aurora");
+		case RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun:
+			return T(TKEY("aurora_sun"), "Aurora Sun");
+		default:
+			return info.canonicalName.data();
+		}
+	}
+
 	bool DrawAnalysisSectionHeader(const char* label)
 	{
 		constexpr auto flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_NoTreePushOnOpen;
@@ -32,6 +80,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShowInOverlay,
 	Position,
 	PositionSet)
+
+void WeatherPicker::LoadSettings(json& o_json)
+{
+	WeatherDetailsWindow = o_json;
+}
+
+void WeatherPicker::SaveSettings(json& o_json)
+{
+	o_json = WeatherDetailsWindow;
+}
 
 void WeatherPicker::DataLoaded()
 {
@@ -424,51 +482,33 @@ void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 	// Dynamic checkbox layout - calculate how many fit per row
 	float availableWidth = ImGui::GetContentRegionAvail().x;
 	float checkboxWidth = 110.0f;  // Fits "Aurora Sun" label
-	int checkboxesPerRow = std::max(1, static_cast<int>(availableWidth / checkboxWidth));
+	const auto checkboxesPerRow = static_cast<size_t>(std::max(1, static_cast<int>(availableWidth / checkboxWidth)));
 
-	// Colored checkboxes with dynamic layout
-	struct WeatherFilter
-	{
-		const char* label;
-		RE::TESWeather::WeatherDataFlag flag;
-		bool isUnclassified;
-	};
-
-	std::vector<WeatherFilter> filters = {
-		{ T(TKEY("pleasant"), "Pleasant"), RE::TESWeather::WeatherDataFlag::kPleasant, false },
-		{ T(TKEY("cloudy"), "Cloudy"), RE::TESWeather::WeatherDataFlag::kCloudy, false },
-		{ T(TKEY("rainy"), "Rainy"), RE::TESWeather::WeatherDataFlag::kRainy, false },
-		{ T(TKEY("snow"), "Snow"), RE::TESWeather::WeatherDataFlag::kSnow, false },
-		{ T(TKEY("aurora"), "Aurora"), RE::TESWeather::WeatherDataFlag::kPermAurora, false },
-		{ T(TKEY("aurora_sun"), "Aurora Sun"), RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun, false },
-		{ T(TKEY("none_filter"), "None"), RE::TESWeather::WeatherDataFlag::kNone, true }  // Special case for unclassified
-	};
-	for (size_t i = 0; i < filters.size(); ++i) {
-		if (i > 0 && i % checkboxesPerRow != 0) {
+	// Classified weather filters share the canonical flag metadata used by analysis displays.
+	size_t filterIndex = 0;
+	for (const auto& filter : kClassifiedWeatherFlags) {
+		if (filterIndex > 0 && filterIndex % checkboxesPerRow != 0) {
 			ImGui::SameLine();
 		}
-		// Get color - use the helper function for consistency
-		ImVec4 filterColor;
-		if (filters[i].isUnclassified) {
-			filterColor = Menu::GetSingleton()->GetTheme().StatusPalette.Warning;
-		} else {
-			filterColor = GetWeatherFlagColor(filters[i].flag);
-		}
 
-		ImGui::PushStyleColor(ImGuiCol_Text, filterColor);
-		if (filters[i].isUnclassified) {
-			// Special handling for None filter - use CheckboxFlags for consistency
-			ImGui::CheckboxFlags(filters[i].label, &s_weatherFlagFilter, UNCLASSIFIED_FLAG);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				Util::DrawMultiLineTooltip({ T(TKEY("none_filter_tooltip_0"), "Shows weathers that are not classified under any specific category."),
-					T(TKEY("none_filter_tooltip_1"), "Includes weathers with no flags or only untracked flags."),
-					T(TKEY("none_filter_tooltip_2"), "Categories tracked: Pleasant, Cloudy, Rainy, Snow, Aurora, Aurora Sun") });
-			}
-		} else {
-			ImGui::CheckboxFlags(filters[i].label, &s_weatherFlagFilter, static_cast<uint32_t>(filters[i].flag));
-		}
+		ImGui::PushStyleColor(ImGuiCol_Text, GetWeatherFlagColor(filter.flag));
+		ImGui::CheckboxFlags(GetWeatherFilterLabel(filter), &s_weatherFlagFilter, static_cast<uint32_t>(filter.flag));
 		ImGui::PopStyleColor();
+		++filterIndex;
 	}
+
+	// Unclassified weather remains a separate synthetic filter bit.
+	if (filterIndex % checkboxesPerRow != 0) {
+		ImGui::SameLine();
+	}
+	ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
+	ImGui::CheckboxFlags(T(TKEY("none_filter"), "None"), &s_weatherFlagFilter, UNCLASSIFIED_FLAG);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		Util::DrawMultiLineTooltip({ T(TKEY("none_filter_tooltip_0"), "Shows weathers that are not classified under any specific category."),
+			T(TKEY("none_filter_tooltip_1"), "Includes weathers with no flags or only untracked flags."),
+			T(TKEY("none_filter_tooltip_2"), "Categories tracked: Pleasant, Cloudy, Rainy, Snow, Aurora, Aurora Sun") });
+	}
+	ImGui::PopStyleColor();
 
 	// Update filtered weathers when filter changes
 	if (s_lastWeatherFlagFilter != s_weatherFlagFilter) {
@@ -621,7 +661,7 @@ void WeatherPicker::RenderWeatherInformationDisplay(RE::Sky* sky, bool showInter
 		// Last Weather Column
 		ImGui::TableNextColumn();
 		ImGui::PushID("LastWeather");
-		DisplayWeatherInfo(displayLastWeather, std::abs(sky->currentWeatherPct - 1.0f), showInteractiveElements);
+		DisplayWeatherInfo(displayLastWeather, std::abs(sky->currentWeatherPct - 1.0f), false);
 		ImGui::PopID();
 
 		ImGui::EndTable();
@@ -785,20 +825,12 @@ std::vector<std::string> WeatherPicker::GetWeatherFlagNames(RE::TESWeather* weat
 	for (auto flagValue : magic_enum::enum_values<RE::TESWeather::WeatherDataFlag>()) {
 		if (flagValue != RE::TESWeather::WeatherDataFlag::kNone &&
 			weather->data.flags.any(flagValue)) {
-			// Convert enum name to canonical format (strip 'k' prefix)
-			std::string flagName = std::string(magic_enum::enum_name(flagValue));
-			if (flagName.starts_with("k")) {
-				flagName = flagName.substr(1);
+			if (const auto* info = FindWeatherFlagInfo(flagValue)) {
+				flagNames.emplace_back(info->canonicalName);
+			} else {
+				std::string flagName = std::string(magic_enum::enum_name(flagValue));
+				flagNames.push_back(flagName.starts_with("k") ? flagName.substr(1) : flagName);
 			}
-
-			// Use canonical English names for logic (PermAurora → Aurora, AuroraFollowsSun → Aurora Sun)
-			if (flagName == "PermAurora") {
-				flagName = "Aurora";
-			} else if (flagName == "AuroraFollowsSun") {
-				flagName = "Aurora Sun";
-			}
-
-			flagNames.push_back(flagName);
 		}
 	}
 
@@ -909,21 +941,8 @@ ImVec4 WeatherPicker::GetWeatherFlagColor(RE::TESWeather::WeatherDataFlag flag)
 // Helper function to get color for a specific flag name
 ImVec4 WeatherPicker::GetWeatherFlagColorByName(const std::string& flagName)
 {
-	// Map display flag names back to enum values
-	// Note: We use manual mapping here because the display names (from GetWeatherFlagNames)
-	// are transformed from the original enum names (e.g., "kRainy" -> "Rainy")
-	static const std::unordered_map<std::string, RE::TESWeather::WeatherDataFlag> flagNameMap = {
-		{ "Rainy", RE::TESWeather::WeatherDataFlag::kRainy },
-		{ "Snow", RE::TESWeather::WeatherDataFlag::kSnow },
-		{ "Aurora", RE::TESWeather::WeatherDataFlag::kPermAurora },
-		{ "Aurora Sun", RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun },
-		{ "Cloudy", RE::TESWeather::WeatherDataFlag::kCloudy },
-		{ "Pleasant", RE::TESWeather::WeatherDataFlag::kPleasant }
-	};
-
-	auto it = flagNameMap.find(flagName);
-	if (it != flagNameMap.end()) {
-		return GetWeatherFlagColor(it->second);
+	if (const auto* info = FindWeatherFlagInfo(flagName)) {
+		return GetWeatherFlagColor(info->flag);
 	}
 
 	// Default for unclassified or unknown flags
