@@ -16,6 +16,8 @@
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
 
+#include <algorithm>
+
 #define I18N_KEY_PREFIX "cs_editor."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
@@ -1151,7 +1153,16 @@ void EditorWindow::RenderUI()
 			Util::AddTooltip(canUndo ? std::vformat(T(TKEY("undo_states"), "Undo (Ctrl+Z) - {} states"), std::make_format_args(undoStateCount)).c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
 		}
 
-		// Right-aligned items — use SetCursorScreenPos to bypass menu bar GroupOffset
+		if (!globals::features::csEditor.version.empty()) {
+			std::string formattedVersion = globals::features::csEditor.version;
+			std::replace(formattedVersion.begin(), formattedVersion.end(), '-', '.');
+			auto versionColor = menu ? menu->GetTheme().Palette.Text : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+			versionColor.w *= ThemeManager::Constants::VERSION_TEXT_OPACITY;
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextColored(versionColor, "v%s", formattedVersion.c_str());
+		}
+
+		// Right-aligned items use SetCursorScreenPos to bypass menu bar GroupOffset
 		const float scale = Util::GetUIScale();
 		const float clipRight = ImGui::GetWindowDrawList()->GetClipRectMax().x;
 		const float cursorY = ImGui::GetCursorScreenPos().y;

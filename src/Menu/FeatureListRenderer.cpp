@@ -450,6 +450,11 @@ void FeatureListRenderer::HandlePendingFeatureSelection(
 			if (std::holds_alternative<Feature*>(menuList[i])) {
 				Feature* feature = std::get<Feature*>(menuList[i]);
 				if (feature->GetShortName() == pendingFeatureSelection) {
+					if (feature == &globals::features::csEditor) {
+						if (feature->loaded)
+							CSEditor::OpenEditorWindow();
+						break;
+					}
 					selectedMenu = i;
 					logger::info("Navigated to {} feature menu", pendingFeatureSelection);
 					break;
@@ -580,6 +585,11 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const CategoryHeader& head
 
 void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 {
+	if (feat == &globals::features::csEditor) {
+		globals::features::csEditor.DrawLauncherButton();
+		return;
+	}
+
 	MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Subheading);
 
 	const auto featureName = feat->GetShortName();
@@ -660,6 +670,9 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const CategoryHeader&)
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 {
+	if (feat == &globals::features::csEditor)
+		return;
+
 	const auto featureName = feat->GetShortName();
 	bool isDisabled = globals::state->IsFeatureDisabled(featureName);
 	bool isLoaded = feat->loaded;
