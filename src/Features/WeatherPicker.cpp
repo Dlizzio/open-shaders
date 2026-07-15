@@ -200,6 +200,10 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 	if (!player || !player->parentCell)
 		return;
 
+	const bool showInteractiveElements =
+		Menu::GetSingleton()->ShouldSwallowInput() ||
+		(globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME));
+
 	// Set initial position if not already set
 	const float scale = Util::GetUIScale();
 	if (!WeatherDetailsWindow.PositionSet) {
@@ -219,15 +223,13 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 			WeatherDetailsWindow.Position = currentPos;
 		}
 
-		// Enable interactive elements when a menu is open
-		auto shouldEnableInteractiveElements = []() -> bool {
-			return (Menu::GetSingleton()->ShouldSwallowInput() ||
-					(globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME)));
-		};
-
-		RenderCoreWeatherDetails(shouldEnableInteractiveElements());
-
-		RenderFeatureWeatherAnalysis();
+		// Keep scroll state separate when the weather controls appear or disappear.
+		const char* contentId = showInteractiveElements ? "##InteractiveWeatherDetails" : "##ReadOnlyWeatherDetails";
+		if (ImGui::BeginChild(contentId, { 0, 0 })) {
+			RenderCoreWeatherDetails(showInteractiveElements);
+			RenderFeatureWeatherAnalysis();
+		}
+		ImGui::EndChild();
 	}
 	ImGui::End();
 }
