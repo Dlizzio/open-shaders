@@ -191,6 +191,12 @@ void WeatherPicker::DrawWeatherStatusPanel()
 // Weather Picker functionality
 // ================================================================================
 
+void WeatherPicker::ResetWindowLayout()
+{
+	WeatherDetailsWindow.PositionSet = false;
+	resetWindowSize = true;
+}
+
 void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 {
 	if (!open || !*open)
@@ -215,25 +221,26 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 		ImGui::SetNextWindowPos(WeatherDetailsWindow.Position, ImGuiCond_FirstUseEver);
 	}
 
-	ImGui::SetNextWindowSize(ImVec2(600 * scale, 800 * scale), ImGuiCond_FirstUseEver);
-	if (Util::BeginWithRoundedClose("Weather Details##Popup", open, ImGuiWindowFlags_None)) {
+	ImGui::SetNextWindowSize(
+		ImVec2(600 * scale, 800 * scale),
+		resetWindowSize ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+	const bool allowInputs =
+		Menu::GetSingleton()->ShouldSwallowInput() ||
+		(globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME));
+	const ImGuiWindowFlags windowFlags = allowInputs ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs;
+	if (Util::BeginWithRoundedClose("Weather Details##Popup", open, windowFlags)) {
 		// Remember window position for next frame
 		ImVec2 currentPos = ImGui::GetWindowPos();
 		if (currentPos.x != WeatherDetailsWindow.Position.x || currentPos.y != WeatherDetailsWindow.Position.y) {
 			WeatherDetailsWindow.Position = currentPos;
 		}
 
-		// Enable interactive elements when a menu is open
-		auto shouldEnableInteractiveElements = []() -> bool {
-			return (Menu::GetSingleton()->ShouldSwallowInput() ||
-					(globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME)));
-		};
-
-		RenderCoreWeatherDetails(shouldEnableInteractiveElements());
+		RenderCoreWeatherDetails(allowInputs);
 
 		RenderFeatureWeatherAnalysis();
 	}
 	ImGui::End();
+	resetWindowSize = false;
 }
 
 ImVec4 WeatherPicker::GetWeatherTypeColor(RE::TESWeather* weather)

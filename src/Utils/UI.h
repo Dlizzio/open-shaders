@@ -647,6 +647,7 @@ namespace Util
 	 * @param cellRender Function to render a cell: (rowIdx, colIdx, const T& row).
 	 * @param footerRows Optional static footer rows (not sorted, rendered after main rows).
 	 * @param outerSize Optional outer size for the table (0,0 = auto-size).
+	 * @param scrollable Enables a bounded, internally scrolling table.
 	 */
 	template <typename T>
 	void ShowSortedStringTableCustom(
@@ -658,7 +659,8 @@ namespace Util
 		const std::vector<std::function<bool(const T&, const T&, bool)>>& customSorts,
 		std::function<void(int, int, const T&)> cellRender,
 		const std::vector<T>& footerRows = {},
-		const ImVec2& outerSize = ImVec2(0, 0))
+		const ImVec2& outerSize = ImVec2(0, 0),
+		bool scrollable = true)
 	{
 		// ScrollY makes the table scroll internally when its bounded
 		// outerSize is smaller than its content. For unbounded tables
@@ -666,10 +668,13 @@ namespace Util
 		// so the scrollbar stays hidden -- adding the flag is harmless in
 		// that case and lets bounded callers (overlay's host window) keep
 		// content above the table visible regardless of row count.
-		ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
+		ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp;
+		if (scrollable)
+			flags |= ImGuiTableFlags_ScrollY;
 		ImVec2 tableSize = outerSize;
-		if (outerSize.y == 0.0f) {
-			size_t totalRows = rows.size() + footerRows.size();
+		if (scrollable && outerSize.y == 0.0f) {
+			const size_t separatorRows = !footerRows.empty() && !rows.empty() ? 1 : 0;
+			size_t totalRows = rows.size() + footerRows.size() + separatorRows;
 			tableSize.y = ImGui::GetTextLineHeightWithSpacing() * (static_cast<float>((totalRows < 15) ? totalRows : 15) + 1.2f);
 		}
 		if (ImGui::BeginTable(table_id, static_cast<int>(headers.size()), flags, tableSize)) {
