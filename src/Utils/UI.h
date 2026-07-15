@@ -349,6 +349,13 @@ namespace Util
 	/** @brief Draws the rounded hover/active fill for the last submitted item. */
 	bool DrawCurrentItemRoundedButtonHighlight(ImDrawList* drawList = nullptr);
 
+	/** @brief Renders a flyout menu item over a theme-rounded hover highlight. */
+	bool FlyoutMenuItem(
+		const char* label,
+		bool selected = false,
+		bool enabled = true,
+		float checkmarkLeftOffset = 0.0f);
+
 	/** @brief ImGui::Begin() wrappers that replace native title-bar button highlights with rounded ones. */
 	bool BeginWithRoundedClose(const char* name, bool* p_open, ImGuiWindowFlags flags = 0);
 	bool BeginPopupModalWithRoundedClose(const char* name, bool* p_open = nullptr, ImGuiWindowFlags flags = 0);
@@ -1680,6 +1687,50 @@ namespace Util
 		std::vector<InputCombo>& combo,
 		bool& isRecording,
 		const char* recordingLabel);
+
+	// Animated hover flyout state shared by the controls in one panel.
+	struct FlyoutState
+	{
+		ImGuiID activeId = 0;
+		bool isOpen = false;
+		bool closing = false;
+		bool flyoutHovered = false;
+		float closeTimer = 0.0f;
+		float openProgress = 0.0f;
+		ImVec2 sourceMin{};
+		ImVec2 sourceMax{};
+		ImVec2 flyoutMin{};
+		ImVec2 flyoutMax{};
+		ImVec2 lastSize{};
+		ImGuiID blockedHoverId = 0;
+		ImGuiID pendingFocusReturnId = 0;
+		bool keepOpenForNavigation = false;
+		bool draggedFromFlyout = false;
+		int lastFrame = -1;
+		std::string windowName;
+	};
+
+	class FlyoutScope
+	{
+	public:
+		FlyoutScope(FlyoutState& state, ImGuiID itemId, bool sourcePressed);
+		~FlyoutScope();
+
+		FlyoutScope(const FlyoutScope&) = delete;
+		FlyoutScope& operator=(const FlyoutScope&) = delete;
+		FlyoutScope(FlyoutScope&&) = delete;
+		FlyoutScope& operator=(FlyoutScope&&) = delete;
+
+		explicit operator bool() const noexcept { return state != nullptr; }
+
+	private:
+		FlyoutState* state = nullptr;
+	};
+
+	bool IsFlyoutWindowName(const char* name) noexcept;
+	void RequestCloseFlyout(FlyoutState& state) noexcept;
+	void CloseFlyout(FlyoutState& state) noexcept;
+	float GetFlyoutEasedProgress(const FlyoutState& state) noexcept;
 
 	/**
 	 * @brief Displays a DLL version information table with a clickable folder link.

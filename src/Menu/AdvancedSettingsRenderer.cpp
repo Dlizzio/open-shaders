@@ -8,6 +8,8 @@
 
 #include "FeatureIssues.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
+#include "Features/RemoteControl.h"
+#include "Features/RenderDoc.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -25,6 +27,8 @@ void AdvancedSettingsRenderer::RenderAdvancedSettings(
 	// Shaders   = configure & inspect shader compilation
 	// Diagnostics = log/inspect runtime state & block individual shaders
 	// Disable at Boot = user-facing failsafe toggles
+	// Remote Control = devbench bridge status and exposed tools
+	// RenderDoc = frame-capture configuration and capture management
 	// Testing   = A/B harness + dev-mode test scaffolding
 	if (ImGui::BeginTabBar("##AdvancedSettingsTabs", ImGuiTabBarFlags_None)) {
 		if (MenuFonts::BeginTabItemWithFont(T("menu.advanced.tab_diagnostics", "Diagnostics"), Menu::FontRole::Subheading)) {
@@ -38,6 +42,22 @@ void AdvancedSettingsRenderer::RenderAdvancedSettings(
 		if (MenuFonts::BeginTabItemWithFont(T("menu.advanced.tab_disable_at_boot", "Disable at Boot"), Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##DisableAtBootContent", ImVec2(0, 0), false)) {
 				RenderDisableAtBootSection(drawDisableAtBootSettings);
+			}
+			ImGui::EndChild();
+			ImGui::EndTabItem();
+		}
+
+		if (MenuFonts::BeginTabItemWithFont(T("menu.advanced.tab_remote_control", "Remote Control"), Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##RemoteControlContent", ImVec2(0, 0), false)) {
+				globals::features::remoteControl.DrawSettings();
+			}
+			ImGui::EndChild();
+			ImGui::EndTabItem();
+		}
+
+		if (MenuFonts::BeginTabItemWithFont(T("menu.advanced.tab_renderdoc", "RenderDoc"), Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##RenderDocContent", ImVec2(0, 0), false)) {
+				globals::features::renderDoc.DrawSettings();
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();
