@@ -203,9 +203,13 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 	// Set initial position if not already set
 	const float scale = Util::GetUIScale();
 	if (!WeatherDetailsWindow.PositionSet) {
-		const float pos = 50.0f * scale;
-		ImGui::SetNextWindowPos(ImVec2(pos, pos));
-		WeatherDetailsWindow.Position = ImVec2(pos, pos);
+		const auto* viewport = ImGui::GetMainViewport();
+		const float padding = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+		const ImVec2 defaultPosition(
+			viewport->WorkPos.x + viewport->WorkSize.x - padding,
+			viewport->WorkPos.y + padding);
+		ImGui::SetNextWindowPos(defaultPosition, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+		WeatherDetailsWindow.Position = defaultPosition;
 		WeatherDetailsWindow.PositionSet = true;
 	} else {
 		ImGui::SetNextWindowPos(WeatherDetailsWindow.Position, ImGuiCond_FirstUseEver);
