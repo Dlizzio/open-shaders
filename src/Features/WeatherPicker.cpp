@@ -206,6 +206,10 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 	if (!player || !player->parentCell)
 		return;
 
+	const bool allowInputs =
+		Menu::GetSingleton()->ShouldSwallowInput() ||
+		(globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME));
+
 	// Set initial position if not already set
 	const float scale = Util::GetUIScale();
 	if (!WeatherDetailsWindow.PositionSet) {
@@ -224,9 +228,6 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 	ImGui::SetNextWindowSize(
 		ImVec2(600 * scale, 800 * scale),
 		resetWindowSize ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
-	const bool allowInputs =
-		Menu::GetSingleton()->ShouldSwallowInput() ||
-		(globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME));
 	const ImGuiWindowFlags windowFlags = allowInputs ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs;
 	if (Util::BeginWithRoundedClose("Weather Details##Popup", open, windowFlags)) {
 		// Remember window position for next frame
@@ -235,9 +236,13 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 			WeatherDetailsWindow.Position = currentPos;
 		}
 
-		RenderCoreWeatherDetails(allowInputs);
-
-		RenderFeatureWeatherAnalysis();
+		// Keep scroll state separate when the weather controls appear or disappear.
+		const char* contentId = allowInputs ? "##InteractiveWeatherDetails" : "##ReadOnlyWeatherDetails";
+		if (ImGui::BeginChild(contentId, { 0, 0 })) {
+			RenderCoreWeatherDetails(allowInputs);
+			RenderFeatureWeatherAnalysis();
+		}
+		ImGui::EndChild();
 	}
 	ImGui::End();
 	resetWindowSize = false;
