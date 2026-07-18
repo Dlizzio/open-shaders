@@ -191,6 +191,12 @@ void WeatherPicker::DrawWeatherStatusPanel()
 // Weather Picker functionality
 // ================================================================================
 
+void WeatherPicker::ResetWindowLayout()
+{
+	WeatherDetailsWindow.PositionSet = false;
+	resetWindowSize = true;
+}
+
 void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 {
 	if (!open || !*open)
@@ -200,23 +206,30 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 	if (!player || !player->parentCell)
 		return;
 
-	const bool showInteractiveElements =
+	const bool allowInputs =
 		Menu::GetSingleton()->ShouldSwallowInput() ||
 		(globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME));
 
 	// Set initial position if not already set
 	const float scale = Util::GetUIScale();
 	if (!WeatherDetailsWindow.PositionSet) {
-		const float pos = 50.0f * scale;
-		ImGui::SetNextWindowPos(ImVec2(pos, pos));
-		WeatherDetailsWindow.Position = ImVec2(pos, pos);
+		const auto* viewport = ImGui::GetMainViewport();
+		const float padding = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+		const ImVec2 defaultPosition(
+			viewport->WorkPos.x + viewport->WorkSize.x - padding,
+			viewport->WorkPos.y + padding);
+		ImGui::SetNextWindowPos(defaultPosition, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+		WeatherDetailsWindow.Position = defaultPosition;
 		WeatherDetailsWindow.PositionSet = true;
 	} else {
 		ImGui::SetNextWindowPos(WeatherDetailsWindow.Position, ImGuiCond_FirstUseEver);
 	}
 
-	ImGui::SetNextWindowSize(ImVec2(600 * scale, 800 * scale), ImGuiCond_FirstUseEver);
-	if (Util::BeginWithRoundedClose("Weather Details##Popup", open, ImGuiWindowFlags_None)) {
+	ImGui::SetNextWindowSize(
+		ImVec2(600 * scale, 800 * scale),
+		resetWindowSize ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+	const ImGuiWindowFlags windowFlags = allowInputs ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs;
+	if (Util::BeginWithRoundedClose("Weather Details##Popup", open, windowFlags)) {
 		// Remember window position for next frame
 		ImVec2 currentPos = ImGui::GetWindowPos();
 		if (currentPos.x != WeatherDetailsWindow.Position.x || currentPos.y != WeatherDetailsWindow.Position.y) {
@@ -224,14 +237,15 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 		}
 
 		// Keep scroll state separate when the weather controls appear or disappear.
-		const char* contentId = showInteractiveElements ? "##InteractiveWeatherDetails" : "##ReadOnlyWeatherDetails";
+		const char* contentId = allowInputs ? "##InteractiveWeatherDetails" : "##ReadOnlyWeatherDetails";
 		if (ImGui::BeginChild(contentId, { 0, 0 })) {
-			RenderCoreWeatherDetails(showInteractiveElements);
+			RenderCoreWeatherDetails(allowInputs);
 			RenderFeatureWeatherAnalysis();
 		}
 		ImGui::EndChild();
 	}
 	ImGui::End();
+	resetWindowSize = false;
 }
 
 ImVec4 WeatherPicker::GetWeatherTypeColor(RE::TESWeather* weather)
