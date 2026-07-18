@@ -179,9 +179,12 @@ void State::Debug()
 	}
 
 	if (currentShader && updateShader && frameAnnotations) {
-		BeginPerfEvent(std::format("Draw: OS {}::{:x}::{}", magic_enum::enum_name(currentShader->shaderType.get()), permutationData.PixelShaderDescriptor, currentShader->fxpFilename));
-		SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(*currentShader, permutationData.PixelShaderDescriptor)));
-		EndPerfEvent();
+		// Per-draw (thousands/frame): D3D-capture marker only, never a Tracy zone --
+		// a per-draw dynamic Tracy zone allocs a source location per call and OOMs
+		// Tracy. Matches BeginDrawEvent's rationale.
+		BeginDrawEvent("Draw: OS {}::{:x}::{}", magic_enum::enum_name(currentShader->shaderType.get()), permutationData.PixelShaderDescriptor, currentShader->fxpFilename);
+		SetPerfMarker("Defines: {}", SIE::ShaderCache::GetDefinesString(*currentShader, permutationData.PixelShaderDescriptor));
+		EndDrawEvent();
 	}
 }
 
@@ -953,6 +956,36 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 	}
 }
 
+// Widens a narrow annotation title into a reused wide buffer (per-byte char->wchar_t,
+// matching the engine's convention for ASCII annotation strings). resize()+copy reuses
+// the buffer; constructing a fresh wstring per call heap-allocates, which at per-draw
+// volume contends the process heap lock with the shader-compile worker threads.
+static const wchar_t* WidenAnnotation(std::wstring& buffer, std::string_view title)
+{
+	buffer.resize(title.size());
+	std::copy(title.begin(), title.end(), buffer.begin());
+	return buffer.c_str();
+}
+
+void State::BeginDrawEvent(std::string_view title)
+{
+	// Per-draw annotation (thousands per frame): emit ONLY the GPU-capture marker
+	// (RenderDoc/PIX), never a Tracy zone. A dynamic-named Tracy zone allocs a
+	// source location per call -- at per-draw volume that swamps Tracy. Coarse
+	// per-pass markers still use BeginPerfEvent for Tracy.
+	if (pPerf) {
+		thread_local std::wstring s_wtitle;
+		pPerf->BeginEvent(WidenAnnotation(s_wtitle, title));
+	}
+}
+
+void State::EndDrawEvent()
+{
+	if (pPerf) {
+		pPerf->EndEvent();
+	}
+}
+
 void State::BeginPerfEvent(std::string_view title)
 {
 #ifdef TRACY_ENABLE
@@ -968,7 +1001,8 @@ void State::BeginPerfEvent(std::string_view title)
 	s_tracyPerfZones.push_back(ctx);
 #endif
 	if (pPerf) {
-		pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
+		thread_local std::wstring s_wtitle;
+		pPerf->BeginEvent(WidenAnnotation(s_wtitle, title));
 	}
 }
 
@@ -1004,7 +1038,8 @@ void State::EndAnnotation()
 void State::SetPerfMarker(std::string_view title)
 {
 	if (pPerf) {
-		pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
+		thread_local std::wstring s_wmarker;
+		pPerf->SetMarker(WidenAnnotation(s_wmarker, title));
 	}
 }
 
