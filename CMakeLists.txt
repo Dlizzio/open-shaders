@@ -18,7 +18,7 @@ endif()
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 2.1.1
+    VERSION 2.2.0
     LANGUAGES CXX
 )
 
