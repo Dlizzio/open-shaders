@@ -36,8 +36,6 @@ public:
 	ID3D11ComputeShader* blurShadowHorizontalCS = nullptr;
 	ID3D11ComputeShader* blurShadowVerticalCS = nullptr;
 
-	ID3D11ShaderResourceView* shadowView = nullptr;
-
 	// Downsampled shadow texture with 2 mip levels
 	ID3D11Texture2D* shadowCopyTexture = nullptr;
 	ID3D11ShaderResourceView* shadowCopySRV = nullptr;
@@ -64,6 +62,8 @@ public:
 	virtual void SetupResources() override;
 	/** @brief Releases and recompiles all compute shaders. */
 	virtual void ClearShaderCache() override;
+	/** @brief Builds the shared VSM copy after directional shadow maps are rendered. */
+	virtual void EarlyPrepass() override;
 
 	/** @brief Copies and downsamples the directional shadow map, then applies Gaussian blur filtering. */
 	void CopyShadowLightData();

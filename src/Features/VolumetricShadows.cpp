@@ -76,6 +76,11 @@ void VolumetricShadows::ClearShaderCache()
 	blurShadowVerticalCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl", defines, "cs_5_0"));
 }
 
+void VolumetricShadows::EarlyPrepass()
+{
+	CopyShadowLightData();
+}
+
 void VolumetricShadows::CopyShadowLightData()
 {
 	ZoneScoped;
@@ -89,7 +94,9 @@ void VolumetricShadows::CopyShadowLightData()
 			return;
 		}
 
-		context->PSGetShaderResources(4, 1, &shadowView);
+		auto* shadowView = globals::game::renderer->GetDepthStencilData()
+		                       .depthStencils[RE::RENDER_TARGET_DEPTHSTENCIL::kSHADOWMAPS_ESRAM]
+		                       .depthSRV;
 
 		// Downsample shadow texture array to fixed 512x512 (mip1: 256x256)
 		if (shadowView) {
@@ -314,9 +321,6 @@ void VolumetricShadows::CopyShadowLightData()
 		auto* srv = shadowView ? (shadowCopySRV ? shadowCopySRV : shadowView) : nullptr;
 		SetSharedShadowMapSRV(context, srv);
 
-		if (shadowView)
-			shadowView->Release();
-		shadowView = nullptr;
 	}
 }
 
