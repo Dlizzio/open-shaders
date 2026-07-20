@@ -320,7 +320,6 @@ void VolumetricShadows::CopyShadowLightData()
 
 		auto* srv = shadowView ? (shadowCopySRV ? shadowCopySRV : shadowView) : nullptr;
 		SetSharedShadowMapSRV(context, srv);
-
 	}
 }
 
