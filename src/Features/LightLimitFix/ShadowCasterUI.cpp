@@ -1,11 +1,14 @@
-﻿// ShadowCasterUI.cpp
-// ImGui surfaces for the shadow caster scheduler: the interactive caster
-// table, summary and stats blocks, overlay/visualisation panels, and the
-// settings panel.
+// ShadowCasterUI.cpp
+// ImGui surfaces for the shadow caster scheduler: caster table, stats, overlay panels, settings.
 
+#include "../../Deferred.h"
 #include "../../Globals.h"
+#include "../../GpuPass.h"
+#include "../../State.h"
 #include "../../Utils/Game.h"
 #include "../../Utils/UI.h"
+#include "../Upscaling.h"
+#include "../VR.h"
 #include "I18n/I18n.h"
 #include "ShadowCasterInternal.h"
 
@@ -43,6 +46,7 @@ namespace ShadowCasterManager
 			bool isFocus{ false };  // engine-owned focus shadow slot (read-only row)
 			ShadowSlotInfo info;
 			float importance{ 0.0f };  // contribution-weighted importance (luminance × fade × attenuation²)
+			double score{ 0.0 };       // unified priority (ScoreFormula value)
 			bool highImp{ false };     // importance > 0.1, light meaningfully illuminates the viewer area
 		};
 
@@ -67,6 +71,7 @@ namespace ShadowCasterManager
 			auto it = lightEntryByKey.find(row.info.lightKey);
 			if (it != lightEntryByKey.end()) {
 				row.importance = it->second->lastImportance;
+				row.score = it->second->lastScore;
 				row.highImp = row.importance > 0.1f;
 			}
 		};
@@ -204,11 +209,16 @@ namespace ShadowCasterManager
 			ImGui::TextColored(ImVec4(1, 0.6f, 0.2f, 1), T(TKEY("suppressed_count"), "  %zu suppressed"), s_suppressedLights.size());
 		}
 
+		// Group hover repopulates the highlight set; clear it every frame so
+		// stale entries drop once a hover ends or the controls stop rendering.
+		ClearHighlight();
+
 		// -- Group toggle buttons ------------------------------------------
 		// green = at least one unsuppressed; grey = all suppressed; click flips.
 		// Predicate-based so we can mix type filters (Spot/Hemi/Omni) with state
 		// filters (Conv = converted-to-normal lights).
-		{
+		// Hidden in readOnly overlays -- these are live suppression controls.
+		if (!readOnly) {
 			using RowPred = std::function<bool(const SlotRow&)>;
 			auto allSuppressedMatching = [&](const RowPred& pred) {
 				for (auto& r : rows) {
@@ -233,17 +243,39 @@ namespace ShadowCasterManager
 							s_suppressedLights.insert(r.info.lightKey);
 				}
 			};
-			auto groupButton = [&](const char* label, const RowPred& pred, const char* tooltip) {
+			auto groupButton = [&](const char* label, const RowPred& pred, const char* tooltip, bool previewOnly = false) {
+				// Counter shows visible/total: how many of the group's lights hold
+				// a shadow slot this frame vs how many exist. Lets the user see a
+				// group thin out as they move without opening every row.
+				int total = 0, visible = 0;
+				for (auto& r : rows) {
+					if (!pred(r))
+						continue;
+					++total;
+					if (r.inScene)
+						++visible;
+				}
+				const std::string btnLabel = std::format("{} {}/{}", label, visible, total);
+
 				bool allOff = allSuppressedMatching(pred);
 				ImGui::PushStyleColor(ImGuiCol_Button,
 					allOff ? ImVec4(0.35f, 0.35f, 0.35f, 1) : ImVec4(0.15f, 0.5f, 0.15f, 1));
 				ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
 					allOff ? ImVec4(0.5f, 0.5f, 0.5f, 1) : ImVec4(0.2f, 0.7f, 0.2f, 1));
-				if (ImGui::SmallButton(label))
+				if (ImGui::SmallButton(btnLabel.c_str()) && !previewOnly)
 					toggleMatching(pred);
 				ImGui::PopStyleColor(2);
-				if (tooltip && ImGui::IsItemHovered())
-					ImGui::SetTooltip("%s", tooltip);
+				if (ImGui::IsItemHovered()) {
+					// Hovering a group tints its whole set magenta in-world -- the
+					// group-scale analogue of Shift+hover on one row. Populated
+					// here, cleared at the table draw above; click toggles
+					// suppression unless the group is preview-only.
+					for (auto& r : rows)
+						if (pred(r))
+							AddHighlight(r.info.lightKey);
+					if (tooltip)
+						ImGui::SetTooltip("%s", tooltip);
+				}
 			};
 			auto typePred = [](uint32_t type) {
 				return [type](const SlotRow& r) { return r.info.type == type; };
@@ -255,13 +287,42 @@ namespace ShadowCasterManager
 			ImGui::SameLine();
 			groupButton(T(TKEY("group_btn_hemi"), "Hemi"), typePred(1), T(TKEY("group_tip_hemi"), "Toggle all hemisphere shadow lights"));
 			ImGui::SameLine();
-			groupButton(T(TKEY("group_btn_omni"), "Omni"), typePred(2), T(TKEY("group_tip_omni"), "Toggle all omni (paraboloid) shadow lights"));
+			groupButton(T(TKEY("group_btn_omni"), "Omni"), typePred(2), T(TKEY("group_tip_omni"), "Toggle all omni shadow lights (dome projection, aka paraboloid)"));
+			// Divider: left of the bar are stable type filters, right of it are
+			// per-frame state filters whose membership changes as you move.
+			ImGui::SameLine();
+			ImGui::TextDisabled("|");
 			ImGui::SameLine();
 			groupButton(
 				T(TKEY("group_btn_conv"), "Conv"), [](const SlotRow& r) { return r.converted; },
 				T(TKEY("group_tip_conv"),
 					"Toggle all lights currently demoted from shadow to normal\n"
 					"(ConvertExcessToNormal). Hides their cluster-light contribution."));
+			ImGui::SameLine();
+			groupButton(
+				T(TKEY("group_btn_high"), "High"), [](const SlotRow& r) { return r.inScene && r.highImp; },
+				T(TKEY("group_tip_high"),
+					"High-impact shadow lights (meaningfully light the view).\n"
+					"Hover to tint them; click to toggle their suppression."));
+			ImGui::SameLine();
+			// Preview-only: the floor already culls these lights, so a suppress
+			// click would have no visible effect. Disabled (dimmed) while the
+			// floor is 0, since there's nothing for the group to preview.
+			const bool floorOff = s_settings.ShadowImpactFloor <= 0.0f;
+			if (floorOff)
+				ImGui::BeginDisabled();
+			groupButton(
+				T(TKEY("group_btn_low"), "Low"),
+				[](const SlotRow& r) { return IsBelowFloor(r.info.lightKey); },
+				floorOff ?
+					T(TKEY("group_tip_low_off"), "Light Impact Floor is 0, so nothing is culled to preview.") :
+					T(TKEY("group_tip_low"),
+						"Lights the Light Impact Floor is culling right now.\n"
+						"Hover to highlight them in the world (preview only --\n"
+						"clicking does nothing, the floor already hides these shadows)."),
+				true);
+			if (floorOff)
+				ImGui::EndDisabled();
 
 			// "Clear All": resets every debug override (suppress / pin shadow /
 			// pin convert / solo) so the table returns to scheduler-auto. Only
@@ -299,12 +360,16 @@ namespace ShadowCasterManager
 					"     corresponds to which physical light. Does not affect rendering\n"
 					"     when Shift is not held.\n\n"
 					"Group buttons toggle suppression for every matching row at once.\n"
+					"Hovering a group button highlights its lights in the world with\n"
+					"no modifier needed -- Shift is only required for single-row\n"
+					"hover highlighting in the table.\n"
 					"Clear All appears when any override is active and resets everything."));
 		}
 
 		// -- Filter input --------------------------------------------------
+		// Hidden in readOnly overlays; any filter set in the menu still applies.
 		static std::string s_filterText;
-		{
+		if (!readOnly) {
 			char buf[128] = {};
 			strncpy_s(buf, s_filterText.c_str(), sizeof(buf) - 1);
 			ImGui::SetNextItemWidth(120.0f);
@@ -312,6 +377,18 @@ namespace ShadowCasterManager
 				s_filterText = buf;
 			ImGui::SameLine();
 			ImGui::TextDisabled(sceneOnly ? T(TKEY("filter_hint_scene_only"), "filter (yes/conv/type/range/addr)") : T(TKEY("filter_hint"), "filter (yes/conv/no/type/range/addr)"));
+			// Developer capture: same path as devbench capture kind=shadowmaps.
+			if (AtlasActive()) {
+				ImGui::SameLine();
+				if (ImGui::SmallButton(T(TKEY("dump_atlas_btn"), "Dump Atlas")))
+					RequestAtlasDump();
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("%s", T(TKEY("dump_atlas_tooltip"),
+												"Save the shadow atlas depth texture (DDS) plus a\n"
+												"per-slot tile manifest (JSON) to\n"
+												"Data/SKSE/Plugins/CommunityShaders/Captures.\n"
+												"Written on the next shadow pass."));
+			}
 		}
 
 		// Apply filter.
@@ -332,13 +409,23 @@ namespace ShadowCasterManager
 					r.info.range, Util::Units::GameUnitsToMeters(r.info.range));
 				snprintf(addrBuf, sizeof(addrBuf), "%08x", static_cast<uint32_t>(r.info.lightKey & 0xFFFFFFFF));
 				const char* statusStr = r.inScene ? "yes" : (r.converted ? "conv" : "no");
+				std::string nameLower = r.info.name;
+				std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(),
+					[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 				if (typeName.find(lower) != std::string::npos ||
+					nameLower.find(lower) != std::string::npos ||
 					std::string(rangeBuf).find(lower) != std::string::npos ||
 					std::string(addrBuf).find(lower) != std::string::npos ||
 					lower == statusStr)
 					filteredRows.push_back(r);
 			}
 		}
+
+		// Table-max priority for the Prio column colour ramp (user formulas
+		// have arbitrary scale, so normalize to what is on screen).
+		double maxRowScore = 1e-6;
+		for (const auto& r : filteredRows)
+			maxRowScore = std::max(maxRowScore, r.score);
 
 		// -- Column layout -------------------------------------------------
 		// Interactive (settings menu, or overlay with menu open):
@@ -357,7 +444,8 @@ namespace ShadowCasterManager
 		const int addrColIdx = statusColIdx + 1;
 		const int typeColIdx = addrColIdx + (showColor ? 2 : 1);
 		const int radColIdx = typeColIdx + 1;
-		const int centrColIdx = radColIdx + 1;
+		const int resColIdx = radColIdx + 1;
+		const int centrColIdx = resColIdx + 1;
 		const int changedColIdx = centrColIdx + 1;
 
 		std::vector<std::string> headers;
@@ -371,7 +459,8 @@ namespace ShadowCasterManager
 			headers.push_back(T(TKEY("col_color"), "Color"));
 		headers.push_back(T(TKEY("col_type"), "Type"));
 		headers.push_back(T(TKEY("col_range"), "Range"));
-		headers.push_back(T(TKEY("col_imp"), "Imp"));
+		headers.push_back(T(TKEY("col_res"), "Res"));
+		headers.push_back(T(TKEY("col_prio"), "Prio"));
 		headers.push_back(T(TKEY("col_changed"), "Changed"));
 
 		using SortFn = std::function<bool(const SlotRow&, const SlotRow&, bool)>;
@@ -388,7 +477,7 @@ namespace ShadowCasterManager
 				return asc ? wa > wb : wa < wb;  // ascending click => most recent on top
 			return a.info.lightKey < b.info.lightKey;
 		};
-		// Status sort: in-scene shadow casters â†’ converted â†’ out-of-scene.
+		// Status sort: in-scene shadow casters -> converted -> out-of-scene.
 		// Suppressed lights sort to the end (treated as worst rank).
 		sorts[statusColIdx] = [](const SlotRow& a, const SlotRow& b, bool asc) {
 			auto rank = [](const SlotRow& r) -> int {
@@ -412,7 +501,18 @@ namespace ShadowCasterManager
 			return asc ? a.info.range < b.info.range : a.info.range > b.info.range;
 		};
 		sorts[centrColIdx] = [](const SlotRow& a, const SlotRow& b, bool asc) {
-			return asc ? a.importance < b.importance : a.importance > b.importance;
+			return asc ? a.score < b.score : a.score > b.score;
+		};
+		// Res sorts by the rendered tile scale the column displays; rows with no
+		// tile (focus / out-of-scene, shown as "--") sink to the bottom.
+		sorts[resColIdx] = [](const SlotRow& a, const SlotRow& b, bool asc) {
+			auto res = [](const SlotRow& r) -> float {
+				return (r.isFocus || !r.inScene) ? -1.0f : GetRenderedTileScale(static_cast<int32_t>(r.idx));
+			};
+			const float ra = res(a), rb = res(b);
+			if (ra != rb)
+				return asc ? ra < rb : ra > rb;
+			return a.idx < b.idx;
 		};
 
 		// outerSize logic:
@@ -442,14 +542,8 @@ namespace ShadowCasterManager
 				const bool pinConvert = s_pinConvert.count(key) > 0;
 				const bool isSolo = (s_soloLight == key && key != 0);
 
-				// Helper: shift-gated debug pulse. Setting s_hoverLightKey makes
-				// the cluster light builder replace this light's colour with a
-				// 1Hz magenta pulse, useful for finding which light a row
-				// corresponds to in 3D, but visually startling if it triggered
-				// every time the cursor crossed a cell. Requiring Shift+hover
-				// means a user clicking through the cycle/solo buttons doesn't
-				// see lights randomly turn purple, while debugging is one
-				// modifier away.
+				// Sets s_hoverLightKey (magenta debug pulse in-world) only while
+				// Shift is held, so normal row clicks don't trigger it.
 				auto noteHover = [&]() {
 					if (ImGui::IsItemHovered() && ImGui::GetIO().KeyShift)
 						s_hoverLightKey = key;
@@ -465,7 +559,7 @@ namespace ShadowCasterManager
 				}
 
 				// === Mode column: state cycle button =======================
-				// Cycle: Auto (Â·) -> PinShadow (S) -> PinConvert (C) -> Suppress (X) -> Auto
+				// Cycle: Auto (·) -> PinShadow (S) -> PinConvert (C) -> Suppress (X) -> Auto
 				// Mutually exclusive (SetPinned* / suppressed.erase enforce that).
 				// Hidden in readOnly mode (overlay with menu closed).
 				// Focus rows skip Mode/Solo entirely -- engine owns the slot.
@@ -481,7 +575,7 @@ namespace ShadowCasterManager
 				}
 				if (showButtons && col == modeColIdx) {
 					ImGui::PushID(static_cast<int>(key & 0xFFFFFFFF));
-					const char* label = "Â·";
+					const char* label = "·";
 					ImVec4 col4 = ImVec4(0.15f, 0.6f, 0.15f, 1);  // green = auto/active
 					ImVec4 colH = ImVec4(0.2f, 0.75f, 0.2f, 1);
 					const char* tip = T(TKEY("mode_tip_auto"), "Auto (scheduler decides)\nClick: pin as shadow caster");
@@ -535,7 +629,7 @@ namespace ShadowCasterManager
 					ImVec4 colH = isSolo ? ImVec4(1.0f, 0.85f, 0.25f, 1) : ImVec4(0.45f, 0.45f, 0.45f, 1);
 					ImGui::PushStyleColor(ImGuiCol_Button, col4);
 					ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colH);
-					if (ImGui::SmallButton(isSolo ? "!" : "Â·"))
+					if (ImGui::SmallButton(isSolo ? "!" : "·"))
 						SetSoloLight(isSolo ? 0 : key);
 					ImGui::PopStyleColor(2);
 					noteHover();
@@ -584,7 +678,10 @@ namespace ShadowCasterManager
 					} else {
 						char addrFull[20];
 						snprintf(addrFull, sizeof(addrFull), "0x%016llX", static_cast<unsigned long long>(row.info.lightKey));
-						ImGui::Selectable(addrFull + 10, false, ImGuiSelectableFlags_None);
+						// Show the resolved world-light name when one exists;
+						// the raw address stays available in the tooltip/copy.
+						ImGui::Selectable(!row.info.name.empty() ? row.info.name.c_str() : addrFull + 10,
+							false, ImGuiSelectableFlags_None);
 						if (ImGui::IsItemClicked())
 							ImGui::SetClipboardText(addrFull);
 						noteHover();
@@ -625,25 +722,42 @@ namespace ShadowCasterManager
 						if (ImGui::IsItemHovered())
 							ImGui::SetTooltip("%s", Util::Units::FormatDistance(row.info.range).c_str());
 					}
+				} else if (col == resColIdx) {
+					if (row.isFocus || !row.inScene) {
+						ImGui::TextDisabled("--");
+					} else {
+						const float scale = GetRenderedTileScale(static_cast<int32_t>(row.idx));
+						const float base = s_initialShadowMapResolution > 0 ? static_cast<float>(s_initialShadowMapResolution) : 2048.0f;
+						ImGui::Text("%.0f", base * scale);
+						noteHover();
+						if (ImGui::IsItemHovered()) {
+							AtlasTileTexels tileInfo{};
+							if (AtlasActive() && GetSlotTileTexels(static_cast<int32_t>(row.idx), tileInfo))
+								ImGui::SetTooltip(T(TKEY("res_tooltip_atlas"),
+													  "Rendered shadow resolution (texels).\nAtlas tile: %ux%u at (%u, %u)%s"),
+									tileInfo.size, tileInfo.size, tileInfo.x, tileInfo.y,
+									tileInfo.contentValid ? "" : T(TKEY("res_tooltip_pending"), "\nContent pending first redraw."));
+							else
+								ImGui::SetTooltip("%s", T(TKEY("res_tooltip"),
+															"Rendered shadow resolution (texels).\nImportant lights keep full size; minor ones shrink."));
+						}
+					}
 				} else if (col == centrColIdx) {
-					// Importance score: luminance × fade × attenuation² at viewer.
-					// White (0) â†’ bright green (1+) as contribution increases.
-					float imp = row.importance;
-					float t = std::min(imp, 1.0f);
-					ImVec4 colour = ImVec4(1.0f - t * 0.7f, 1.0f, 1.0f - t * 0.7f, 1.0f);  // white â†’ green
-					ImGui::TextColored(colour, "%.2f", imp);
+					// Unified priority (ScoreFormula). Colour normalized to the
+					// table max: user formulas have arbitrary scale.
+					float t = static_cast<float>(std::clamp(row.score / maxRowScore, 0.0, 1.0));
+					ImVec4 colour = ImVec4(1.0f - t * 0.7f, 1.0f, 1.0f - t * 0.7f, 1.0f);  // white → green
+					ImGui::TextColored(colour, "%.2f", row.score);
 					if (ImGui::IsItemHovered())
-						ImGui::SetTooltip("%s", T(TKEY("importance_tooltip"),
-													"Contribution importance score:\n"
-													"  luminance(diffuse * fade)\n"
-													"  * max(att_camera, att_player)\n"
-													"  where att = (1 - (dist/radius)^2)^2\n\n"
-													"Higher = light strongly illuminates the viewer area.\n"
-													"Drives interval multiplier (configurable in Advanced settings).\n"
-													"Default: 0 => x2.0, 0.5 => x0.32, 1 => x0.05\n\n"
-													"Rows tinted yellow are high-importance (>0.1)\n"
-													"-- they deliver meaningful illumination near the camera\n"
-													"or player and receive accelerated shadow redraw scheduling."));
+						ImGui::SetTooltip("%s", T(TKEY("prio_tooltip"),
+													"Priority (the Score Formula's value for this light).\n"
+													"One number decides everything: which lights cast\n"
+													"shadows, their order for atlas space within a\n"
+													"resolution class, and how often they redraw (by\n"
+													"priority rank).\n\n"
+													"Edit the formula in the Formula Editor below.\n\n"
+													"Rows tinted yellow deliver meaningful illumination\n"
+													"near the camera or player."));
 				} else if (col == changedColIdx) {
 					auto chIt = s_rowChangedAt.find(key);
 					if (row.isFocus || chIt == s_rowChangedAt.end()) {
@@ -722,6 +836,34 @@ namespace ShadowCasterManager
 		int32_t avgCost = s_budget.GetAverageCostUs();
 		if (avgCost > 0)
 			ImGui::Text(T(TKEY("avg_light_cost"), "Avg light cost    : %.2f ms"), avgCost / 1000.0f);
+
+		if (AtlasActive()) {
+			int classCounts[5] = {};  // full .. sixteenth
+			for (int i = s_lights.PointLightFirst(); i < s_lights.PointLightEnd(s_settings.ShadowLightCount); i++) {
+				const auto& e = s_lights.Lights[i];
+				if (!e.Light)
+					continue;
+				int cls = 0;
+				for (float s = kTileScaleFull; e.renderedScale < s && cls < 4; s *= 0.5f)
+					cls++;
+				classCounts[cls]++;
+			}
+			ImGui::Text(T(TKEY("tile_class_counts"), "Shadow resolution : %d full / %d half / %d quarter / %d eighth / %d sixteenth"),
+				classCounts[0], classCounts[1], classCounts[2], classCounts[3], classCounts[4]);
+			if (AtlasActive()) {
+				ImGui::Text(T(TKEY("atlas_usage"), "Shadow atlas       : %ux%u, %.0f%% used, %.0f MB"),
+					AtlasDim(), AtlasDim(), AtlasOccupancy() * 100.0f,
+					static_cast<float>(AtlasVRAMBytes()) / (1024.f * 1024.f));
+				ImGui::Text(T(TKEY("atlas_reallocs"), "Tile reallocations : %u since launch"),
+					GetAtlasClearStats().tileReallocs);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("%s", T(TKEY("atlas_reallocs_tooltip"),
+												"Each reallocation is a light changing resolution class,\n"
+												"which discards its cached shadow and forces a redraw.\n"
+												"A fast-growing number means the scene is fighting the\n"
+												"class hysteresis; a slow one means the cache is holding."));
+			}
+		}
 
 		// ---- Budget verdict ---------------------------------------------
 		// Cross-checks measured shadow cost against the user-chosen budget
@@ -819,11 +961,11 @@ namespace ShadowCasterManager
 			if (ImGui::IsItemHovered()) {
 				ImGui::SetTooltip(
 					T(TKEY("shadow_vram_tooltip"),
-						"Bar fill = process VRAM usage / DXGI budget (same data the\n"
-						"performance overlay reports). Overlay text shows the shadow\n"
-						"array's contribution to that usage.\n"
+						"Bar fill = process VRAM usage / graphics memory budget (same\n"
+						"data the performance overlay reports). Overlay text shows the\n"
+						"shadow array's contribution to that usage.\n"
 						"\n"
-						"Slices  : %u  (sun lives in its own kSHADOWMAPS_ESRAM texture)\n"
+						"Slices  : %u  (the sun uses its own shadow texture)\n"
 						"Per slice : %.2f MB  (%u x %u @ %u B/pixel)\n"
 						"Shadow array : %.1f MB\n"
 						"Free in budget : %.1f MB\n"
@@ -831,11 +973,16 @@ namespace ShadowCasterManager
 						"Green when free VRAM and shadow share are comfortable.\n"
 						"Yellow when free < 512 MB or shadow array > 25%% of budget.\n"
 						"Red when free < 128 MB or shadow array > 50%% of budget --\n"
-						"lower Shadow Light Count or iShadowMapResolution."),
+						"%s"),
 					vinfo.shadowSlices, perSliceMB,
 					vinfo.shadowWidth, vinfo.shadowHeight,
 					vinfo.shadowWidth && vinfo.shadowHeight ? vinfo.bytesPerSlice / (vinfo.shadowWidth * vinfo.shadowHeight) : 0u,
-					arrayMB, freeMB);
+					arrayMB, freeMB,
+					// The atlas pins the array at the vanilla slice count, so the
+					// light count no longer buys VRAM back; the atlas texture does.
+					AtlasActive() ?
+						T(TKEY("shadow_vram_remedy_atlas"), "lower Atlas Resolution.") :
+						T(TKEY("shadow_vram_remedy_array"), "lower Shadow Light Count or the game's shadow resolution."));
 			}
 		}
 	}
@@ -904,11 +1051,69 @@ namespace ShadowCasterManager
 							  "\n"
 							  "Light Type Visualization: RGB channels encode shadow light types per pixel.\n"
 							  "  R = spot/frustum lights (ShadowParam.x == 0).\n"
-							  "  G = hemisphere/paraboloid lights (ShadowParam.x == 1).\n"
-							  "  B = omnidirectional/full-paraboloid lights (ShadowParam.x == 2).\n"
+							  "  G = hemisphere lights (single dome projection; ShadowParam.x == 1).\n"
+							  "  B = omnidirectional lights (full dome projection; ShadowParam.x == 2).\n"
 							  "  Dark grey = unshadowed lights only (no shadow maps assigned).\n"
 							  "  Bright red = overflow (slot capacity exceeded).\n"
 							  "Intensity scales with count (up to 4); channels blend for mixed-type pixels."));
+	}
+
+	// Shared by the Performance-tab quick presets and the Advanced-section
+	// presets: applies floor+cull together and highlights the active match.
+	static void DrawImpactCullPresetButton(Settings& settings, const char* label, const char* tip, float floor, float cull)
+	{
+		const bool active = settings.ShadowImpactFloor == floor &&
+		                    settings.CasterCullAngularMin == cull;
+		if (active)
+			ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+		if (ImGui::SmallButton(label)) {
+			settings.ShadowImpactFloor = floor;
+			settings.CasterCullAngularMin = cull;
+		}
+		if (active)
+			ImGui::PopStyleColor();
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", tip);
+	}
+
+	void DrawImpactCullControls(Settings& settings)
+	{
+		DrawImpactCullPresetButton(settings, T(TKEY("preset_quality"), "Quality"),
+			T(TKEY("preset_quality_tip"), "No shadow culling (default)."), 0.0f, 0.0f);
+		ImGui::SameLine();
+		DrawImpactCullPresetButton(settings, T(TKEY("preset_balanced"), "Balanced"),
+			T(TKEY("preset_balanced_tip"),
+				"Drop shadows you can barely see.\n"
+				"Keeps carried and nearby lights shadowed."),
+			0.001f, 0.008f);
+		ImGui::SameLine();
+		DrawImpactCullPresetButton(settings, T(TKEY("preset_performance"), "Performance"),
+			T(TKEY("preset_performance_tip"),
+				"Stronger impact floor.\n"
+				"May drop shadows from minor distant lights."),
+			0.025f, 0.012f);
+
+		ImGui::SliderFloat(T(TKEY("caster_cull_angular"), "Caster Cull Screen Size Min"),
+			&settings.CasterCullAngularMin, 0.0f, 0.1f, "%.4f");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", T(TKEY("caster_cull_angular_tooltip"),
+										"Skip a shadow caster when its on-screen size from your viewpoint\n"
+										"(bound radius / distance to camera) is below this. A close caster\n"
+										"filling the view is kept even if small; a distant one in a corner\n"
+										"is dropped even if large. Large speedup in cluttered interiors.\n"
+										"0 disables. Useful range is small -- Balanced/Performance presets\n"
+										"use 0.008/0.012. Ctrl+Click the slider to type an exact value.\n"
+										"Lower it if distant shadows look like they pop in."));
+
+		ImGui::SliderFloat(T(TKEY("shadow_impact_floor"), "Light Impact Floor"),
+			&settings.ShadowImpactFloor, 0.0f, 0.2f, "%.3f");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", T(TKEY("shadow_impact_floor_tooltip"),
+										"Drop the whole shadow from a light whose on-screen relevance\n"
+										"(screen coverage, or how much it lights you/the camera) is below\n"
+										"this. The light still lights the room; it just stops redrawing a\n"
+										"near-invisible shadow. 0 disables. Hover the Low group button\n"
+										"above the light table to preview which lights it would affect."));
 	}
 
 	void DrawSettings(Settings& settings)
@@ -970,10 +1175,23 @@ namespace ShadowCasterManager
 		std::uint64_t projectedBytes = 0;
 		std::uint64_t projectedFreeBytes = 0;
 		bool projectionValid = sliderVram.valid;
+		// With the atlas selected, the engine array stays at the vanilla
+		// slice count after restart; the atlas texture carries the rest.
+		const bool atlasSelected = settings.ShadowAtlas && settings.ShadowLightCount > 4;
 		if (projectionValid) {
-			projectedBytes = ProjectShadowArrayBytes(static_cast<std::uint32_t>(settings.ShadowLightCount));
+			const auto projectedSlices = atlasSelected ?
+			                                 static_cast<std::uint32_t>(kVanillaShadowSliceCount) :
+			                                 static_cast<std::uint32_t>(settings.ShadowLightCount);
+			projectedBytes = ProjectShadowArrayBytes(projectedSlices);
+			if (atlasSelected && sliderVram.shadowWidth && sliderVram.shadowHeight) {
+				const std::uint64_t bpp = sliderVram.bytesPerSlice / (static_cast<std::uint64_t>(sliderVram.shadowWidth) * sliderVram.shadowHeight);
+				projectedBytes += static_cast<std::uint64_t>(settings.AtlasResolution) * settings.AtlasResolution * bpp;
+			}
+			// Subtract the live atlas too, or its footprint is double-counted
+			// against the projected array+atlas total.
 			std::int64_t projectedUsage = static_cast<std::int64_t>(sliderVram.currentUsageBytes) -
-			                              static_cast<std::int64_t>(sliderVram.shadowArrayBytes) +
+			                              static_cast<std::int64_t>(sliderVram.shadowArrayBytes) -
+			                              static_cast<std::int64_t>(AtlasVRAMBytes()) +
 			                              static_cast<std::int64_t>(projectedBytes);
 			if (projectedUsage < 0)
 				projectedUsage = 0;
@@ -985,15 +1203,19 @@ namespace ShadowCasterManager
 					"Maximum simultaneous shadow-casting point/spot lights (directional sun not counted).\n"
 					"  0  = scheduler runs but selects no point lights (sun/directional unaffected).\n"
 					"  4  = vanilla point light count with intelligent selection.\n"
-					"  >4 = extended mode; depth buffer expanded when >8. Max 127\n"
-					"       (VRAM is the practical limit -- watch the projected-VRAM bar).\n"
+					"  >4 = extended mode; depth buffer expanded when >8. Max 127.\n"
+					"With the Shadow Atlas on, more lights cost scheduling and draw\n"
+					"calls rather than video memory -- the atlas is a fixed size, and\n"
+					"lights past its full-detail capacity drop to smaller tiles.\n"
+					"Without it, each light adds a full shadow slice (watch the\n"
+					"projected-VRAM bar).\n"
 					"Requires a game restart to take effect.");
 			if (projectionValid) {
 				ImGui::SetTooltip(
 					T(TKEY("shadow_light_count_projection_tooltip"),
 						"%s\n"
 						"\n"
-						"Projected kSHADOWMAPS array at %d slots: %.1f MB\n"
+						"Projected shadow VRAM at %d slots: %.1f MB (array + atlas)\n"
 						"Per-slice cost: %.2f MB  (%u x %u, %u B/pixel)\n"
 						"Projected free VRAM after restart: %.1f MB"),
 					kSliderBase,
@@ -1015,9 +1237,12 @@ namespace ShadowCasterManager
 		if (projectionValid && sliderVram.budgetBytes > 0) {
 			const VRAMVerdict verdict = EvaluateVRAMVerdict(projectedBytes, projectedFreeBytes, sliderVram.budgetBytes);
 			const float budgetMBf = static_cast<float>(sliderVram.budgetBytes) / (1024.f * 1024.f);
+			// Current shadow storage = array + live atlas; keep the grey
+			// non-shadow segment consistent with that split.
+			const float atlasMB = static_cast<float>(AtlasVRAMBytes()) / (1024.f * 1024.f);
 			const float nonShadowMB = std::max(0.0f,
-				(static_cast<float>(sliderVram.currentUsageBytes) - static_cast<float>(sliderVram.shadowArrayBytes)) / (1024.f * 1024.f));
-			const float currentShadowMB = static_cast<float>(sliderVram.shadowArrayBytes) / (1024.f * 1024.f);
+				(static_cast<float>(sliderVram.currentUsageBytes) - static_cast<float>(sliderVram.shadowArrayBytes)) / (1024.f * 1024.f) - atlasMB);
+			const float currentShadowMB = static_cast<float>(sliderVram.shadowArrayBytes) / (1024.f * 1024.f) + atlasMB;
 			const float projectedShadowMB = static_cast<float>(projectedBytes) / (1024.f * 1024.f);
 
 			ImGui::Text("%s", T(TKEY("projected_shadow_vram_label"), "Projected shadow VRAM :"));
@@ -1066,7 +1291,7 @@ namespace ShadowCasterManager
 			if (ImGui::IsItemHovered()) {
 				ImGui::SetTooltip(
 					T(TKEY("projected_shadow_vram_tooltip"),
-						"Stacked VRAM bar against DXGI budget.\n"
+						"Stacked VRAM bar against the graphics memory budget.\n"
 						"  Grey block    : process VRAM not counted as shadow array\n"
 						"  Blue block    : current kSHADOWMAPS allocation this session\n"
 						"  Outlined block: what the slider's value would allocate\n"
@@ -1076,7 +1301,7 @@ namespace ShadowCasterManager
 						"amount. Dark stripe inside the blue: shadow array would\n"
 						"SHRINK by that amount.\n"
 						"\n"
-						"Slots requested  : %d (sun lives in kSHADOWMAPS_ESRAM)\n"
+						"Slots requested  : %d (the sun uses its own shadow texture)\n"
 						"Per-slice cost   : %.2f MB  (%u x %u @ %u B/pixel)\n"
 						"Current array    : %.1f MB\n"
 						"Projected array  : %.1f MB\n"
@@ -1093,11 +1318,17 @@ namespace ShadowCasterManager
 					static_cast<float>(projectedFreeBytes) / (1024.f * 1024.f),
 					budgetMBf,
 					verdict.over ?
-						T(TKEY("projected_vram_verdict_red"),
-							"\nRED: this projection won't fit in the current VRAM budget.\n"
-							"The driver will page or refuse the allocation, leaving the\n"
-							"shadow array smaller than requested -- shadows will silently\n"
-							"break. Lower the slot count or reduce iShadowMapResolution.") :
+						(atlasSelected ?
+								T(TKEY("projected_vram_verdict_red_atlas"),
+									"\nRED: this projection won't fit in the current VRAM budget.\n"
+									"The driver will page or refuse the allocation and shadows\n"
+									"will silently break. Lower Atlas Resolution -- with the\n"
+									"atlas on, the light count no longer drives this.") :
+								T(TKEY("projected_vram_verdict_red"),
+									"\nRED: this projection won't fit in the current VRAM budget.\n"
+									"The driver will page or refuse the allocation, leaving the\n"
+									"shadow array smaller than requested -- shadows will silently\n"
+									"break. Lower the slot count or the game's shadow resolution.")) :
 					verdict.tight ?
 						T(TKEY("projected_vram_verdict_yellow"),
 							"\nYELLOW: tight headroom. A driver or OS spike could push\n"
@@ -1242,7 +1473,7 @@ namespace ShadowCasterManager
 											"Predictable; doesn't oscillate. Adjust the slider to trade FPS for shadow quality."));
 			else
 				ImGui::SetTooltip("%s", T(TKEY("budget_mode_formula_tooltip"),
-											"Formula: user-editable exprtk expression for per-frame budget.\n"
+											"Formula: user-editable math expression for per-frame budget.\n"
 											"Default expression matches Intellightent's original behaviour\n"
 											"(1 ms outdoors, 2 ms indoors). Edit the expression in the\n"
 											"Advanced section below.\n"
@@ -1310,7 +1541,7 @@ namespace ShadowCasterManager
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip(
 					T(TKEY("frame_diagnostic_tooltip"),
-						"Live values of the exprtk variables exposed to the Redraw\n"
+						"Live values of the formula variables exposed to the Redraw\n"
 						"Budget formula. `frametarget` is the rolling 90th-percentile\n"
 						"frame time, used as a self-measured ceiling -- not a vsync\n"
 						"target. State indicator:\n"
@@ -1321,17 +1552,11 @@ namespace ShadowCasterManager
 					kFrameHeadroomDeadZoneMs);
 		}
 		{
-			// Use ShadowLightCount as the slider upper bound when the scheduler hasn't
-			// run yet (s_totalShadowLightsThisFrame == 0 on the first menu open).
-			// Never clamp the stored setting here; the scheduling code already applies
-			// the live cap.  Clamping here caused MaxRedrawPerFrame to be permanently
-			// written to 1 on the first DrawSettings call before the hook fired.
-			// Track active shadow lights this frame, falling back to the
-			// configured ShadowLightCount when the scheduler hasn't run yet.
-			// No artificial 64 cap -- if the user dialled in 128 lights, the
-			// redraw cap should be allowed to follow.
-			int maxRedraws = s_totalShadowLightsThisFrame > 0 ? s_totalShadowLightsThisFrame : settings.ShadowLightCount;
-			maxRedraws = std::max(maxRedraws, Settings::kMinMaxRedrawPerFrame);
+			// Slider bound only, never clamp the stored setting: doing so wrote
+			// MaxRedrawPerFrame to 1 permanently on first DrawSettings, before
+			// the scheduler hook had run. Bound on the configured light count,
+			// not the per-frame active count, so the slider range doesn't jitter.
+			int maxRedraws = std::max(settings.ShadowLightCount, Settings::kMinMaxRedrawPerFrame);
 			ImGui::SliderInt(T(TKEY("max_redraws_per_frame"), "Max Redraws Per Frame"), &settings.MaxRedrawPerFrame,
 				Settings::kMinMaxRedrawPerFrame, maxRedraws);
 			if (ImGui::IsItemHovered())
@@ -1341,7 +1566,7 @@ namespace ShadowCasterManager
 						"Acts as a safety valve regardless of budget -- the budget controls time spent,\n"
 						"this controls count. The sun directional light always counts as one redraw.\n"
 						"Minimum is %d (lower values cause shadow flicker as redraw rotation outpaces TAA).\n"
-						"Upper bound tracks the number of active shadow lights this frame (%d)."),
+						"Upper bound matches the Shadow Light Count setting (%d)."),
 					Settings::kMinMaxRedrawPerFrame, maxRedraws);
 		}
 
@@ -1354,6 +1579,7 @@ namespace ShadowCasterManager
 											"normal (unshadowed) lights so they still contribute diffuse and specular\n"
 											"lighting at no shadow-map cost. Lights that fail culling are dropped entirely.\n"
 											"Requires a game restart to change."));
+			Util::UI::DrawSettingDiff(s_bootSnapshot, settings, &Settings::ConvertExcessToNormal);
 
 			// No texture-array cost -- converted lights flow through the cluster
 			// pipeline as ordinary non-shadow lights. Match the ShadowLightCount
@@ -1371,6 +1597,7 @@ namespace ShadowCasterManager
 											"Experimental: elevate high-scoring unshadowed lights to shadow casters\n"
 											"when shadow slots are available.\n"
 											"Requires a game restart to change."));
+			Util::UI::DrawSettingDiff(s_bootSnapshot, settings, &Settings::PromoteNormalToShadow);
 
 			ImGui::SeparatorText(T(TKEY("portal_strict_enforcement"), "Portal-Strict Enforcement"));
 			// Three-way toggle plus master row. SCM forces the engine's
@@ -1414,26 +1641,31 @@ namespace ShadowCasterManager
 			ImGui::Checkbox(T(TKEY("force_portal_strict_omni"), "Force Portal Strict on Omni Lights"), &settings.ForceEnablePortalStrictOmni);
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip("%s", T(TKEY("force_portal_strict_omni_tooltip"),
-											"Force-enable portal-strict on dual-paraboloid (omnidirectional)\n"
-											"shadow casters. Recommended on -- tightens portal-graph visibility\n"
-											"culling for full-sphere shadow lights without side effects.\n"
+											"Force room-visibility (portal-strict) culling on omnidirectional\n"
+											"(dual dome projection, aka dual-paraboloid) shadow casters.\n"
+											"Recommended on -- tightens room visibility culling for full-sphere\n"
+											"shadow lights without side effects.\n"
 											"Requires a game restart to change."));
+			Util::UI::DrawSettingDiff(s_bootSnapshot, settings, &Settings::ForceEnablePortalStrictOmni);
 			ImGui::Checkbox(T(TKEY("force_portal_strict_hemi"), "Force Portal Strict on Hemisphere Lights"), &settings.ForceEnablePortalStrictHemi);
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip("%s", T(TKEY("force_portal_strict_hemi_tooltip"),
-											"Force-enable portal-strict on single-paraboloid (hemisphere)\n"
-											"shadow casters. Recommended on -- behaves like the omni case\n"
-											"under portal culling.\n"
+											"Force room-visibility (portal-strict) culling on hemisphere\n"
+											"(single dome projection) shadow casters. Recommended on --\n"
+											"behaves like the omni case under portal culling.\n"
 											"Requires a game restart to change."));
+			Util::UI::DrawSettingDiff(s_bootSnapshot, settings, &Settings::ForceEnablePortalStrictHemi);
 			ImGui::Checkbox(T(TKEY("force_portal_strict_spot"), "Force Portal Strict on Spot Lights"), &settings.ForceEnablePortalStrictSpot);
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip("%s", T(TKEY("force_portal_strict_spot_tooltip"),
-											"Force-enable portal-strict on perspective (frustum/spot) shadow\n"
-											"casters. Off by default: the cone test rejects spots whose\n"
-											"origin sits behind a portal even when their beam sweeps into a\n"
-											"visible room, which drops culled-but-visible spots entirely.\n"
+											"Force room-visibility (portal-strict) culling on perspective\n"
+											"(frustum/spot) shadow casters. Off by default: the cone test\n"
+											"rejects spots whose origin sits behind a portal even when their\n"
+											"beam sweeps into a visible room, which drops culled-but-visible\n"
+											"spots entirely.\n"
 											"Enable only for debugging.\n"
 											"Requires a game restart to change."));
+			Util::UI::DrawSettingDiff(s_bootSnapshot, settings, &Settings::ForceEnablePortalStrictSpot);
 			ImGui::Unindent();
 
 			ImGui::TreePop();
@@ -1446,6 +1678,62 @@ namespace ShadowCasterManager
 				ImGui::SetTooltip("%s", T(TKEY("allow_immediate_draw_new_lights_tooltip"),
 											"Allow a light just added to the active pool to render its shadow map this frame.\n"
 											"Prevents a one-frame shadow-map gap when new lights enter view."));
+
+			// Atlas is boot-latched (the engine texture allocation depends on
+			// it), so show restart state against the captured boot value.
+			ImGui::BeginDisabled(s_installedShadowLightCount <= 4);
+			ImGui::Checkbox(T(TKEY("shadow_atlas"), "Shadow Atlas (Restart Required)"), &settings.ShadowAtlas);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", T(TKEY("shadow_atlas_tooltip"),
+											"Store all extra shadow maps in one shared texture instead of one\n"
+											"full-size map per light. Uses far less video memory with many\n"
+											"shadow-casting lights. Takes effect after restarting the game."));
+			if (settings.ShadowAtlas != s_bootAtlasEnabled)
+				Util::Text::RestartNeeded("%s", T("common.restart_required", "Restart required"));
+			if (settings.ShadowAtlas) {
+				// Preview the STORED value (an out-of-set ini value must not
+				// display as a preset it isn't); writes happen only on an
+				// explicit selection.
+				static constexpr uint32_t kAtlasResOptions[] = { 4096u, 8192u, kAtlasMaxResolution };
+				char atlasResPreview[16];
+				snprintf(atlasResPreview, sizeof(atlasResPreview), "%u", settings.AtlasResolution);
+				if (ImGui::BeginCombo(T(TKEY("atlas_resolution"), "Atlas Resolution (Restart Required)"), atlasResPreview)) {
+					for (uint32_t option : kAtlasResOptions) {
+						char label[16];
+						snprintf(label, sizeof(label), "%u", option);
+						if (ImGui::Selectable(label, settings.AtlasResolution == option))
+							settings.AtlasResolution = option;
+					}
+					ImGui::EndCombo();
+				}
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("%s", T(TKEY("atlas_resolution_tooltip"),
+												"Size of the shared shadow texture. Bigger sizes keep more lights\n"
+												"at full shadow detail but use more video memory. Takes effect\n"
+												"after restarting the game."));
+				// A full tile is one vanilla shadow map, so the atlas holds
+				// (dim / tile)^2 of them; lights past that are the ones the
+				// budget demotes. Surfacing it makes demotion legible instead
+				// of looking arbitrary, and shows what raising either setting
+				// actually trades.
+				if (const uint32_t tile = AtlasBaseTile(); tile > 0) {
+					const uint32_t perAxis = std::max(1u, AtlasDim() / tile);
+					ImGui::Text(T(TKEY("atlas_full_capacity"), "  Fits ~%u lights at full %u px detail"),
+						perAxis * perAxis, tile);
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("%s", T(TKEY("atlas_full_capacity_tooltip"),
+													"A full-detail tile is one vanilla shadow map, sized by the game's\n"
+													"own shadow resolution setting. Lights beyond this count still cast\n"
+													"shadows, at reduced detail, ordered by priority. Raise Atlas\n"
+													"Resolution to keep more at full detail; raising the game's shadow\n"
+													"resolution makes each tile sharper but fewer of them fit."));
+				}
+				// Compare through the same clamp+snap the atlas applies, or a
+				// snapped dimension shows a restart banner no restart clears.
+				if (AtlasActive() && AtlasSnapResolution(settings.AtlasResolution) != AtlasDim())
+					Util::Text::RestartNeeded("%s", T("common.restart_required", "Restart required"));
+			}
+			ImGui::EndDisabled();
 
 			ImGui::SeparatorText(T(TKEY("shadow_distance_header"), "Shadow Distance"));
 			if (auto* prefColl = RE::INIPrefSettingCollection::GetSingleton()) {
@@ -1527,19 +1815,22 @@ namespace ShadowCasterManager
 
 			// ---- Importance scheduling curve ------------------------------
 			ImGui::SeparatorText(T(TKEY("importance_scheduling"), "Importance Scheduling"));
+			DrawImpactCullControls(settings);
+
 			ImGui::SliderFloat(T(TKEY("max_interval_scale"), "Max Interval Scale"), &settings.ImportanceMaxScale, 0.5f, 5.0f, "%.2f");
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip("%s", T(TKEY("max_interval_scale_tooltip"),
-											"Interval multiplier applied to unimportant lights (importance = 0).\n"
+											"Interval multiplier for the LOWEST-priority lights.\n"
 											"Higher values defer dim or distant lights more aggressively.\n"
+											"Priority is the Score Formula's rank among active lights.\n"
 											"Default: 2.0"));
 			settings.ImportanceMaxScale = std::max(settings.ImportanceMaxScale, settings.ImportanceMinScale);
 
 			ImGui::SliderFloat(T(TKEY("min_interval_scale"), "Min Interval Scale"), &settings.ImportanceMinScale, 0.01f, 1.0f, "%.3f");
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip("%s", T(TKEY("min_interval_scale_tooltip"),
-											"Interval multiplier applied to high-importance lights (importance >= 1).\n"
-											"Lower values make bright/close lights update shadows more frequently.\n"
+											"Interval multiplier for the HIGHEST-priority lights.\n"
+											"Lower values make top-ranked lights update shadows more often.\n"
 											"The ratio Max/Min defines the scheduling dynamic range.\n"
 											"Default: 0.05  (40x range at default Max=2.0)"));
 			settings.ImportanceMinScale = std::min(settings.ImportanceMinScale, settings.ImportanceMaxScale);
@@ -1591,44 +1882,65 @@ namespace ShadowCasterManager
 					formulaBufsInited = true;
 				}
 
+				// Shipped defaults for the per-field Reset buttons, sourced from
+				// the Settings member initializers so they can't drift.
+				static const Settings kFormulaDefaults{};
+
 				// Helper lambda: validate, apply live, revert buffer on error.
 				auto applyFormula = [](const char* label, char* buf, size_t bufSize,
 										std::string& settingStr, char* errBuf, size_t errBufSize,
-										std::unique_ptr<FormulaHelper>& helper) {
+										std::unique_ptr<FormulaHelper>& helper,
+										const char* tooltip, const std::string& defaultStr) {
+					auto reparse = [&]() {
+						if (helper)
+							helper->Reparse(settingStr);
+						else {
+							helper = std::make_unique<FormulaHelper>();
+							helper->Parse(settingStr);
+						}
+					};
 					ImGui::InputText(label, buf, bufSize);
 					if (ImGui::IsItemDeactivatedAfterEdit()) {
 						std::string err;
 						if (FormulaHelper::Validate(buf, err)) {
 							settingStr = buf;
 							errBuf[0] = '\0';
-							if (helper)
-								helper->Reparse(settingStr);
-							else {
-								helper = std::make_unique<FormulaHelper>();
-								helper->Parse(settingStr);
-							}
+							reparse();
 						} else {
 							snprintf(errBuf, errBufSize, T(TKEY("parse_error"), "Parse error: %s"), err.c_str());
 							snprintf(buf, bufSize, "%s", settingStr.c_str());
 						}
 					}
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("%s", tooltip);
+					ImGui::SameLine();
+					ImGui::PushID(label);
+					if (ImGui::SmallButton(T(TKEY("formula_reset"), "Reset")) && settingStr != defaultStr) {
+						settingStr = defaultStr;
+						snprintf(buf, bufSize, "%s", settingStr.c_str());
+						errBuf[0] = '\0';
+						reparse();
+					}
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("%s", T(TKEY("formula_reset_tip"), "Restore the default expression."));
+					ImGui::PopID();
 					if (errBuf[0])
 						ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", errBuf);
 				};
 
 				applyFormula(T(TKEY("formula_score"), "Score"), scoreBuf, sizeof(scoreBuf),
-					settings.ScoreFormula, scoreErr, sizeof(scoreErr), s_formulaScore);
-				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip("%s", T(TKEY("formula_score_tooltip"), "Light priority scoring formula. Higher score = more likely to get a shadow slot."));
+					settings.ScoreFormula, scoreErr, sizeof(scoreErr), s_formulaScore,
+					T(TKEY("formula_score_tooltip"), "Light priority scoring formula. Higher score = more likely to get a shadow slot."),
+					kFormulaDefaults.ScoreFormula);
 
 				applyFormula(T(TKEY("formula_redraw_interval"), "Redraw Interval"), redrawIntervalBuf, sizeof(redrawIntervalBuf),
-					settings.RedrawIntervalFormula, redrawIntervalErr, sizeof(redrawIntervalErr), s_formulaRedrawInterval);
-				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip("%s", T(TKEY("formula_redraw_interval_tooltip"), "Per-light redraw interval formula. Higher = less frequent shadow map updates."));
+					settings.RedrawIntervalFormula, redrawIntervalErr, sizeof(redrawIntervalErr), s_formulaRedrawInterval,
+					T(TKEY("formula_redraw_interval_tooltip"), "Per-light redraw interval formula. Higher = less frequent shadow map updates."),
+					kFormulaDefaults.RedrawIntervalFormula);
 				applyFormula(T(TKEY("formula_redraw_budget"), "Redraw Budget"), redrawBudgetBuf, sizeof(redrawBudgetBuf),
-					settings.RedrawBudgetFormula, redrawBudgetErr, sizeof(redrawBudgetErr), s_formulaRedrawBudget);
-				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip("%s", T(TKEY("formula_redraw_budget_tooltip"), "Per-frame redraw budget formula (ms). Empty = use the Redraw Budget (ms) slider value."));
+					settings.RedrawBudgetFormula, redrawBudgetErr, sizeof(redrawBudgetErr), s_formulaRedrawBudget,
+					T(TKEY("formula_redraw_budget_tooltip"), "Per-frame redraw budget formula (ms). Empty = use the Redraw Budget (ms) slider value."),
+					kFormulaDefaults.RedrawBudgetFormula);
 
 				ImGui::TreePop();
 			}

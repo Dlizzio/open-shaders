@@ -1,8 +1,5 @@
 // ShadowEngineHooks.cpp
-// Every game-engine touchpoint of the shadow caster scheduler: the binary
-// hook thunks (depth-buffer redirection, slot-index overwrite, caster
-// selection/render detours, light conversion, stealth), the thin wrappers
-// around engine globals and functions, and Install().
+// Every game-engine touchpoint of the shadow caster scheduler: hook thunks, engine accessors, and Install().
 
 #include "../../Deferred.h"
 #include "../../Globals.h"
@@ -114,7 +111,15 @@ namespace ShadowCasterManager
 		int type = GetDepthTargetType();
 		int sub = GetDepthTargetSubIndex();
 
-		if (type == 4) {
+		if (type == 4 && AtlasActive()) {
+			// All type-4 rendering while SCM owns scheduling is point/spot
+			// cascades; they share the one atlas DSV and select their region
+			// via the tile viewport. During a static-cache bake pass the same
+			// tile region is redirected into the parallel static atlas instead.
+			ctx.Rbx = reinterpret_cast<DWORD64>(StaticPassRedirectActive() ?
+													StaticAtlasDSV(data->readOnlyDepth) :
+													AtlasDSV(data->readOnlyDepth));
+		} else if (type == 4 && globals::features::llf::normalDepthBuffer) {
 			ctx.Rbx = data->readOnlyDepth ? reinterpret_cast<DWORD64>(globals::features::llf::readOnlyDepthBuffer[sub]) : reinterpret_cast<DWORD64>(globals::features::llf::normalDepthBuffer[sub]);
 		} else {
 			ctx.Rbx = data->readOnlyDepth ? reinterpret_cast<DWORD64>(RE::BSGraphics::Renderer::GetSingleton()->GetDepthStencilData().depthStencils[type].readOnlyViews[sub]) : reinterpret_cast<DWORD64>(RE::BSGraphics::Renderer::GetSingleton()->GetDepthStencilData().depthStencils[type].views[sub]);
@@ -131,7 +136,11 @@ namespace ShadowCasterManager
 		int sub = GetDepthTargetSubIndex();
 
 		DWORD64 result;
-		if (type == 4) {
+		if (type == 4 && AtlasActive()) {
+			result = reinterpret_cast<DWORD64>(StaticPassRedirectActive() ?
+												   StaticAtlasDSV(readOnly) :
+												   AtlasDSV(readOnly));
+		} else if (type == 4 && globals::features::llf::normalDepthBuffer) {
 			result = readOnly ? reinterpret_cast<DWORD64>(globals::features::llf::readOnlyDepthBuffer[sub]) : reinterpret_cast<DWORD64>(globals::features::llf::normalDepthBuffer[sub]);
 		} else {
 			result = readOnly ? reinterpret_cast<DWORD64>(RE::BSGraphics::Renderer::GetSingleton()->GetDepthStencilData().depthStencils[type].readOnlyViews[sub]) : reinterpret_cast<DWORD64>(RE::BSGraphics::Renderer::GetSingleton()->GetDepthStencilData().depthStencils[type].views[sub]);
@@ -207,99 +216,69 @@ namespace ShadowCasterManager
 			ctx.Rsi = static_cast<DWORD64>(idx);
 	}
 
-	// -------------------------------------------------------------------------
-	// Screen-space shadow-mask pass wrapper
-	// -------------------------------------------------------------------------
-	//
-	// Vanilla wires Main::RenderShadowmasks (100422/107140) to call
-	// RenderShadowLightsWithUtilityShader (100423/107141) which:
-	//   - binds kSHADOW_MASK as RT, clears it,
-	//   - walks ssn->shadowLightsAccum[] and for each entry emits a full-screen
-	//     BSUtilityShader pass that samples the cascade / parabolic depth maps
-	//     and writes the mask.
-	//
-	// The inner loop indexes a hard-coded 4-entry table (DAT_141861380,
-	// per-slot m_AlphaBlendWriteMode) by BSShadowLight::maskIndex (offset 0x520
-	// SE/AE, 0x580 VR -- see CommonLib BSShadowLight.h). Vanilla only ever
-	// populates 4 kSHADOWMAPS slices so maskIndex stays in [0..3] and the index
-	// is safe.
-	//
-	// SLF's extended scheduler (EnableLight) assigns maskIndex up to
-	// ShadowLightCount-1. For any slot >= 4, the engine's
-	// MOV [R15 + RDX*0x4] OOB-reads garbage out of DAT_141861380 (next dword is
-	// 0x3F7FFFDE, a float bit pattern) which lands in
-	// g_RendererShadowState.m_AlphaBlendWriteMode -> undefined D3D state.
-	//
-	// Previous fix nopped out the CALL site entirely ("Hook_DisableColorMask",
-	// misnamed: the patched call IS RenderShadowLightsWithUtilityShader, NOT a
-	// color-mask call -- verified via Ghidra on SE 1.5.97 (+0x90 -> 0x1412e3b80)
-	// and SkyrimVR (+0x9E -> 0x141323740), matching RelocationID 100423/107141).
-	// That killed the screen-space mask globally, removing sun shadows and
-	// brightening the scene because deferred lighting sampled an undisturbed
-	// (effectively fully-lit) mask RT. RenderDoc evidence: empty "Shadowmasks"
-	// engine marker; cascade depth maps still rendered upstream but never
-	// consumed.
-	//
-	// This wrapper restores vanilla behaviour for the first 4 cascade slices
-	// and silently elides any extended-slot entries by writing a null sentinel
-	// into shadowLightsAccum at the cutoff. The engine's
-	// GetShadowCasterLightArrayEntry terminates when the slot pointer is null,
-	// so the loop stops cleanly without ever indexing DAT_141861380 for slot
-	// >= 4. The saved pointer is restored after the call.
-	//
-	// Under LIGHT_LIMIT_FIX only the mask's R channel (sun cascades) is read by
-	// the lighting shader (Lighting.hlsl:2516 shadowColor.x); G/B/A and any
-	// slot >= 4 are handled by LLF's cluster pipeline sampling kSHADOWMAPS
-	// directly. Restoring the mask therefore fixes the sun-shadow regression
-	// without interfering with extended shadow casters.
+	// The engine recomputes the shadow viewport per cascade recompute, so the
+	// tile scale is re-derived fresh each time from the bound slice, not cached.
+	struct Hook_UpdateViewPort
+	{
+		static void thunk(RE::BSGraphics::Renderer* a_renderer, std::uint32_t a_width, std::uint32_t a_height, bool a_disableScale)
+		{
+			func(a_renderer, a_width, a_height, a_disableScale);
+			const bool atlas = AtlasActive();
+			if (!atlas)
+				return;
+			auto* state = globals::game::shadowState;
+			if (!state || ShadowField(state, depthStencil) != RE::RENDER_TARGET_DEPTHSTENCIL::kSHADOWMAPS)
+				return;
+			const auto slice = static_cast<int32_t>(ShadowField(state, depthStencilSlice));
+			if (slice < s_lights.PointLightFirst() || slice >= s_lights.PointLightEnd(s_settings.ShadowLightCount))
+				return;
+			auto& viewPort = ShadowField(state, viewPort);
+			if (atlas) {
+				// The cascade's SRTM_CLEAR would wipe every other tile on the
+				// shared atlas; kill it before UpdateRenderTargetsAndStates
+				// issues it (D3D-level intercepts miss interposed contexts).
+				ShadowField(state, setDepthStencilMode) = RE::BSGraphics::SRTM_NO_CLEAR;
+				// Map the engine rect (fractions of the slice, encoding the
+				// paraboloid half) into the slot's atlas tile. Runs for EVERY
+				// class -- full-size lights need their tile offset too.
+				AtlasTileTexels tile{};
+				const float sliceDim = static_cast<float>(AtlasBaseTile());
+				if (GetSlotTileTexels(slice, tile) && sliceDim > 0.0f) {
+					const float inv = 1.0f / sliceDim;
+					viewPort.TopLeftX = tile.x + viewPort.TopLeftX * inv * tile.size;
+					viewPort.TopLeftY = tile.y + viewPort.TopLeftY * inv * tile.size;
+					viewPort.Width = viewPort.Width * inv * tile.size;
+					viewPort.Height = viewPort.Height * inv * tile.size;
+				} else {
+					// No tile behind this slice: collapse the viewport so a
+					// stray raster clips to nothing instead of stomping other
+					// lights' tiles in the shared atlas.
+					viewPort.Width = 0.0f;
+					viewPort.Height = 0.0f;
+				}
+				return;
+			}
+			const float scale = s_lights.Lights[slice].pendingScale;
+			if (scale <= 0.0f || scale >= 1.0f)
+				return;
+			viewPort.TopLeftX *= scale;
+			viewPort.TopLeftY *= scale;
+			viewPort.Width *= scale;
+			viewPort.Height *= scale;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// Vanilla's RenderShadowLightsWithUtilityShader indexes a hard-coded
+	// 4-entry table by BSShadowLight::maskIndex, which SLF's extended
+	// scheduler can push past 4 (OOB read) or leave uninitialized for
+	// focus-shadow lights -- skip it entirely rather than bound it.
+	// LIGHT_LIMIT_FIX doesn't consume the mask (shaders read
+	// GetDirectionalShadow / GetShadowLightShadow directly), so this loses
+	// no functionality. Do NOT call ReturnShadowmaps here: it clears
+	// shadowmapDescriptors and breaks the cascade matrix upload.
 	struct Hook_RenderShadowLightsWithUtilityShader
 	{
-		// Skip vanilla entirely.
-		//
-		// Vanilla's RenderShadowLightsWithUtilityShader iterates
-		// shadowLightsAccum and emits a full-screen pass per entry, indexing
-		// a 4-entry per-slot blend-mode table (DAT_141861380) by each light's
-		// maskIndex (BSShadowLight+0x520). Three failure modes were observed
-		// with SLF's scheduling:
-		//   1. Extended slots (maskIndex >= 4) OOB-read the table.
-		//   2. Vanilla advances `uVar7 += light->shadowMapCount` and reads
-		//      `shadowLightsAccum[uVar7]`; with a 3-cascade sun and
-		//      accum.size() < 4, the next read is past the array buffer.
-		//      Heap garbage that looks like a BSShadowLight* gets
-		//      dereferenced on [+0x520]. Verified crashes:
-		//        crash-2026-05-25-15-16-25.log RDX=0x3B1F3023
-		//        crash-2026-05-25-15-26-59.log RDX=0x3AA96F53
-		//        crash-2026-05-25-15-28-04.log RDX=0x3A4A3190
-		//        crash-2026-05-25-15-36-15.log RDX=0x3A4B11F5
-		//      all at 107141+0x319.
-		//   3. shadowLightsAccum entries created by GameSetupFocusShadowAccumulators() (engine
-		//      focus path) bypass SLF's maskIndex assignment in EnableLight,
-		//      so maskIndex stays at uninitialized memory.
-		//
-		// Trying to bound vanilla's iteration safely required defending all
-		// three modes (BSTArray padding, maskIndex clamp, slice-count cap)
-		// and one of them kept slipping through. The simplest robust answer
-		// is to skip vanilla entirely.
-		//
-		// Under LIGHT_LIMIT_FIX (this fork's shipping configuration) the
-		// screen-space mask is not on the sun-shadow consumer path:
-		//   - Lighting.hlsl, Particle.hlsl, and RunGrass.hlsl all sample
-		//     LightLimitFix::GetDirectionalShadow, which reads
-		//     DirectionalShadowCascades (t99) directly.
-		//   - The cluster loop uses LightLimitFix::GetShadowLightShadow,
-		//     which samples kSHADOWMAPS slices directly.
-		// shadowColor.x is consulted only as a fallback past the cascade
-		// range and during the !LIGHT_LIMIT_FIX vanilla path. Dropping the
-		// mask therefore loses no functionality LLF provides -- but every
-		// shader that reads shadowColor.x for directional shadow MUST route
-		// through GetDirectionalShadow under LIGHT_LIMIT_FIX, or it samples
-		// the stale/cleared mask and decouples from the sun shadow.
-		//
-		// Critically, unlike the previous Hook_DisableColorMask, we do NOT
-		// call ReturnShadowmaps. That side-effect cleared shadowmap-
-		// Descriptors and broke Deferred::CopyShadowLightData's cascade
-		// matrix upload, which is what produced the original "no sun
-		// shadow + scene brighter" symptom.
 		static void thunk()
 		{
 			(void)func;  // suppress "unused" warning while keeping the relocation
@@ -534,6 +513,20 @@ namespace ShadowCasterManager
 		using F = void (*)(RE::BSLight*);
 		static REL::Relocation<F> func{ REL::RelocationID(101298, 108285) };
 		func(light);
+	}
+
+	void GameAttachGeometry(RE::BSLight* light, RE::BSGeometry* geom)
+	{
+		using F = void (*)(RE::BSLight*, RE::BSGeometry*);
+		static REL::Relocation<F> func{ REL::RelocationID(101296, 108283) };
+		func(light, geom);
+	}
+
+	bool GameLightIsInRange(RE::BSLight* light, const RE::NiBound* bound, RE::NiLight* niLight, float scale)
+	{
+		using F = bool (*)(RE::BSLight*, const RE::NiBound*, RE::NiLight*, float);
+		static REL::Relocation<F> func{ REL::RelocationID(101299, 108286) };
+		return func(light, bound, niLight, scale);
 	}
 
 	static bool GameIsLightAffectingSurface(RE::BSLightingShaderProperty* p, RE::BSLight* light)
@@ -820,16 +813,9 @@ namespace ShadowCasterManager
 		ctx.Rax = static_cast<uint64_t>(added);
 	}
 
-	// =========================================================================
-	// Light conversion hooks
-	//
-	// BSShadowLight::IsShadowLight (VFT slot 3): returns false for lights in
-	// s_normalConvert so the engine treats them as normal (non-shadow) lights
-	// during the geometry-shader/stencil shadow-masking pass.
-	//
-	// RemoveLight / AddLight / SetLight hooks maintain s_normalConvert and
-	// s_shadowConvert so the lists stay consistent with scene changes.
-	// =========================================================================
+	// IsShadowLight returns false for s_normalConvert lights so the engine
+	// treats them as non-shadow; Add/Remove/SetLight below keep
+	// s_normalConvert/s_shadowConvert in sync with scene changes.
 
 	static bool Hook_IsShadowLight(RE::BSShadowLight* light)
 	{
@@ -861,15 +847,32 @@ namespace ShadowCasterManager
 		}
 	}
 
-	// Fires at start of ShadowSceneNode::ClearLightArrays (99704/106338), the engine's bulk
-	// shadow-light teardown -- the only signal for a wholesale free (it bypasses RemoveLight).
-	// Flag a session reset; the scheduler drains it next pass before our pointers go stale.
-	static void Hook_ClearLightArrays(CONTEXT& ctx)
+	// Detours the engine's bulk shadow-light teardown (bypasses RemoveLight):
+	// flags a session reset, then bounded-waits out any in-flight shadow render
+	// before letting the engine free -- freeing mid-render-walk zeroes nodes.
+	struct Hook_ClearLightArrays
 	{
-		auto* ssn = reinterpret_cast<RE::ShadowSceneNode*>(ctx.Rcx);
-		if (ssn == GetShadowSceneNode())
-			s_pendingSessionReset.store(true, std::memory_order_release);
-	}
+		static void thunk(RE::ShadowSceneNode* a_ssn, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
+		{
+			if (a_ssn == GetShadowSceneNode()) {
+				s_pendingSessionReset.store(true, std::memory_order_release);
+				s_teardownWaiting.store(true, std::memory_order_release);
+				const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+				while (s_shadowFlushReaders.load(std::memory_order_acquire) > 0) {
+					if (std::chrono::steady_clock::now() > deadline) {
+						logger::warn("[SCM] ClearLightArrays proceeding with a shadow render still in flight (reader wait timed out)");
+						break;
+					}
+					std::this_thread::yield();
+				}
+				func(a_ssn, a_2, a_3, a_4);
+				s_teardownWaiting.store(false, std::memory_order_release);
+				return;
+			}
+			func(a_ssn, a_2, a_3, a_4);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 
 	// Detours ShadowSceneNode::ResetScene (99741/106385) -- the portalGraph setter, called from
 	// ResetCellGrid on cell transitions. This is the coc-time nuller (not ClearSceneAndFog, which
@@ -899,6 +902,16 @@ namespace ShadowCasterManager
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+	// Fires at start of BSShadowLight::ctor (ID 100810/107594). No ctor writes
+	// BSLight::cullingProcess: recycled dirty pages leave dangling garbage that
+	// CTDs room culling or silently skips AccumulateLight rewiring. Zero it here
+	// ONLY -- nulling a live light's process is an instant CTD.
+	static void Hook_ShadowLightCtor(CONTEXT& ctx)
+	{
+		if (auto* light = reinterpret_cast<RE::BSShadowLight*>(ctx.Rcx))
+			light->cullingProcess = nullptr;
+	}
 
 	// Fires at start of ShadowSceneNode::AddLight (ID 99692/106326).
 	// Optionally promotes normal light to shadow light; always forces portal-strict.
@@ -1064,6 +1077,7 @@ namespace ShadowCasterManager
 			s_bootEnabled = settings.Enabled;
 			s_bootEnabledCaptured = true;
 		}
+		s_bootSnapshot.LatchIfNeeded(settings);
 
 		if (s_externalConflict)
 			return;
@@ -1074,7 +1088,17 @@ namespace ShadowCasterManager
 		}
 
 		bool extended = settings.ShadowLightCount > 4;
-		bool needExtraBuffers = settings.ShadowLightCount > 8;
+
+		// Atlas mode keeps the engine array at its vanilla slice count (the
+		// VRAM win); boot-latched because the allocation below cannot change
+		// at runtime.
+		s_bootAtlasEnabled = settings.ShadowAtlas && extended;
+		if (s_bootAtlasEnabled) {
+			s_requestedSlotCount = kVanillaShadowSliceCount;
+			logger::info("[SCM] Shadow atlas boot-enabled: engine kSHADOWMAPS stays at {} slices", kVanillaShadowSliceCount);
+		}
+
+		bool needExtraBuffers = !s_bootAtlasEnabled && settings.ShadowLightCount > kVanillaShadowSliceCount;
 
 		// ---- Extended depth buffer infrastructure -------------------------
 
@@ -1127,8 +1151,12 @@ namespace ShadowCasterManager
 				if (!SKSE::stl::install_context_hook(base + off, 8, Hook_SetupGameArray, 8))
 					logger::error("[SCM] Failed to install Hook_SetupGameArray");
 			}
+		}
 
-			// Depth-buffer selection at draw time.
+		// Depth-buffer selection at draw time. Also required in atlas mode
+		// (no extra buffers): the type-4 redirect is what routes point/spot
+		// cascades into the atlas DSV.
+		if (needExtraBuffers || s_bootAtlasEnabled) {
 			{
 				// SE 140D70444
 				static REL::RelocationID uid(75580, 77386);
@@ -1146,7 +1174,9 @@ namespace ShadowCasterManager
 				if (!SKSE::stl::install_context_hook(base + off, sz, Hook_SelectDepthBuffer2))
 					logger::error("[SCM] Failed to install Hook_SelectDepthBuffer2");
 			}
+		}
 
+		if (needExtraBuffers) {
 			// Release extended buffers at renderer shutdown.
 			// SE: ZeroDepthStencilData; AE/VR: Renderer::Shutdown and related dtor paths.
 			if (REL::Module::GetRuntime() != REL::Module::Runtime::AE) {
@@ -1194,6 +1224,12 @@ namespace ShadowCasterManager
 			if (!SKSE::stl::install_context_hook(base + off, 0x25, Hook_OverwriteShadowMapIndex))
 				logger::error("[SCM] Failed to install Hook_OverwriteShadowMapIndex");
 		}
+
+		// Variable-resolution tiles: shrink the shadow viewport right after the
+		// engine computes it. Installed whenever SCM is active; the thunk is a
+		// no-op unless a cascade armed s_pendingTileScale.
+		if (long rc = stl::detour_thunk<Hook_UpdateViewPort>(REL::RelocationID(75455, 77240)))
+			logger::error("[SCM] Failed to install Hook_UpdateViewPort ({})", rc);
 
 		// Suppress the engine's focus shadow path in extended mode (matches
 		// Intellightent's mitigation). In extended mode parabolic lights
@@ -1310,6 +1346,9 @@ namespace ShadowCasterManager
 		// cascade 0's shadowmapIndex to cascade 1, so teardown frees the right slot.
 		stl::write_vfunc<0x0A, Hook_ParabolicRender>(RE::VTABLE_BSShadowParabolicLight[0]);
 
+		// Contribution-cull point-light shadow casters (parabolic AppendVirtual).
+		InstallCasterCullHook();
+
 		{
 			// ShadowSceneNode::RemoveLight -- fires at +0x9 (SE: 6 bytes, AE: 5 bytes).
 			// Drains s_normalConvert / s_shadowConvert entries for the removed light.
@@ -1321,13 +1360,11 @@ namespace ShadowCasterManager
 		}
 
 		{
-			// ShadowSceneNode::ClearLightArrays -- bulk shadow-light teardown; hook the start to
-			// flag a session reset. Version-specific prologue: SE/VR steal 4 PUSHes (5 bytes); AE's
-			// 5th byte splits a SUB RSP, so steal through it (8 bytes).
-			static REL::RelocationID uid(99704, 106338);
-			int sz = REL::Relocate(5, 8, 5);
-			if (!SKSE::stl::install_context_hook(uid.address(), sz, Hook_ClearLightArrays, sz))
-				logger::error("[SCM] Failed to install Hook_ClearLightArrays");
+			// ShadowSceneNode::ClearLightArrays -- bulk shadow-light teardown.
+			// Full detour (not a prologue context hook): the thunk must
+			// bracket the engine's frees to wait out in-flight shadow renders.
+			if (long rc = stl::detour_thunk<Hook_ClearLightArrays>(REL::RelocationID(99704, 106338)))
+				logger::error("[SCM] Failed to install Hook_ClearLightArrays ({})", rc);
 		}
 
 		{
@@ -1344,6 +1381,15 @@ namespace ShadowCasterManager
 			// mid-call (crash#1 mid-function TOCTOU). Read side of the ResetScene lock.
 			if (long rc = stl::detour_thunk<Hook_AccumulateLight>(REL::RelocationID(99753, 106401)))
 				logger::error("[SCM] Hook_AccumulateLight detour FAILED (DetourTransactionCommit={})", rc);
+		}
+
+		{
+			// BSShadowLight::ctor -- at function start (5 bytes). Zeroes the
+			// never-initialized cullingProcess before the light exists to any
+			// other system.
+			static REL::RelocationID uid(100810, 107594);
+			if (!SKSE::stl::install_context_hook(uid.address(), 5, Hook_ShadowLightCtor, 5))
+				logger::error("[SCM] Failed to install Hook_ShadowLightCtor");
 		}
 
 		{

@@ -22,6 +22,7 @@
 #include "RE/S/ShadowSceneNode.h"
 
 #include "Features/LightLimitFix/ShadowCasterMath.h"
+#include "Utils/RestartSettings.h"
 
 struct ImVec4;
 
@@ -144,6 +145,12 @@ namespace ShadowCasterManager
 		kFormulaParam_LightImportance,      ///< contribution importance: lum(diffuse*fade) * max(att_cam, att_plr); set in interval loop only
 		kFormulaParam_LightIsSpot,          ///< 1 if light is a spot (BSShadowFrustumLight), 0 otherwise
 		kFormulaParam_LightSpotVisible,     ///< 1 if a spot's cone is plausibly visible to the camera (cone-aimed-at-frustum). Always 1 for non-spots so omni-only formulas aren't affected.
+		kFormulaParam_LightPlayerAttached,  ///< 1 if the light rides the player's scene graph (held torch, Candlelight)
+		kFormulaParam_LightCoverage,        ///< projected solid-angle proxy ((radius/viewZ)^2, camera-inside clamped)
+		kFormulaParam_LightScreenArea,      ///< viewport-clamped projected sphere area [0,1]; correct view-impact (behind-camera safe)
+		kFormulaParam_LightLum,             ///< Rec.709 luminance of diffuse x engine fade
+		kFormulaParam_LightAttCam,          ///< Skyrim falloff attenuation at the camera
+		kFormulaParam_LightAttPlayer,       ///< Skyrim falloff attenuation at the player
 
 		kFormulaParam_CameraX,
 		kFormulaParam_CameraY,
@@ -271,6 +278,19 @@ namespace ShadowCasterManager
 		/// owns a redraw budget, so the extra reach is bounded.
 		bool MatchShadowToLightFade = true;
 
+		/// Store point/spot shadows in one variable-tile atlas texture instead
+		/// of one full kSHADOWMAPS slice per light. VRAM becomes fixed
+		/// (AtlasResolution^2 at the engine's shadow format) regardless of
+		/// ShadowLightCount, and each light pays only its tile's fill cost.
+		/// Boot-latched: the engine texture-array allocation depends on it.
+		/// Requires extended mode and a driver that passes the ClearView
+		/// depth-rect probe (else the array path is used and a warning logged).
+		bool ShadowAtlas = true;
+
+		/// Atlas texture dimension in texels (square). Snapped down to a
+		/// buddy-aligned multiple of the quarter-tile size at creation.
+		std::uint32_t AtlasResolution = 8192;
+
 		/// Force-enable portal-strict on shadow casters as they're added by
 		/// the engine. Per-type because portal-strict on spotlights drops
 		/// culled-but-visible spots entirely, while on omnis/hemispheres it
@@ -290,13 +310,30 @@ namespace ShadowCasterManager
 		///   lightchosenlastframe, lightframessincerender, lightneverfades,
 		///   lightportalstrict, lightns, lightconverted, camerax/y/z,
 		///   isinterior, timeofday, lightisspot, lightspotvisible
-		/// Default-formula notes:
-		///   (1 + lightisspot * lightspotvisible) gives visible spots 2x,
-		///   omnis 1x. lightspotvisible=0 for spots pointing away from camera.
-		///   max(0, 1 - lightframessincerender / 8) * 0.4 is smooth temporal
-		///   stickiness; recently-rendered lights resist demotion across small
-		///   score perturbations, decaying to 0 over 8 frames since last redraw.
-		std::string ScoreFormula = "lightradius * lightintensity / (1 + ((1 - lightneverfades) * lightdistance) / 1000) * (1 + max(0, 1 - lightframessincerender / 8) * 0.4) * (1 + lightisspot * lightspotvisible)";
+		/// Industry-grounded (tiled/clustered-shadow importance): projected screen
+		/// area of the light's influence x its luminance, with temporal
+		/// stickiness. lightscreenarea is the correct view-impact term (counts
+		/// lights behind the camera whose shadows still reach the view, unlike
+		/// lightcoverage).
+		/// The attenuation floor keeps a light that strongly lights the camera or
+		/// the player even when its own screen footprint is small. Screen area
+		/// alone is measured from the camera, so in third person a lamp beside the
+		/// character -- where the player is actually looking -- scores near zero
+		/// and loses its shadow. Third-person engines bias importance toward the
+		/// hero for the same reason; RedrawIntervalFormula already does it via
+		/// min(lightdistance, playerlightdistance). Keep the camera term primary,
+		/// or a distant light filling the view gets starved instead.
+		/// Luminance is COMPRESSED to [0.5, 1] deliberately: it modulates within a
+		/// class band, it does not rank across them. Raw lightlum as a multiplier
+		/// lets a bright distant brazier (HDR intensity ~2) outscore a dim carried
+		/// torch by 4x and steal its tile, even though the torch encloses the
+		/// camera and scores a full 1.0 of screen area. Geometry decides the band;
+		/// intensity only orders within it. No carried-light special case is
+		/// needed once luminance cannot out-shout the projection.
+		/// max(0, 1 - lightframessincerender / 8) * 0.2 is smooth hysteresis:
+		/// recently-rendered lights resist demotion across small score
+		/// perturbations at the selection cutoff, decaying over 8 frames.
+		std::string ScoreFormula = "max(lightscreenarea, 0.3 * max(lightattcam, lightattplayer)) * (0.5 + 0.5 * min(lightlum, 2) / 2) * (1 + max(0, 1 - lightframessincerender / 8) * 0.2)";
 
 		/// Redraw interval formula (per light).  Higher = less frequent redraws.
 		/// Uses min(lightdistance, playerlightdistance) so that a light near the player
@@ -319,6 +356,24 @@ namespace ShadowCasterManager
 		/// budget). exprtk has no hysteresis state. Use static expressions.
 		std::string RedrawBudgetFormula = "1 + isinterior";
 
+		// --- Contribution-based caster culling ---
+
+		/// Cull a shadow caster from a light's shadow render when its screen size
+		/// from the CAMERA (caster world-bound radius / distance to the viewer) is
+		/// below this. Measured from the viewer, not the light, so a caster close
+		/// enough to fill the view is kept even if small, while a distant one in a
+		/// corner is dropped even if large -- matching what the player perceives.
+		/// Distant/peripheral casters produce tiny on-screen shadows that cost
+		/// draw-call submission for no visible result, so trimming them shrinks
+		/// the caster set and with it the per-light CPU cost. 0 disables.
+		float CasterCullAngularMin = 0.0f;
+		/// Light-level impact cull: a light whose on-screen relevance
+		/// (max of screen-area and camera/player attenuation) stays below this
+		/// converts to a non-shadow light (keeps diffuse, drops the shadow-map
+		/// redraw). 0 disables. Distinct from CasterCullAngularMin, which culls
+		/// casters WITHIN a light.
+		float ShadowImpactFloor = 0.0f;
+
 		// --- Importance scheduling curve ---
 
 		/// Interval multiplier applied to high-importance lights (importance >= 1).
@@ -330,6 +385,16 @@ namespace ShadowCasterManager
 		/// Higher values defer dim or distant lights more aggressively.
 		/// Default: 2.0.
 		float ImportanceMaxScale = 2.0f;
+	};
+
+	/// Superseded ScoreFormula defaults, kept verbatim so LoadSettings can
+	/// upgrade an untouched formula to the current default while leaving any
+	/// user-customized formula alone.
+	// The last released default; a persisted copy migrates to the current
+	// default. Intra-branch intermediate defaults are omitted -- no shipped
+	// build wrote them, so no user setting holds one.
+	inline constexpr const char* kLegacyScoreFormulas[] = {
+		"lightradius * lightintensity / (1 + ((1 - lightneverfades) * lightdistance) / 1000) * (1 + max(0, 1 - lightframessincerender / 8) * 0.4) * (1 + lightisspot * lightspotvisible)",
 	};
 
 	NLOHMANN_JSON_SERIALIZE_ENUM(BudgetModeEnum,
@@ -347,14 +412,30 @@ namespace ShadowCasterManager
 		ConvertExcessToNormal,
 		PromoteNormalToShadow,
 		MatchShadowToLightFade,
+		ShadowAtlas,
+		AtlasResolution,
 		ForceEnablePortalStrictOmni,
 		ForceEnablePortalStrictHemi,
 		ForceEnablePortalStrictSpot,
 		ScoreFormula,
 		RedrawIntervalFormula,
 		RedrawBudgetFormula,
+		CasterCullAngularMin,
+		ShadowImpactFloor,
 		ImportanceMinScale,
 		ImportanceMaxScale)
+
+	/// Restart-gated hook toggles: Install() applies them once at boot, so a
+	/// runtime edit only takes effect after a restart. Drives pending banners.
+	inline constexpr Util::Settings::RestartTable<Settings, 7> kRestartFields{ {
+		UTIL_RESTART_FIELD(Settings, ConvertExcessToNormal, "Convert Excess Lights to Normal"),
+		UTIL_RESTART_FIELD(Settings, PromoteNormalToShadow, "Promote Normal Lights to Shadow Casters"),
+		UTIL_RESTART_FIELD(Settings, ForceEnablePortalStrictOmni, "Force Portal Strict on Omni Lights"),
+		UTIL_RESTART_FIELD(Settings, ForceEnablePortalStrictHemi, "Force Portal Strict on Hemisphere Lights"),
+		UTIL_RESTART_FIELD(Settings, ForceEnablePortalStrictSpot, "Force Portal Strict on Spot Lights"),
+		UTIL_RESTART_FIELD(Settings, ShadowAtlas, "Shadow Atlas"),
+		UTIL_RESTART_FIELD(Settings, AtlasResolution, "Atlas Resolution"),
+	} };
 
 	// -------------------------------------------------------------------------
 	// Per-light schedule entry
@@ -379,6 +460,10 @@ namespace ShadowCasterManager
 		/// Used to prioritise redraws for lights that have moved significantly.
 		RE::NiPoint3 lastRenderedPos{ 0.0f, 0.0f, 0.0f };
 
+		/// Consecutive frames the budget has wanted a larger tile class.
+		/// Promotions apply only after the demand is stable (see scheduler).
+		uint16_t promoteStreak{ 0 };
+
 		/// Contribution-weighted importance score from the last scheduling frame.
 		/// importance = luminance(diffuse × fade) × attenuation²(viewer, radius)
 		/// where attenuation = max(1 − (dist/radius)², 0)  (Skyrim's quadratic falloff).
@@ -399,6 +484,39 @@ namespace ShadowCasterManager
 		/// so the cache key reflects what's *in the slot*, not what we observed.
 		std::uint64_t pendingGeomHash{ 0 };
 
+		/// ComputeShadowGeomHash() result cache; winners latch this value (via
+		/// pendingGeomHash) into lastGeomHash, so its staleness bound
+		/// (kGeomHashRehashInterval) is also lastGeomHash's bound.
+		std::uint64_t cachedPendingGeomHash{ 0 };
+		int32_t lastHashComputeFrame{ -1 };  ///< frame cachedPendingGeomHash was last (re)computed
+		uint32_t lastHashGeomListSize{ 0 };  ///< light->geomList.size() as of that recompute
+
+		/// Tile scale the slot content was actually rasterized at (fraction of
+		/// the kSHADOWMAPS slice, corner-anchored). Shaders must sample with
+		/// THIS value until the next redraw, regardless of the desired class.
+		float renderedScale{ 1.0f };
+
+		/// Tile scale the scheduler wants for the next redraw. A mismatch with
+		/// renderedScale invalidates the cached shadow map (forces a redraw).
+		/// Kept at min(desiredScale, budgetScale) so it is stable per frame;
+		/// flipping between the importance class and the capacity clamp would
+		/// defeat the cache check and redraw every frame.
+		float pendingScale{ 1.0f };
+
+		/// Importance-domain class (with promote/demote hysteresis) before the
+		/// atlas capacity clamp.
+		float desiredScale{ 1.0f };
+
+		/// Largest class the atlas rank budget affords this light; 1 outside
+		/// atlas mode.
+		float budgetScale{ 1.0f };
+
+		/// ScoreFormula value from the last scheduling frame: the single
+		/// priority that ordered selection, and therefore also orders the
+		/// atlas cell budget within a class band and drives the redraw
+		/// importance curve (as a percentile).
+		double lastScore{ 0.0 };
+
 		void Clear()
 		{
 			Light = nullptr;
@@ -408,6 +526,14 @@ namespace ShadowCasterManager
 			lastImportance = 0.0f;
 			lastGeomHash = 0;
 			pendingGeomHash = 0;
+			cachedPendingGeomHash = 0;
+			lastHashComputeFrame = -1;
+			lastHashGeomListSize = 0;
+			renderedScale = 1.0f;
+			pendingScale = 1.0f;
+			desiredScale = 1.0f;
+			budgetScale = 1.0f;
+			lastScore = 0.0;
 		}
 	};
 
@@ -464,6 +590,14 @@ namespace ShadowCasterManager
 		void BeginStep(int32_t step);
 		void EndStep(int32_t step, int32_t helperCounter);
 
+		/// Commits one measured render cost (µs) into the ring. Used by the
+		/// deferred GPU-timestamp path, which resolves several frames after
+		/// the render was issued.
+		void CommitCost(uint32_t costUs, int32_t helperCounter);
+
+		/// Microseconds since the matching BeginStep, without committing.
+		uint32_t ElapsedSinceBeginUs() const;
+
 		/// Returns true when the entry hasn't been updated in ~600 scheduler ticks.
 		bool IsExpired(int32_t helperCounter) const;
 
@@ -471,11 +605,28 @@ namespace ShadowCasterManager
 		int64_t _startTime{ 0 };
 	};
 
+	/// D3D11 timestamp machinery for per-light GPU render cost (defined in
+	/// ShadowBudget.cpp). Owned via pimpl so the public header stays free of
+	/// query plumbing.
+	struct BudgetGpuTimer;
+
 	struct BudgetTracker
 	{
+		BudgetTracker();
+		~BudgetTracker();
+
 		void Begin(int32_t step);
 		void BeginLight(RE::BSShadowLight* light, int32_t step);
 		void EndLight(RE::BSShadowLight* light, int32_t step);
+
+		/// Brackets the shadow render pass for GPU cost measurement (one
+		/// disjoint timestamp batch per frame). Step-1 BeginLight/EndLight
+		/// pairs inside the bracket are timed on the GPU timeline; results
+		/// commit asynchronously a few frames later. Falls back to the CPU
+		/// (QPC) timing when queries are unavailable or the interval was
+		/// disjoint. Render thread only.
+		void BeginRenderBatch();
+		void EndRenderBatch();
 
 		/// Returns estimated render cost (µs) for a light.
 		/// Falls back to the mean of all tracked lights for unseen lights.
@@ -487,8 +638,12 @@ namespace ShadowCasterManager
 	private:
 		int32_t _counter{ 0 };
 		std::unordered_map<uint64_t, std::unique_ptr<BudgetEntry>> _map;
+		std::unique_ptr<BudgetGpuTimer> _gpu;
 
 		void CleanupExpired();
+		void CommitResolved(uint64_t key, uint32_t costUs);
+
+		friend struct BudgetGpuTimer;
 	};
 
 	// -------------------------------------------------------------------------
@@ -500,6 +655,12 @@ namespace ShadowCasterManager
 		float range = 0.0f;      ///< Light range (world units) -- radius for point lights, cone distance for spots
 		bool valid = false;      ///< true when this slot was written this frame
 		uintptr_t lightKey = 0;  ///< Light object pointer (stable key for suppression)
+		/// Final uploaded ShadowParam.y: >0 valid radius, 0 safe-lit sentinel
+		/// (empty descriptors or missing atlas tile), <0 suppression sentinel.
+		float paramY = 0.0f;
+		/// Owner reference's display name (falls back to the light node's
+		/// scenegraph name, then form ID) so a table row identifies the light.
+		std::string name;
 	};
 
 	/// Resets slot metadata for a new frame.  Call at the start of CopyShadowLightData.
@@ -507,6 +668,18 @@ namespace ShadowCasterManager
 
 	/// Records metadata for one filled shadow slot.
 	void RecordSlot(uint32_t depthSlot, const ShadowSlotInfo& info);
+
+	/// Queues a one-shot disk dump of the shadow atlas depth texture (DDS)
+	/// plus a slot-manifest JSON to CommunityShaders/Captures, serviced by
+	/// the render thread's next shadow pass. Ground truth for tile contents
+	/// without a RenderDoc attach (which perturbs the pipeline enough to
+	/// hide some bugs). Thread-safe; no-op while the atlas is inactive.
+	void RequestAtlasDump();
+	/// Arms the multi-frame shadow recorder (frames clamped to [1,600]); with
+	/// a_slot >= 0 also records that light's visited caster set per pass mode
+	/// and, for frames <= 16, per-frame tile DDS dumps. One JSON under
+	/// CommunityShaders/Captures at completion.
+	void RequestShadowFrameRecord(uint32_t a_frames, int32_t a_slot);
 
 	/// Returns true if the light with this pointer key has been suppressed by the user.
 	/// Includes implicit suppression from solo mode (every key except the soloed one).
@@ -542,6 +715,62 @@ namespace ShadowCasterManager
 		int slotsInUse = 0;      ///< occupied shadow slots at pass end
 		/// Per non-chosen light: (light pointer, demotion-reason byte). Name via SchedReasonName().
 		std::vector<std::pair<uintptr_t, uint8_t>> demoted;
+
+		/// Per occupied point-light pool slot: tile classing and atlas
+		/// placement, for headless assertion of the variable-resolution path.
+		struct SlotState
+		{
+			int index = 0;  ///< pool slot (== kSHADOWMAPS slice / atlas slot key)
+			uintptr_t light = 0;
+			float importance = 0.0f;  ///< raw importance from the last scoring pass
+			double score = 0.0;       ///< unified priority (ScoreFormula) that ranked this light
+			float desiredScale = 1.0f;
+			float budgetScale = 1.0f;
+			float pendingScale = 1.0f;
+			float renderedScale = 1.0f;
+			uint32_t tileX = 0;  ///< atlas texels; tileSize 0 = no atlas tile
+			uint32_t tileY = 0;
+			uint32_t tileSize = 0;
+			bool tileContentValid = false;
+			// Read-side outcome, from the last upload's slot record: paramY is
+			// the decisive sentinel (>0 shadows, 0 forced fully lit, <0 forced
+			// dark); a healthy tile with paramY 0 means the descriptor/upload
+			// stage bailed (e.g. the promoted-light empty-descriptor family).
+			float uploadParamY = 0.0f;
+			float uploadRange = 0.0f;
+			bool uploadRecorded = false;  ///< slot record written this frame
+			bool suppressed = false;
+			bool promoted = false;  ///< light was promoted to shadow caster (s_shadowConvert)
+		};
+		std::vector<SlotState> slots;
+
+		// Atlas summary; all zero while the atlas is inactive.
+		uint32_t atlasDim = 0;
+		uint32_t atlasCapacityCells = 0;
+		float atlasOccupancy = 0.0f;
+		uint64_t atlasVramBytes = 0;
+		uint32_t atlasTileReallocs = 0;        ///< cumulative class-change reallocs (cache health)
+		uint32_t atlasOwnerInvalidations = 0;  ///< cumulative slot-reassignment content drops
+		uint32_t cpuAccumUsAvg = 0;            ///< CPU-only avg per Accumulate (cull walk + appends)
+		uint32_t cpuSubmitUsAvg = 0;           ///< CPU-only avg per Render (pass setup + submission)
+		uint32_t cpuEnableUsAvg = 0;           ///< CPU-only avg per EnableLight (setup + SafeEnableAndValidate)
+
+		// Budget-tracker aggregates (GPU timestamps): the REST perf A/B
+		// reads these instead of needing an external profiler attach.
+		int32_t avgLightCostUs = 0;       ///< mean measured GPU cost per caster
+		float avgRedrawsPerFrame = 0.0f;  ///< rolling mean of casters redrawn per frame
+
+		/// Cumulative StaticOnly re-bakes since load. A bake re-rasterizes a
+		/// light's whole static caster set into its cache tile, so differencing
+		/// this across a run measures what the static cache spends rebuilding
+		/// itself -- the cost its per-frame savings are netted against.
+		uint64_t staticBakesTotal = 0;
+
+		/// Redraws elided by the empty-dynamic sleep skip (a chosen light whose
+		/// valid static bake saw no movers): this pass, and cumulative since
+		/// load -- the direct measure of what the early-out saves.
+		int sleepSkips = 0;
+		uint64_t sleepSkipsTotal = 0;
 	};
 
 	/// Requests and returns the latest scheduling-diagnostics snapshot. Thread-safe
@@ -588,6 +817,18 @@ namespace ShadowCasterManager
 	/// visible in 3D against the rest of the scene.
 	uintptr_t GetHoveredLight();
 	void SetHoveredLight(uintptr_t lightKey);
+
+	/// Below-impact-floor light set (rebuilt per schedule): the cluster builder
+	/// magenta-tints these. The table's group-button hover populates it.
+	void ClearHighlight();
+	void AddHighlight(uintptr_t lightKey);
+	bool IsHighlighted(uintptr_t lightKey);
+
+	/// Lights the Light Impact Floor culled this frame; empty while the floor
+	/// is 0, so the UI group only lists lights actually being cut.
+	void ClearBelowFloor();
+	void AddBelowFloor(uintptr_t lightKey);
+	bool IsBelowFloor(uintptr_t lightKey);
 
 	/// Drops every override (suppress / pin shadow / pin convert / solo).
 	/// Useful when a debugging session has accumulated state and lights are
@@ -674,6 +915,13 @@ namespace ShadowCasterManager
 	/// shadowmapDescriptors[0].shadowmapIndex (the vanilla slice).
 	int32_t GetShadowSlot(RE::BSShadowLight* light);
 
+	/// Tile scale the kSHADOWMAPS slot content was last rasterized at.
+	/// Takes the pool slot GetShadowSlot returned
+	/// (pool index == texture slice for point lights); out-of-range slots
+	/// return 1.0. Consumed by the ShadowRenderer upload as ShadowParam.w so
+	/// sampling always matches the rasterized footprint.
+	float GetRenderedTileScale(int32_t poolSlot);
+
 	/// Visit every shadow light currently demoted to non-shadow rendering via
 	/// ConvertExcessToNormal.  These lights live in the engine's activeShadowLights
 	/// list (0x148) but are reported as non-shadow by Hook_IsShadowLight.  The
@@ -702,6 +950,11 @@ namespace ShadowCasterManager
 	/// Draw the ImGui settings panel for the shadow caster scheduler.
 	/// Call from LightLimitFix::DrawSettings().
 	void DrawSettings(Settings& settings);
+
+	/// Caster Cull + Light Impact Floor presets and their sliders. Shared by
+	/// DrawSettings' own Advanced panel and LightLimitFix::DrawVRPerformanceSettings
+	/// so both stay bound to the same settings and never drift out of sync.
+	void DrawImpactCullControls(Settings& settings);
 
 	/// Apply any Skyrim-side INI overrides SCM owns (currently just
 	/// iShadowMapResolution:Display) at LoadSettings time. The engine has

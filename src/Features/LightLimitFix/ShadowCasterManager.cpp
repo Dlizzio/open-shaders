@@ -84,7 +84,21 @@ namespace ShadowCasterManager
 
 	std::shared_mutex s_portalGraphMutex;
 
+	std::atomic<int> s_shadowFlushReaders{ 0 };
+	std::atomic<bool> s_teardownWaiting{ false };
+
 	std::unordered_set<uintptr_t> s_suppressedLights;
+
+	// Lights the hovered table group selects this frame; the cluster builder
+	// reads it to magenta-tint them. Rebuilt each schedule (render thread), read
+	// on the same thread -- same access pattern as s_suppressedLights. Any
+	// grouping (below-floor, converted, promoted, ...) populates this one set.
+	std::unordered_set<uintptr_t> s_highlightLights;
+
+	// Lights the Light Impact Floor actually culled this frame (empty while the
+	// floor is 0). Rebuilt each schedule on the render thread, read there by the
+	// table's "Low" group -- same access pattern as s_highlightLights.
+	std::unordered_set<uintptr_t> s_belowFloorLights;
 
 	std::unordered_set<uintptr_t> s_pinShadow;
 	std::unordered_set<uintptr_t> s_pinConvert;
@@ -272,6 +286,8 @@ namespace ShadowCasterManager
 	// to the new value and the !=-against-staged condition cleared.
 	bool s_bootEnabled = false;
 	bool s_bootEnabledCaptured = false;
+	bool s_bootAtlasEnabled = false;
+	Util::Settings::BootSnapshot<Settings> s_bootSnapshot{ kRestartFields };
 
 	void Update(const Settings& settings, RE::ShadowSceneNode* /*shadowSceneNode*/,
 		RE::NiCamera* /*worldCamera*/)
@@ -290,6 +306,12 @@ namespace ShadowCasterManager
 		Settings capped = settings;
 		if (s_installedShadowLightCount > 0)
 			capped.ShadowLightCount = std::min(settings.ShadowLightCount, s_installedShadowLightCount);
+
+		// Until the atlas resources exist (or if the probe failed), the
+		// vanilla 8-slice array is the only shadow storage; scheduling
+		// beyond it would index slices the engine never allocated.
+		if (s_bootAtlasEnabled && !AtlasActive())
+			capped.ShadowLightCount = std::min(capped.ShadowLightCount, kVanillaShadowSliceCount);
 
 		int newTotal = LightContainerSize(capped);
 		if (newTotal != s_lights.Size) {
@@ -323,11 +345,29 @@ namespace ShadowCasterManager
 		// "Off = stop converting" is the documented semantic; existing
 		// converted/promoted lights persist in their current form until
 		// the engine itself drops them at cell change.
+
+		// Reparse whenever the source string changes, regardless of writer;
+		// invalid formulas fail closed (keep the previous compiled expression).
+		auto reparseIfChanged = [](std::unique_ptr<FormulaHelper>& helper, const std::string& oldFormula,
+									const std::string& newFormula, const char* label) {
+			if (newFormula == oldFormula)
+				return;
+			auto candidate = std::make_unique<FormulaHelper>();
+			if (candidate->Parse(newFormula))
+				helper = std::move(candidate);
+			else
+				logger::error("[SCM] Failed to parse {} (external update); keeping previous formula", label);
+		};
+		reparseIfChanged(s_formulaScore, s_settings.ScoreFormula, capped.ScoreFormula, "ScoreFormula");
+		reparseIfChanged(s_formulaRedrawInterval, s_settings.RedrawIntervalFormula, capped.RedrawIntervalFormula, "RedrawIntervalFormula");
+		reparseIfChanged(s_formulaRedrawBudget, s_settings.RedrawBudgetFormula, capped.RedrawBudgetFormula, "RedrawBudgetFormula");
+
 		s_settings = capped;
 	}
 
 	void ResetSession()
 	{
+		FreeAllTiles();
 		// Wholesale drop of pointers the engine is about to free during
 		// a scene transition. Called from LightLimitFix::OnSceneTransitionReset
 		// on the render thread when the LoadingMenu opens. The per-frame reconciliation in
@@ -412,6 +452,17 @@ namespace ShadowCasterManager
 		if (s_lights.Sun && poolIdx == 0)
 			return -1;  // sun
 		return poolIdx;
+	}
+
+	float GetRenderedTileScale(int32_t poolSlot)
+	{
+		// Slot content stays at the scale it was last rasterized at, so the
+		// upload must keep advertising renderedScale even while the tiles
+		// setting is off or pendingScale differs -- until the redraws catch up,
+		// the slice really does hold a tile.
+		if (!s_lights.Lights || poolSlot < 0 || poolSlot >= s_lights.Size)
+			return 1.0f;
+		return s_lights.Lights[poolSlot].renderedScale;
 	}
 
 	void ForEachConvertedLight(const std::function<void(RE::BSShadowLight*)>& visitor)
@@ -512,6 +563,14 @@ namespace ShadowCasterManager
 
 	uintptr_t GetHoveredLight() { return s_hoverLightKey; }
 	void SetHoveredLight(uintptr_t lightKey) { s_hoverLightKey = lightKey; }
+
+	void ClearHighlight() { s_highlightLights.clear(); }
+	void AddHighlight(uintptr_t lightKey) { s_highlightLights.insert(lightKey); }
+	bool IsHighlighted(uintptr_t lightKey) { return s_highlightLights.count(lightKey) != 0; }
+
+	void ClearBelowFloor() { s_belowFloorLights.clear(); }
+	void AddBelowFloor(uintptr_t lightKey) { s_belowFloorLights.insert(lightKey); }
+	bool IsBelowFloor(uintptr_t lightKey) { return s_belowFloorLights.count(lightKey) != 0; }
 
 	void ClearAllOverrides()
 	{

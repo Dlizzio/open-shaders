@@ -1,9 +1,7 @@
 // ShadowScheduler.cpp
-// The shadow caster scheduling core: cached-shadow-map geometry hashing,
-// light enable/disable/convert transitions, the per-frame
-// ScheduleShadowCasters pass (replacing the engine's
-// CalculateActiveShadowCasterLights), and the render dispatch that redraws
-// only the scheduled lights.
+// The shadow caster scheduling core: geometry hashing, light transitions, ScheduleShadowCasters, and render dispatch.
+
+#include <fstream>
 
 #include "../../Deferred.h"
 #include "../../Globals.h"
@@ -61,7 +59,37 @@ namespace ShadowCasterManager
 	/// rendered"); HashCombine constants make a real-data 0 essentially
 	/// impossible.
 
-	static std::uint64_t ComputeShadowGeomHash(RE::BSShadowLight* light)
+	/// Folds everything about a light that changes the depths it rasterizes:
+	/// position, orientation, and radius. Shared by the redraw hash and the
+	/// static-cache hash -- if the two disagreed about what "the light moved"
+	/// means, the weaker one would keep serving a tile baked for a different
+	/// pose (a rotated spot, or a torch mid-flicker, shows another caster's
+	/// shadow and self-shadow acne).
+	/// posStep is caller-scaled to the tile class's world-units-per-texel;
+	/// floored at 1.0 so sub-texel motion never busts the cache.
+	static std::uint64_t FoldLightPose(std::uint64_t h, RE::NiLight* ni, float posStep)
+	{
+		const float kPosStep = std::max(posStep, 1.0f);
+		constexpr float kRotStep = 0.01f;
+		constexpr float kRadiusStep = 1.0f;
+
+		const auto& t = ni->world.translate;
+		h = HashCombineFloat(h, QuantizeFloat(t.x, kPosStep));
+		h = HashCombineFloat(h, QuantizeFloat(t.y, kPosStep));
+		h = HashCombineFloat(h, QuantizeFloat(t.z, kPosStep));
+		// Spot direction lives in the rotation matrix, so this covers a spot
+		// re-aiming without translating.
+		const auto& r = ni->world.rotate;
+		for (int i = 0; i < 3; ++i)
+			for (int j = 0; j < 3; ++j)
+				h = HashCombineFloat(h, QuantizeFloat(r.entry[i][j], kRotStep));
+		// NiPointLight uses .x. Fire flicker drives this, which rescales the
+		// projection every frame.
+		h = HashCombineFloat(h, QuantizeFloat(ni->GetLightRuntimeData().radius.x, kRadiusStep));
+		return h;
+	}
+
+	static std::uint64_t ComputeShadowGeomHash(RE::BSShadowLight* light, float posStep)
 	{
 		if (!light)
 			return 0;
@@ -69,32 +97,17 @@ namespace ShadowCasterManager
 		if (!ni)
 			return 0;
 		std::uint64_t h = 0x9e3779b97f4a7c15ull;  // arbitrary nonzero seed
+		// Coarse radius fold: a permanent radius change (scripted) must retire
+		// the baked depth + snapshot; 64-unit steps ignore flame flicker.
+		h = h * 31 + static_cast<std::uint64_t>(ni->GetLightRuntimeData().radius.x / 64.0f);
 
-		// Quantization thresholds: tuned to be one to two orders of
-		// magnitude below perceptible difference in the rendered shadow.
-		//   kPosStep   = 1.0 game unit (~1.4 cm world space; sub-texel
-		//                at typical 2048 shadow res * 500 unit light radius)
-		//   kRotStep   = 0.01 in matrix entries (~0.5 degrees)
-		//   kRadiusStep = 1.0 unit (well under any visible frustum
-		//                resize from torch pulse animations)
-		constexpr float kPosStep = 1.0f;
-		constexpr float kRotStep = 0.01f;
+		h = FoldLightPose(h, ni, posStep);
+
+		// Caster set + each caster's worldBound (engine-updated). Same steps
+		// the pose fold uses, so caster motion and light motion agree on what
+		// counts as "moved".
+		const float kPosStep = std::max(posStep, 1.0f);
 		constexpr float kRadiusStep = 1.0f;
-
-		// Light pose
-		const auto& t = ni->world.translate;
-		h = HashCombineFloat(h, QuantizeFloat(t.x, kPosStep));
-		h = HashCombineFloat(h, QuantizeFloat(t.y, kPosStep));
-		h = HashCombineFloat(h, QuantizeFloat(t.z, kPosStep));
-		const auto& r = ni->world.rotate;
-		for (int i = 0; i < 3; ++i)
-			for (int j = 0; j < 3; ++j)
-				h = HashCombineFloat(h, QuantizeFloat(r.entry[i][j], kRotStep));
-		// Light radius (NiPointLight uses .x; spotlights use direction in
-		// rotation matrix already hashed above).
-		const auto& rtd = ni->GetLightRuntimeData();
-		h = HashCombineFloat(h, QuantizeFloat(rtd.radius.x, kRadiusStep));
-		// Caster set + each caster's worldBound (engine-updated).
 		for (auto& nip : light->geomList) {
 			auto* ts = nip.get();
 			if (!ts)
@@ -108,7 +121,649 @@ namespace ShadowCasterManager
 			h = HashCombineFloat(h, QuantizeFloat(wb.center.z, kPosStep));
 			h = HashCombineFloat(h, QuantizeFloat(wb.radius, kRadiusStep));
 		}
+
+		// Player-only dynamic-caster proxy: NPCs that cast in this light are
+		// already in geomList above (folded via worldBound), so they refresh it
+		// as they move. The player's own geometry is reliably NOT in geomList at
+		// scheduling time, so a stationary light the player walks through would
+		// hash constant and get the "unchanged -> skip redraw" penalty, freezing
+		// the player's shadow. Fold only the player when enclosed -- folding all
+		// actors per light instead saturates the redraw budget and starves
+		// distant lights into empty tiles.
+		if (auto* plr = RE::PlayerCharacter::GetSingleton()) {
+			const auto pp = plr->GetPosition();
+			const auto& lp = ni->world.translate;
+			const float dx = pp.x - lp.x, dy = pp.y - lp.y, dz = pp.z - lp.z;
+			const float r = ni->GetLightRuntimeData().radius.x;
+			if (dx * dx + dy * dy + dz * dz < r * r) {
+				const float actorStep = std::min(kPosStep, 8.0f);
+				h = HashCombineFloat(h, QuantizeFloat(pp.x, actorStep));
+				h = HashCombineFloat(h, QuantizeFloat(pp.y, actorStep));
+				h = HashCombineFloat(h, QuantizeFloat(pp.z, actorStep));
+			}
+		}
 		return h;
+	}
+
+	// =========================================================================
+	// Contribution-based caster culling (experimental)
+	//
+	// A point light's shadow render submits one draw batch per visible caster;
+	// small or distant casters produce sub-pixel shadows that cost CPU
+	// submission for no visible result. The engine's parabolic (point-light)
+	// culling registers each visible caster through BSCullingProcess::
+	// AppendVirtual (vtable slot 0x18). We hook that slot on ONLY the parabolic
+	// vtable -- so it fires exclusively for point-light shadow culling, never
+	// the sun, spots, or main scene -- and skip the append for a caster whose
+	// angular half-size from the light (bound radius / distance) is below
+	// CasterCullAngularMin. s_currentCullLight identifies the light being
+	// accumulated (set around EnableLight's Accumulate call, same render
+	// thread), so the cost metric uses the VR-validated BSShadowLight position
+	// rather than the culling process's internal members.
+	// =========================================================================
+
+	/// Casters culled last frame across all lights (Tracy plot for A/B).
+	std::atomic<uint32_t> s_casterCullCount{ 0 };
+
+	/// Appends dropped because the culling process's free pool was near
+	/// exhaustion (see the guard in Hook_ParabolicCullAppend).
+	std::atomic<uint32_t> s_cullPoolDropCount{ 0 };
+
+	/// The shadow light currently being accumulated; only non-null across an
+	/// EnableLight Accumulate call, read synchronously by the AppendVirtual hook.
+	std::atomic<RE::BSShadowLight*> s_currentCullLight{ nullptr };
+
+	// True while accumulating a light whose geomList is EMPTY: the engine only
+	// attaches geometry to lights once per geometry (AttachNearbyLights sets
+	// kRenderUse and never revisits), so a light created after the scene
+	// attached -- e.g. every light of an in-game same-cell load -- never
+	// receives geometry and renders an empty shadow forever. The append hook
+	// rebuilds the list from the cull walk via the engine's own AttachGeometry.
+	std::atomic<bool> s_accumRebuildAttach{ false };
+
+	// Geometry already re-attached in the current heal walk (render thread).
+	std::unordered_set<const RE::BSGeometry*> s_healAttached;
+
+	// =========================================================================
+	// Multi-frame diagnostic recorder (devbench capture kind=shadowmaps with
+	// frames=N[, slot=S]). Per shadow pass: numeric per-slot state; with a
+	// target slot also that light's visited caster set per pass mode, so a
+	// frozen-scene static/dynamic split is checkable against the unsplit set
+	// (split valid <=> visited(All) == union of static and dynamic, disjoint). One JSON
+	// under Captures/ at completion; zero cost while disarmed.
+	// =========================================================================
+	struct RecCaster
+	{
+		const void* geom;
+		std::string name;
+		bool dynamic;
+		int mode;  ///< CasterPass value (enum defined below; int keeps this decl order-free)
+	};
+	struct RecSlot
+	{
+		int32_t slot;
+		const void* light;
+		uint32_t tx, ty, ts;
+		bool valid, staticValid, redrew;
+		float pending, rendered;
+	};
+	struct RecFrame
+	{
+		uint32_t frame, reallocs, ownerInv;
+		std::vector<RecSlot> slots;
+		std::vector<RecCaster> casters;
+	};
+	std::vector<RecFrame> s_recFrames;
+	std::vector<RecCaster> s_recCasters;  // filled by the append hook during accumulate
+	std::atomic<int32_t> s_recLeft{ 0 };
+	std::atomic<int32_t> s_recTargetSlot{ -1 };
+	bool s_recPixels = false;
+	// Arm via atomics only: the devbench thread must not touch the vectors
+	// the render thread owns. frames is the trigger; store slot first.
+	std::atomic<uint32_t> s_recRequestFrames{ 0 };
+	std::atomic<int32_t> s_recRequestSlot{ -1 };
+
+	void ServiceShadowFrameRecord()
+	{
+		if (const uint32_t req = s_recRequestFrames.exchange(0, std::memory_order_acq_rel); req != 0) {
+			s_recFrames.clear();
+			s_recCasters.clear();
+			s_recTargetSlot.store(s_recRequestSlot.load(std::memory_order_relaxed), std::memory_order_relaxed);
+			s_recPixels = s_recTargetSlot.load(std::memory_order_relaxed) >= 0 && req <= 16u;
+			s_recFrames.reserve(req);
+			s_recLeft.store(static_cast<int32_t>(req), std::memory_order_relaxed);
+		}
+		if (s_recLeft.load(std::memory_order_relaxed) <= 0)
+			return;
+		RecFrame rec{};
+		rec.frame = globals::state ? globals::state->frameCountAtomic.load(std::memory_order_relaxed) : 0u;
+		const auto stats = GetAtlasClearStats();
+		rec.reallocs = stats.tileReallocs;
+		rec.ownerInv = stats.ownerInvalidations;
+		for (int32_t i = 0; i < s_lights.Size; i++) {
+			const auto& e = s_lights.Lights[i];
+			if (!e.Light)
+				continue;
+			AtlasTileTexels t{};
+			const bool hasTile = GetSlotTileTexels(i, t);
+			uint64_t staticHash = 0;
+			bool staticValid = false;
+			GetSlotStaticState(i, staticHash, staticValid);
+			rec.slots.push_back({ i, e.Light, hasTile ? t.x : 0u, hasTile ? t.y : 0u,
+				hasTile ? t.size : 0u, hasTile && t.contentValid, staticValid,
+				e.RedrawFrame, e.pendingScale, e.renderedScale });
+		}
+		rec.casters = std::move(s_recCasters);
+		s_recCasters.clear();
+		const int32_t target = s_recTargetSlot.load(std::memory_order_relaxed);
+		if (s_recPixels && target >= 0)
+			DumpSlotTileRegion(target, rec.frame);
+		s_recFrames.push_back(std::move(rec));
+		if (s_recLeft.fetch_sub(1, std::memory_order_relaxed) != 1)
+			return;
+
+		std::filesystem::path dir = "Data\\SKSE\\Plugins\\CommunityShaders\\Captures";
+		std::error_code ec;
+		std::filesystem::create_directories(dir, ec);
+		const auto path = dir / std::format("scm_frames_{}.json", rec.frame);
+		std::ofstream out(path);
+		out << "{\n\"frames\": [\n";
+		for (size_t f = 0; f < s_recFrames.size(); f++) {
+			const auto& fr = s_recFrames[f];
+			out << (f ? ",\n" : "") << "{\"frame\":" << fr.frame << ",\"reallocs\":" << fr.reallocs
+				<< ",\"ownerInv\":" << fr.ownerInv << ",\"slots\":[";
+			for (size_t s = 0; s < fr.slots.size(); s++) {
+				const auto& r = fr.slots[s];
+				out << (s ? "," : "") << "{\"i\":" << r.slot << ",\"light\":\"" << r.light
+					<< "\",\"tx\":" << r.tx << ",\"ty\":" << r.ty << ",\"ts\":" << r.ts
+					<< ",\"valid\":" << (r.valid ? "true" : "false")
+					<< ",\"staticValid\":" << (r.staticValid ? "true" : "false")
+					<< ",\"redrew\":" << (r.redrew ? "true" : "false")
+					<< ",\"pending\":" << r.pending << ",\"rendered\":" << r.rendered << "}";
+			}
+			out << "],\"casters\":[";
+			for (size_t c = 0; c < fr.casters.size(); c++) {
+				const auto& k = fr.casters[c];
+				std::string nm = k.name;
+				std::erase_if(nm, [](char ch) { return ch == '"' || ch == '\\'; });
+				out << (c ? "," : "") << "{\"geom\":\"" << k.geom << "\",\"name\":\"" << nm
+					<< "\",\"dynamic\":" << (k.dynamic ? "true" : "false") << ",\"mode\":" << k.mode << "}";
+			}
+			out << "]}";
+		}
+		out << "\n]\n}\n";
+		logger::info("[SCM] Frame record written: {} ({} frames)", path.string(), s_recFrames.size());
+		s_recFrames.clear();
+	}
+
+	void RequestShadowFrameRecord(uint32_t a_frames, int32_t a_slot)
+	{
+		s_recRequestSlot.store(a_slot, std::memory_order_relaxed);
+		s_recRequestFrames.store(std::clamp(a_frames, 1u, 600u), std::memory_order_release);
+	}
+
+	/// Consecutive frames a light failed UpdateCamera (exit hysteresis at the
+	/// validation gate). Render thread only; keys are never dereferenced, so a
+	/// dead light's stale entry is harmless until the size prune.
+	std::unordered_map<RE::BSShadowLight*, uint32_t> s_invalidStreak;
+
+	// CPU-only meters (steady_clock). The budget tracker's per-light cost is a
+	// GPU timestamp interval; these answer the walk-vs-submission CPU question
+	// it cannot. Accum = the engine Accumulate (cull walk + appends);
+	// Submit = Render() (pass setup + draw submission).
+	std::atomic<uint64_t> s_cpuAccumUs{ 0 };
+	std::atomic<uint64_t> s_cpuSubmitUs{ 0 };
+	std::atomic<uint32_t> s_cpuAccumN{ 0 };
+	std::atomic<uint32_t> s_cpuSubmitN{ 0 };
+	// EnableLight's own cost (setup + accumulate), isolated from Render's
+	// GPU-submit cost above -- diagnostic for array-vs-atlas CPU comparisons.
+	std::atomic<uint64_t> s_cpuEnableUs{ 0 };
+	std::atomic<uint32_t> s_cpuEnableN{ 0 };
+
+	template <class Fn>
+	static uint64_t TimeUs(Fn&& fn)
+	{
+		const auto t0 = std::chrono::steady_clock::now();
+		fn();
+		return static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count());
+	}
+
+	/// Frame + slot of each light's most recent Accumulate (render thread only).
+	/// A second Accumulate for one light in a frame re-registers its casters into
+	/// the still-undrawn pass group, and RegisterPassSorted's insert of an
+	/// already-linked pass closes passGroupNext into a ring the engine's
+	/// RenderBatches loop never exits. Used to dedup, not just detect.
+	std::unordered_map<RE::BSShadowLight*, std::pair<uint32_t, uint32_t>> s_lightAccumFrame;
+
+	/// Camera world position captured when the current light's accumulate begins.
+	/// The contribution cull measures each caster's size from HERE (the viewer),
+	/// not from the light: a caster's on-screen shadow footprint -- how much of
+	/// the view it occupies -- is what the player perceives. Set on the same
+	/// render thread just before s_currentCullLight, so the hook reads it safely.
+	RE::NiPoint3 s_cullCameraPos{};
+
+	// -------------------------------------------------------------------------
+	// Static/dynamic split caching -- caster classification + append filter
+	//
+	// The parabolic AppendVirtual hook decides which casters enter a light's
+	// shadow render: fewer appends -> fewer draw batches -> less CPU (the same
+	// mechanism contribution culling uses). s_cullPassMode picks the subset the
+	// hook keeps for the light's single accumulate this frame: StaticOnly on a
+	// rare rebake of the parallel static atlas, DynamicOnly (movers only) the
+	// rest of the time. The frame-flow that sets the mode is documented at
+	// SplitState below.
+	// -------------------------------------------------------------------------
+	enum class CasterPass : int
+	{
+		All = 0,         ///< keep every caster (normal / measurement)
+		StaticOnly = 1,  ///< keep only pose-stable casters (build static cache)
+		DynamicOnly = 2  ///< keep only moving casters (composite over cache)
+	};
+	std::atomic<int> s_cullPassMode{ static_cast<int>(CasterPass::All) };
+
+	/// Static/dynamic caster draws classified last frame (Tracy plots for A/B).
+	std::atomic<uint32_t> s_staticCasterDraws{ 0 };
+	std::atomic<uint32_t> s_dynamicCasterDraws{ 0 };
+
+	/// StaticOnly re-bakes issued this frame. A bake re-rasterizes a light's
+	/// whole static caster set into its cache tile, so this is the cost the
+	/// cache trades against: sustained non-zero means the static set keeps
+	/// churning and the cache is paying for itself repeatedly.
+	std::atomic<uint32_t> s_staticBakeCount{ 0 };
+	/// Cumulative bakes since load, published in the snapshot so a headless A/B
+	/// can difference it across a run without attaching a profiler.
+	std::atomic<uint64_t> s_staticBakeTotal{ 0 };
+
+	// Per-caster movement history. A caster is dynamic while it moved within the
+	// last stability window; once stable that long it classifies static (baked
+	// into the cache). The stability window lets a caster that just stopped keep
+	// rendering in the dynamic pass until the static cache rebuild absorbs it, so
+	// its shadow never blinks out mid-transition.
+	// Single-threaded: the hook and the per-frame epoch bump both run on the
+	// shadow render thread within ScheduleShadowCasters.
+	constexpr int kStaticStabilityFrames = 8;
+	// Joining or leaving the static set changes the static hash and forces a
+	// full StaticOnly re-bake of every tile that sees the caster. Leaving must
+	// stay immediate (a baked tile of a caster that moved is stale), so damp the
+	// churn on the rejoin side: each oscillation doubles how long the caster must
+	// hold still before it is re-admitted, up to this multiple of the base window.
+	// An NPC that fidgets every second then stays in the cheap dynamic pass
+	// instead of re-baking the cache each time it pauses; furniture still
+	// promotes on the base window.
+	constexpr int kStaticPromoteBackoffMax = 8;  // 8 * 8 = 64 frames, ~1s at 60fps
+	// Bounds framesSinceMove; must clear the longest decay threshold below.
+	constexpr int kStaticFramesCap = kStaticStabilityFrames * kStaticPromoteBackoffMax * 4;
+	// Settled casters re-verify worldBound only every N epochs, not every
+	// visit; kept well inside kSleepRedrawIntervalFrames (45) so a missed
+	// move is still caught before that existing tolerance would hide it.
+	constexpr int kSettledRecheckFrames = 16;
+	constexpr int kSettledAtFactor = 4;  // matches the promoteAt * 4 backoff-reset below
+	struct CasterMobility
+	{
+		int lastEpoch = -1;
+		int lastVerifyEpoch = -1;  ///< epoch of last full quantize-and-compare (not skip-stamped)
+		int framesSinceMove = 0;
+		int promoteBackoff = 1;  ///< multiplies the promote window; grows per oscillation
+		float cx = 0.0f, cy = 0.0f, cz = 0.0f, cr = 0.0f;
+		/// Cached static-hash contribution (identity + quantized worldBound);
+		/// valid while the quantized bound is unchanged, i.e. until "moved".
+		uint64_t foldHash = 0;
+		bool foldHashValid = false;
+		bool dynamic = true;
+	};
+	// Open-addressing map: probed once per appended caster by the cull-walk
+	// hook, so lookup cost lands directly on EnableLight's accumulate time.
+	ankerl::unordered_dense::map<RE::BSGeometry*, CasterMobility> s_casterMobility;
+	int s_casterClassEpoch{ 0 };
+
+	/// Classifies a caster static vs dynamic from its quantized worldBound
+	/// movement, memoized once per frame (a caster shared across lights, or
+	/// revisited across passes, classifies identically all frame). 1-unit
+	/// quantization matches the redraw hash so "moved" means "shadow changed".
+	/// Classification record for a non-skinned caster (skinned geometry never
+	/// reaches the map -- see IsCasterDynamic).
+	static CasterMobility& ClassifyCaster(RE::BSGeometry& geom)
+	{
+		auto [it, inserted] = s_casterMobility.try_emplace(&geom);
+		auto& r = it->second;
+		if (r.lastEpoch == s_casterClassEpoch)
+			return r;  // already classified this frame
+
+		// Settled fast path: trust the cached classification instead of
+		// re-quantizing worldBound. A move mid-window is still caught at the
+		// next checkpoint; the mismatchStreak/rebake departure path is unchanged.
+		const int settledAt = kStaticStabilityFrames * r.promoteBackoff * kSettledAtFactor;
+		if (!inserted && !r.dynamic && r.framesSinceMove >= settledAt &&
+			s_casterClassEpoch - r.lastVerifyEpoch < kSettledRecheckFrames) {
+			r.lastEpoch = s_casterClassEpoch;  // keep same-frame memo + prune liveness
+			return r;
+		}
+
+		const auto& wb = geom.worldBound;
+		const float cx = std::round(wb.center.x), cy = std::round(wb.center.y),
+					cz = std::round(wb.center.z), cr = std::round(wb.radius);
+		const bool moved = inserted || cx != r.cx || cy != r.cy || cz != r.cz || cr != r.cr;
+		// Settled casters verify sparsely, so framesSinceMove must advance by
+		// the elapsed epoch count to keep real-time semantics.
+		const int elapsed = r.lastVerifyEpoch < 0 ? 1 : std::max(1, s_casterClassEpoch - r.lastVerifyEpoch);
+		if (moved) {
+			// Leaving the static set is an oscillation: make the caster earn its
+			// way back so a caster that keeps pausing can't re-bake the cache on
+			// every pause. A first sighting is not an oscillation.
+			if (!r.dynamic && !inserted)
+				r.promoteBackoff = std::min(r.promoteBackoff * 2, kStaticPromoteBackoffMax);
+			r.framesSinceMove = 0;
+			r.foldHashValid = false;  // quantized bound changed
+		} else {
+			r.framesSinceMove = std::min(r.framesSinceMove + elapsed, kStaticFramesCap);
+		}
+		r.cx = cx;
+		r.cy = cy;
+		r.cz = cz;
+		r.cr = cr;
+		r.lastEpoch = s_casterClassEpoch;
+		r.lastVerifyEpoch = s_casterClassEpoch;
+		const int promoteAt = kStaticStabilityFrames * r.promoteBackoff;
+		r.dynamic = r.framesSinceMove < promoteAt;
+		// Held still far past its (backed-off) window: it has settled rather than
+		// oscillating, so restore the base window for its next move.
+		if (!r.dynamic && r.framesSinceMove >= promoteAt * kSettledAtFactor)
+			r.promoteBackoff = 1;
+		return r;
+	}
+
+	static bool IsCasterDynamic(RE::BSGeometry& geom)
+	{
+		// Skinned = actor/creature: never let the movement heuristic bake it
+		// static, or its silhouette ghosts once it walks off a bake-starved cell.
+		if (geom.GetGeometryRuntimeData().skinInstance)
+			return true;
+		return ClassifyCaster(geom).dynamic;
+	}
+
+	// Running static-caster hash for the light currently accumulating; seeded
+	// with the light pose in EnableLight, folded per static caster by the hook.
+	std::uint64_t s_visitStaticHash{ 0 };
+
+	// Dynamic casters the current accumulate appended (DynamicOnly/All passes
+	// only). Atomic because the cull walk can append from worker threads.
+	// Reset alongside the hash seed in EnableLight, latched into SplitState
+	// after the accumulate for the schedule-time sleep skip.
+	std::atomic<uint32_t> s_visitDynamicCount{ 0 };
+
+	// Folds one static caster into the running per-light static hash during the
+	// same accumulate that appends the movers -- no second caster walk needed.
+	static void FoldStaticCasterHash(RE::BSGeometry& geom, CasterMobility& r)
+	{
+		if (!r.foldHashValid) {
+			// Summed, not chained/XORed: order-independent, and a caster appended
+			// by both paraboloid halves still contributes to the set hash.
+			const auto raw = reinterpret_cast<std::uintptr_t>(&geom);
+			uint64_t h = 0x9e3779b97f4a7c15ull;
+			h = HashCombine(h, static_cast<std::uint32_t>(raw));
+			h = HashCombine(h, static_cast<std::uint32_t>(raw >> 32));
+			// r.cx..cr already hold the 1-unit-quantized worldBound (std::round
+			// == QuantizeFloat(x, 1.0f)), refreshed by ClassifyCaster this frame.
+			h = HashCombineFloat(h, r.cx);
+			h = HashCombineFloat(h, r.cy);
+			h = HashCombineFloat(h, r.cz);
+			h = HashCombineFloat(h, r.cr);
+			r.foldHash = h;
+			r.foldHashValid = true;
+		}
+		s_visitStaticHash += r.foldHash;
+	}
+
+	/// Hook of BSCullingProcess::AppendVirtual on the parabolic culling vtable.
+	/// Drops a caster (skips the append) when below the contribution-cull
+	/// threshold, or when it does not belong to the active split-cache pass.
+	struct Hook_ParabolicCullAppend
+	{
+		static void thunk(RE::BSCullingProcess* a_this, RE::BSGeometry& a_visible, std::int32_t a_alphaGroupIndex)
+		{
+			const float angularMin = s_settings.CasterCullAngularMin;
+			RE::BSShadowLight* light = s_currentCullLight.load(std::memory_order_relaxed);
+			// Rebuild a missed geometry attachment (see s_accumRebuildAttach)
+			// through the engine's own pair-insert, mirroring
+			// AttachNearbyLights' gates. Only for lights the engine is
+			// provably not attaching (empty geomList), so this can't race a
+			// concurrent scene-side attach on the same light.
+			if (light && s_accumRebuildAttach.load(std::memory_order_relaxed) && !light->objectNode) {
+				// Dual-paraboloid walks append the same geometry once per half;
+				// AttachGeometry is a raw pair-insert, so dedupe per walk.
+				if (auto* ni = light->light.get();
+					ni && s_healAttached.insert(&a_visible).second &&
+					GameLightIsInRange(light, &a_visible.worldBound, ni, 1.0f))
+					GameAttachGeometry(light, &a_visible);
+			}
+			if (angularMin > 0.0f && light) {
+				const auto& wb = a_visible.worldBound;
+				const float dx = wb.center.x - s_cullCameraPos.x;
+				const float dy = wb.center.y - s_cullCameraPos.y;
+				const float dz = wb.center.z - s_cullCameraPos.z;
+				const float distSq = dx * dx + dy * dy + dz * dz;
+				const float radiusSq = wb.radius * wb.radius;
+				// Camera-relative screen size = radius / distance-to-viewer. A
+				// caster far from the camera casts a small on-screen shadow and is
+				// culled; one close enough to fill the view is kept regardless of
+				// how large it looks from the light. Skip the test when the caster
+				// encloses the camera (its shadow can be anywhere on screen).
+				// Squared form of dist > radius && radius / dist < angularMin,
+				// avoiding the per-caster sqrt (all terms non-negative).
+				if (distSq > radiusSq && radiusSq < distSq * (angularMin * angularMin)) {
+					s_casterCullCount.fetch_add(1, std::memory_order_relaxed);
+					return;  // skip append -- caster dropped from this shadow
+				}
+			}
+			if (s_recLeft.load(std::memory_order_relaxed) > 0) {
+				const int32_t recSlot = s_recTargetSlot.load(std::memory_order_relaxed);
+				if (recSlot >= 0 && light && recSlot < s_lights.Size &&
+					s_lights.Lights[recSlot].Light == light) {
+					const char* nm = a_visible.name.c_str();
+					s_recCasters.push_back({ &a_visible, nm ? nm : "",
+						IsCasterDynamic(a_visible),
+						s_cullPassMode.load(std::memory_order_relaxed) });
+				}
+			}
+			if (AtlasActive()) {
+				// Skinned = always dynamic (see IsCasterDynamic); only non-skinned
+				// casters have a mobility record, classified once per frame.
+				CasterMobility* rec = a_visible.GetGeometryRuntimeData().skinInstance ?
+				                          nullptr :
+				                          &ClassifyCaster(a_visible);
+				const bool dynamic = !rec || rec->dynamic;
+				// Every static caster folds into the running hash regardless of
+				// pass, so the static-set change that triggers a rebake is seen
+				// during whichever single accumulate this light runs this frame.
+				if (!dynamic)
+					FoldStaticCasterHash(a_visible, *rec);
+				switch (static_cast<CasterPass>(s_cullPassMode.load(std::memory_order_relaxed))) {
+				case CasterPass::StaticOnly:
+					if (dynamic)
+						return;  // bake pass skips movers
+					break;
+				case CasterPass::DynamicOnly:
+					if (!dynamic)
+						return;  // composite pass skips baked static geometry
+					s_visitDynamicCount.fetch_add(1, std::memory_order_relaxed);
+					break;
+				case CasterPass::All:
+					(dynamic ? s_dynamicCasterDraws : s_staticCasterDraws).fetch_add(1, std::memory_order_relaxed);
+					if (dynamic)
+						s_visitDynamicCount.fetch_add(1, std::memory_order_relaxed);
+					break;
+				}
+			}
+			// Engine bug: AppendVirtual writes through PopFreeQueueEntry's result
+			// with no null check, so exhausting the fixed 8192-entry free pool is
+			// a guaranteed CTD. Drop the caster instead; the margin absorbs
+			// concurrent worker pops between this read and the engine's own pop.
+			{
+				constexpr std::uintptr_t kFreePoolOffset = 0x20150;  // identical SE/AE/VR
+				constexpr std::uintptr_t kPoolHeadOffset = 0x10000;
+				constexpr std::uintptr_t kPoolTailOffset = 0x10008;
+				constexpr std::uint32_t kFreeEntryMargin = 16;
+				const auto* pool = reinterpret_cast<const std::uint8_t*>(a_this) + kFreePoolOffset;
+				const auto head = reinterpret_cast<const std::atomic<std::uint32_t>*>(pool + kPoolHeadOffset)->load(std::memory_order_relaxed);
+				const auto tail = reinterpret_cast<const std::atomic<std::uint32_t>*>(pool + kPoolTailOffset)->load(std::memory_order_relaxed);
+				if (tail - head < kFreeEntryMargin) {
+					s_cullPoolDropCount.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
+			}
+			func(a_this, a_visible, a_alphaGroupIndex);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/// Pool-exhaustion guard alone for the base culling process: the engine's
+	/// room/scene cull walks reach the same unchecked AppendVirtual null-write.
+	struct Hook_BaseCullAppendGuard
+	{
+		static void thunk(RE::BSCullingProcess* a_this, RE::BSGeometry& a_visible, std::int32_t a_alphaGroupIndex)
+		{
+			constexpr std::uintptr_t kFreePoolOffset = 0x20150;
+			constexpr std::uintptr_t kPoolHeadOffset = 0x10000;
+			constexpr std::uintptr_t kPoolTailOffset = 0x10008;
+			constexpr std::uint32_t kFreeEntryMargin = 16;
+			const auto* pool = reinterpret_cast<const std::uint8_t*>(a_this) + kFreePoolOffset;
+			const auto head = reinterpret_cast<const std::atomic<std::uint32_t>*>(pool + kPoolHeadOffset)->load(std::memory_order_relaxed);
+			const auto tail = reinterpret_cast<const std::atomic<std::uint32_t>*>(pool + kPoolTailOffset)->load(std::memory_order_relaxed);
+			if (tail - head < kFreeEntryMargin) {
+				s_cullPoolDropCount.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+			func(a_this, a_visible, a_alphaGroupIndex);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	void InstallCasterCullHook()
+	{
+		stl::write_vfunc<0x18, Hook_ParabolicCullAppend>(RE::VTABLE_BSParabolicCullingProcess[0]);
+		stl::write_vfunc<0x18, Hook_BaseCullAppendGuard>(RE::VTABLE_BSCullingProcess[0]);
+	}
+
+	/// True only across a static-cache bake pass; read by the depth-select
+	/// hooks to redirect the engine's shadow render into the static atlas.
+	std::atomic<bool> s_staticPassActive{ false };
+
+	bool StaticPassRedirectActive()
+	{
+		return s_staticPassActive.load(std::memory_order_relaxed);
+	}
+
+	// -------------------------------------------------------------------------
+	// Static-cache split: single accumulate per light per frame
+	//
+	// The engine accumulator is reset once per frame (before scheduling), so a
+	// light's Accumulate APPENDS its casters -- calling it twice would draw the
+	// union, not a subset. So each light does exactly ONE filtered accumulate
+	// per frame (in EnableLight): normally DynamicOnly (append only movers), and
+	// occasionally StaticOnly to rebake the static cache when its caster set
+	// changed. The bake is staggered onto its own frame; on that rare frame the
+	// tile shows static-only briefly. s_visitStaticHash (folded by the hook)
+	// detects a static-set change without a second caster walk.
+	// -------------------------------------------------------------------------
+	// Per-light handoff between the phase-A accumulate (which picks the filter
+	// mode) and the phase-B render. What is actually baked is owned by the atlas
+	// slot (GetSlotStaticState), so a tile realloc invalidates the cache without
+	// this state going stale.
+	struct SplitState
+	{
+		uint64_t pendingHash = 0;      ///< static hash observed on the latest accumulate
+		bool bakeQueued = true;        ///< a rebake is due -- next accumulate is StaticOnly
+		bool bakeThisFrame = false;    ///< this frame's accumulate was StaticOnly (render to cache)
+		uint8_t mismatchStreak = 0;    ///< consecutive accumulates whose hash differed from the bake
+		RE::NiPoint3 bakePos{};        ///< light position the static tile was baked at
+		uint8_t poseRebakes = 0;       ///< pose-drift rebakes inside the current window
+		uint32_t poseWindowStart = 0;  ///< frame the pose-rebake window opened
+		bool splitExcluded = false;    ///< jitter outruns the bake's validity: render full, no split
+		bool fullThisFrame = false;    ///< this frame's accumulate was All (cap/exclusion fallback)
+		/// Last completed accumulate appended >= 1 dynamic caster. Defaults
+		/// true (never sleep a light until an accumulate proves it moverless).
+		bool sawDynamicLastAccum = true;
+	};
+	std::unordered_map<RE::BSShadowLight*, SplitState> s_splitState;
+
+	// --- Empty-dynamic sleep: schedule-time skip of moverless redraws --------
+
+	// A composited bake stays valid only while the light sits within this
+	// drift of the pose it was baked at (world units). Carried torches move
+	// past this every frame, which is what keeps their shadows live.
+	constexpr float kSplitPoseDriftMax = 4.0f;
+
+	// Staleness backstop for sleeping lights: a real redraw at least this
+	// often bounds every change the sleep predicate cannot observe (player,
+	// off-screen movers, static-set edits) to under a second at 60 fps.
+	constexpr int32_t kSleepRedrawIntervalFrames = 45;
+	// Slot-phase stagger so lights that fell asleep together (scene load)
+	// don't all take their backstop redraw on the same frame.
+	constexpr int32_t kSleepStaggerStride = 7;
+
+	// Cumulative schedule-time sleep skips since load (snapshot metric).
+	std::atomic<uint64_t> s_sleepSkipTotal{ 0 };
+
+	/// True when this light's single accumulate can run DynamicOnly: split
+	/// cache on and usable for it, slot bake valid, pose within bake drift.
+	/// Phase A (EnableLight) picks its filter mode through this and the
+	/// schedule-time sleep skip reuses it, so the two can never drift apart.
+	static bool SplitDynamicOnlyEligible(RE::BSShadowLight* light, const SplitState& st, bool staticValid)
+	{
+		if (!StaticAtlasReady())
+			return false;
+		if (light->GetIsFrustumLight())
+			return false;
+		if (st.splitExcluded || st.bakeQueued || !staticValid)
+			return false;
+		// Pose freshness: compositing movers over a bake taken at a drifted
+		// pose shows two misaligned shadows at once (reads as extra darkness).
+		if (auto* ni = light->light.get()) {
+			const float px = ni->world.translate.x - st.bakePos.x;
+			const float py = ni->world.translate.y - st.bakePos.y;
+			const float pz = ni->world.translate.z - st.bakePos.z;
+			if (px * px + py * py + pz * pz > kSplitPoseDriftMax * kSplitPoseDriftMax)
+				return false;
+		}
+		return true;
+	}
+
+	/// Schedule-time sleep predicate: every condition proving this light's
+	/// redraw would reproduce the tile it already holds, so the scheduler
+	/// skips it outright (no accumulate, no budget, no render). Slot state is
+	/// re-read every frame so an atlas reclaim or realloc wakes the light.
+	static bool SleepSkipEligible(const LightEntry& e, int32_t slot, int32_t now)
+	{
+		if (e.LastDrawnFrame < 0)
+			return false;
+		// A staged class change must rerender before the light may sleep.
+		if (e.pendingScale != e.renderedScale)
+			return false;
+		const auto it = s_splitState.find(e.Light);
+		if (it == s_splitState.end())
+			return false;
+		const SplitState& st = it->second;
+		// A pending static-set divergence or an observed mover means the
+		// next accumulate would change the tile.
+		if (st.mismatchStreak != 0 || st.sawDynamicLastAccum)
+			return false;
+		uint64_t bakedHash = 0;
+		bool staticValid = false;
+		if (!GetSlotStaticState(slot, bakedHash, staticValid))
+			return false;
+		AtlasTileTexels tile{};
+		if (!GetSlotTileTexels(slot, tile) || !tile.contentValid)
+			return false;
+		if (!SplitDynamicOnlyEligible(e.Light, st, staticValid))
+			return false;
+		// Staleness backstop: never skip once the backstop redraw is due,
+		// and keep pressing for it every frame until the budget grants it.
+		if (now - e.LastDrawnFrame >= kSleepRedrawIntervalFrames)
+			return false;
+		if (((now + slot * kSleepStaggerStride) % kSleepRedrawIntervalFrames) == 0)
+			return false;
+		return true;
 	}
 
 	// =========================================================================
@@ -282,11 +937,156 @@ namespace ShadowCasterManager
 				RE::NiRect<uint32_t>((uint32_t)left, (uint32_t)right, (uint32_t)top, (uint32_t)bottom);
 		}
 
-		// Accumulate into shadow slot.
+		// Accumulate into shadow slot. Publish the light so the parabolic
+		// AppendVirtual hook can contribution-cull its casters; the RAII guard
+		// clears it so the hook only acts during this light's accumulate.
+		//
+		// Static-cache split: pick this frame's single filter mode BEFORE the
+		// (one) accumulate. A queued rebake makes it StaticOnly (bake the cache);
+		// otherwise DynamicOnly (append only movers). The hook folds the static
+		// hash either way; a change from the baked hash queues the next rebake.
 		{
+			// Frustum (spot/directional) lights are excluded from the split: the
+			// dynamic/static caster classification runs only in the parabolic
+			// (point-light) cull hook, so a spot's StaticOnly bake would capture
+			// actors (baking a mover's silhouette in permanently) and never
+			// track a sun-simulating spot's rotation. They render full instead.
+			bool split = StaticAtlasReady() && !light->GetIsFrustumLight();
+			SplitState* st = nullptr;
+			CasterPass mode = CasterPass::All;
+			uint64_t bakedHash = 0;
+			bool staticValid = false;
+			if (split) {
+				st = &s_splitState[light];
+				st->fullThisFrame = false;
+				if (st->splitExcluded) {
+					// Latched jitter light: the cache can never stay fresh for
+					// it, so it renders full every redraw (no bake, no copy).
+					st->bakeThisFrame = false;
+					st->fullThisFrame = true;
+					split = false;
+				}
+			}
+			if (split) {
+				// The atlas slot owns what's baked, so a tile realloc (class
+				// change) that drops the cache reads back as invalid here and
+				// forces a rebake -- state keyed on the light alone would miss it.
+				GetSlotStaticState(slotIndex, bakedHash, staticValid);
+				// Pose drift past kSplitPoseDriftMax rebakes: this light is
+				// redrawing anyway, so the bake replaces (not adds to) a render.
+				mode = SplitDynamicOnlyEligible(light, *st, staticValid) ?
+				           CasterPass::DynamicOnly :
+				           CasterPass::StaticOnly;
+				// Bake budget: a hash-upset wave (scene entry, cell attach)
+				// otherwise bakes every light in the same few frames and
+				// starves the redraw budget. Deferred bakes stay queued; with
+				// no valid seed the light renders full instead.
+				if (mode == CasterPass::StaticOnly &&
+					s_staticBakeCount.load(std::memory_order_relaxed) >= 2u) {
+					st->bakeQueued = true;
+					if (staticValid) {
+						mode = CasterPass::DynamicOnly;
+					} else {
+						mode = CasterPass::All;
+						st->fullThisFrame = true;
+					}
+				}
+				if (mode == CasterPass::StaticOnly) {
+					if (auto* ni = light->light.get())
+						st->bakePos = ni->world.translate;
+					st->bakeQueued = false;
+				}
+				st->bakeThisFrame = (mode == CasterPass::StaticOnly);
+				if (st->bakeThisFrame) {
+					s_staticBakeCount.fetch_add(1, std::memory_order_relaxed);
+					// Exclude a light that re-bakes for ANY reason (pose drift,
+					// class oscillation, churn-invalidation): a pose-stable light
+					// bakes once per window, so >=4 bakes in 300 frames means the
+					// cache never holds for it -- render full and stop the storm.
+					const uint32_t nowFrame = globals::state ? globals::state->frameCountAtomic.load(std::memory_order_relaxed) : 0u;
+					if (nowFrame < st->poseWindowStart || nowFrame - st->poseWindowStart > 300u) {
+						st->poseWindowStart = nowFrame;
+						st->poseRebakes = 0;
+					}
+					if (++st->poseRebakes >= 4)
+						st->splitExcluded = true;
+				}
+				// Pose fold for bake validity. posStep is coarse (16 units) on
+				// purpose: flame flicker jitters the light position a few units
+				// every frame, and a 1-unit step re-hashed every jitter --
+				// queueing a rebake per flicker and flashing the static-only
+				// bake into the live tile on a visible cycle.
+				s_visitStaticHash = 0x9e3779b97f4a7c15ull;
+				if (auto* ni = light->light.get())
+					s_visitStaticHash = FoldLightPose(s_visitStaticHash, ni, 16.0f);
+				s_visitDynamicCount.store(0, std::memory_order_relaxed);
+				s_cullPassMode.store(static_cast<int>(mode), std::memory_order_relaxed);
+			}
+
+			if (camera)
+				s_cullCameraPos = camera->world.translate;  // viewer, for the caster cull
+			s_currentCullLight.store(light, std::memory_order_relaxed);
+			struct ClearCullLight
+			{
+				~ClearCullLight() { s_currentCullLight.store(nullptr, std::memory_order_relaxed); }
+			} clearGuard;
+
 			uint32_t idx = static_cast<uint32_t>(slotIndex);
-			light->Accumulate(idx, idx, nullptr);
-			*GetAccumLightSlot() += light->shadowMapCount;
+			// One Accumulate per light per frame (see s_lightAccumFrame): dedup
+			// the ring-forming double and log which two slots collided.
+			const uint32_t accumFrame =
+				globals::state ? globals::state->frameCountAtomic.load(std::memory_order_relaxed) : 0u;
+			bool duplicateAccum = false;
+			if (auto [it, inserted] = s_lightAccumFrame.try_emplace(light, accumFrame, idx); !inserted) {
+				duplicateAccum = it->second.first == accumFrame;
+				if (duplicateAccum) {
+					static std::atomic<uint32_t> s_dupAccumCount{ 0 };
+					const uint32_t n = s_dupAccumCount.fetch_add(1, std::memory_order_relaxed) + 1;
+					if (n <= 8u || (n % 1000u) == 0u)
+						logger::warn("[SCM] Skipped duplicate same-frame Accumulate (light={}, firstSlot={}, thisSlot={}, frame={}, n={})",
+							(void*)light, it->second.second, idx, accumFrame, n);
+				} else {
+					it->second = { accumFrame, idx };
+				}
+			}
+			if (s_lightAccumFrame.size() > 512)
+				std::erase_if(s_lightAccumFrame, [&](const auto& kv) { return kv.second.first != accumFrame; });
+			if (!duplicateAccum) {
+				// Rebuild missed attachments while this accumulate walks the
+				// scene: the engine attaches geometry to lights only once per
+				// geometry (kRenderUse latch), so a light created after the
+				// scene attached -- every light of an in-game same-cell load --
+				// otherwise casts nothing forever.
+				s_healAttached.clear();
+				s_accumRebuildAttach.store(light->geomList.empty(), std::memory_order_relaxed);
+				s_cpuAccumUs.fetch_add(TimeUs([&] { light->Accumulate(idx, idx, nullptr); }), std::memory_order_relaxed);
+				s_accumRebuildAttach.store(false, std::memory_order_relaxed);
+				s_cpuAccumN.fetch_add(1, std::memory_order_relaxed);
+				*GetAccumLightSlot() += light->shadowMapCount;
+			}
+
+			if (split) {
+				st->pendingHash = s_visitStaticHash;
+				// Latch mover presence for the sleep skip. Only passes that
+				// could see movers may clear it: a StaticOnly bake filters
+				// them before the count, and a deduped accumulate saw nothing.
+				if (mode != CasterPass::StaticOnly && !duplicateAccum)
+					st->sawDynamicLastAccum = s_visitDynamicCount.load(std::memory_order_relaxed) != 0;
+				// A DynamicOnly accumulate observes the current static set; queue
+				// a rebake only after the divergence PERSISTS. A flickering hash
+				// that oscillates across the baked value resets the streak and
+				// never rebakes; a genuine static-set change mismatches every
+				// accumulate and rebakes after three.
+				if (mode == CasterPass::DynamicOnly && st->pendingHash != bakedHash) {
+					if (st->mismatchStreak < 0xFF)
+						st->mismatchStreak++;
+					if (st->mismatchStreak >= 3)
+						st->bakeQueued = true;
+				} else {
+					st->mismatchStreak = 0;
+				}
+				s_cullPassMode.store(static_cast<int>(CasterPass::All), std::memory_order_relaxed);
+			}
 		}
 
 		// Extended mode: pre-set kNONE renderTarget so RenderCascade re-runs
@@ -323,6 +1123,7 @@ namespace ShadowCasterManager
 		bool sun{ false };
 		bool chosen{ false };         // valid + within ShadowLightCount budget
 		bool excess{ false };         // valid but over budget (convert or disable)
+		bool belowFloor{ false };     // on-screen impact below ShadowImpactFloor
 		bool invalid{ false };        // shorthand: invalidCamera || invalidPortal
 		bool invalidCamera{ false };  // UpdateCamera returned false -- shorthand for
 									  // branches that don't care which sub-reason
@@ -469,6 +1270,19 @@ namespace ShadowCasterManager
 			~Guard() { s_inSchedule.store(false, std::memory_order_release); }
 		} guard;
 
+		// Advance the caster-classification epoch once per frame here -- before
+		// this frame's accumulate and its later render-split passes -- so a
+		// caster classifies identically across both phases (a mid-frame bump
+		// would double-count movement and flip casters static too early).
+		// Periodically prune casters not seen for a while.
+		if (++s_casterClassEpoch % 300 == 0) {
+			std::erase_if(s_casterMobility,
+				[](const auto& kv) { return s_casterClassEpoch - kv.second.lastEpoch > 300; });
+			// Split state keys dead lights until this cap; state rebuilds
+			// harmlessly, so a plain size-gated clear matches the sibling maps.
+			PruneIfOversized(s_splitState, 512);
+		}
+
 		// VR display guard: skip scheduling when the HMD display is not active.
 		if (globals::game::isVR && !GetVRDrawShadows())
 			return;
@@ -591,6 +1405,7 @@ namespace ShadowCasterManager
 			SetupSceneFormula(camera);
 
 			candidates.clear();
+			ClearBelowFloor();
 			candidates.reserve(ssn->GetRuntimeData().activeShadowLights.size());
 
 			int32_t tmpIndex = 0;
@@ -614,7 +1429,13 @@ namespace ShadowCasterManager
 				auto& c = candidates.emplace_back();
 				c.light = l;
 				c.sun = false;
-				c.score = CalculateLightScore(l, camera, tmpIndex++);
+				float impact = 1.0f;
+				c.score = CalculateLightScore(l, camera, tmpIndex++,
+					s_settings.ShadowImpactFloor > 0.0f ? &impact : nullptr);
+				if (s_settings.ShadowImpactFloor > 0.0f && impact < s_settings.ShadowImpactFloor) {
+					c.belowFloor = true;
+					AddBelowFloor(reinterpret_cast<uintptr_t>(l));
+				}
 			}
 #ifdef TRACY_ENABLE
 			char buf[32];
@@ -638,6 +1459,16 @@ namespace ShadowCasterManager
 				std::erase_if(s_shadowConvert, [&](RE::NiLight* ni) { return !liveNi.contains(ni); });
 				std::erase_if(s_shadowConvertDescriptorInited, [&](RE::NiLight* ni) { return !liveNi.contains(ni); });
 			}
+		}
+
+		// Prune split state for departed lights: pointer keys recycle, and a new
+		// light inheriting a stale splitExcluded latch renders full forever.
+		// Threshold avoids churning state for gate-flapping lights in small scenes.
+		if (s_splitState.size() > 128) {
+			std::set<RE::BSShadowLight*> liveLights;
+			for (auto& c : candidates)
+				liveLights.insert(c.light);
+			std::erase_if(s_splitState, [&](const auto& kv) { return !liveLights.contains(kv.first); });
 		}
 
 		// Validation, redraw-interval scoring, and RedrawFrame marking all
@@ -732,6 +1563,14 @@ namespace ShadowCasterManager
 				// `(color * fade) > 1e-4 && radius > 1e-4` filter discards lights
 				// that genuinely don't contribute.
 				if (!l->UpdateCamera(camera)) {
+					// Exit hysteresis: the gate's inputs (light position vs
+					// frustum, distance vs fShadowDistance) are flicker-jittered,
+					// so a boundary light flaps valid/invalid every frame. Honor
+					// invalid only after it persists; a departed light drops 15
+					// frames late, off-view anyway. Any valid frame resets it.
+					PruneIfOversized(s_invalidStreak, 512);
+					if (++s_invalidStreak[l] < 15)
+						continue;
 					c.invalidCamera = true;
 					c.invalid = true;
 					// Recover the sub-reason from the engine's side-band flags.
@@ -743,6 +1582,7 @@ namespace ShadowCasterManager
 					c.invalidLod = (l->lodDimmer == 0.0f);
 					continue;
 				}
+				s_invalidStreak.erase(l);
 				// Portal culling only applies in interior cells where a portal graph exists.
 				// Lights with no culling process (e.g. WSU spotlights outside cell bounds)
 				// or no portal are unconditionally visible; skip the check for them.
@@ -763,10 +1603,17 @@ namespace ShadowCasterManager
 					}
 				}
 
+				// Impact floor: a below-floor light converts to a non-shadow
+				// light (keeps diffuse via clusters, drops its shadow redraw),
+				// the same path as an over-budget light. The table's "Low"
+				// group-hover highlight (with the floor off) is the preview.
+				if (c.belowFloor) {
+					c.excess = true;
+				}
 				// Effective point-light capacity excludes the engine-claimed
 				// focus shadow slots; excess candidates fall through to the
 				// existing convert/disable path.
-				if (wantCount < s_settings.ShadowLightCount - s_focusShadowSlots) {
+				else if (wantCount < s_settings.ShadowLightCount - s_focusShadowSlots) {
 					c.chosen = true;
 					wantCount++;
 				} else {
@@ -950,7 +1797,21 @@ namespace ShadowCasterManager
 				if (alreadyIn)
 					continue;
 
-				int idx = s_lights.FindFreeIndex(true, s_settings.ShadowLightCount, s_settings.ConvertedShadowSlots);
+				// Array parity on re-entry: a light returning after a brief
+				// eviction (gate flap) reclaims the free slot that still holds
+				// ITS OWN rendered tile -- content resumes sampling immediately,
+				// exactly like an array slice surviving the round-trip. The
+				// entry is left intact too (its cache keys are its own).
+				int idx = -1;
+				if (auto* ni = c.light->light.get()) {
+					const int ownerIdx = FindFreeSlotByOwner(ni);
+					if (ownerIdx >= 0 && !s_lights.Lights[ownerIdx].Light) {
+						idx = ownerIdx;
+						s_lights.Lights[idx].Light = c.light;
+						continue;
+					}
+				}
+				idx = s_lights.FindFreeIndex(true, s_settings.ShadowLightCount, s_settings.ConvertedShadowSlots);
 				if (idx < 0)
 					continue;
 				// Eviction nulls Light* but leaves the rest of LightEntry intact
@@ -959,6 +1820,9 @@ namespace ShadowCasterManager
 				// previous owner (which would skip its first render and let the
 				// cluster pipeline sample stale kSHADOWMAPS[idx] content).
 				s_lights.Lights[idx].Clear();
+				// Drop the previous occupant's tile: its depth must not be
+				// advertised under the new light's projection.
+				FreeSlotTile(idx);
 				s_lights.Lights[idx].Light = c.light;
 			}
 
@@ -979,6 +1843,23 @@ namespace ShadowCasterManager
 				if (s_lights.Sun)
 					s_lights.Lights[0].Clear();
 				s_lights.Sun = false;
+			}
+
+			// Publish each occupant's ScoreFormula value: the one priority that
+			// ordered selection also orders the atlas cell budget (within a
+			// class band) and drives the redraw curve percentile.
+			{
+				std::unordered_map<const RE::BSShadowLight*, double> scoreByLight;
+				scoreByLight.reserve(candidates.size());
+				for (const auto& c : candidates)
+					scoreByLight.emplace(c.light, c.score);
+				for (int i = 0; i < s_lights.Size; i++) {
+					auto& e = s_lights.Lights[i];
+					if (!e.Light)
+						continue;
+					if (auto it = scoreByLight.find(e.Light); it != scoreByLight.end())
+						e.lastScore = it->second;
+				}
 			}
 		}  // end SCM::UpdatePoolMembership
 
@@ -1067,8 +1948,39 @@ namespace ShadowCasterManager
 					// lights re-entering view still schedule normally.
 					if (!s_settings.AllowDrawNewLight && e.LastDrawnFrame < 0)
 						continue;
+					// Empty-dynamic sleep: a moverless light with a valid, fresh
+					// static bake would redraw an identical tile -- skip it
+					// entirely (no accumulate, no budget); it keeps sampling its
+					// cached tile via the non-redrawn insertion path.
+					if (SleepSkipEligible(e, i, now)) {
+						s_schedDiag.sleep_skips++;
+						s_sleepSkipTotal.fetch_add(1, std::memory_order_relaxed);
+						continue;
+					}
 					pending.push_back(&e);
 				}
+
+				// Base texels for the coverage classifier; lazily captured from
+				// the live texture, so fall back until it is readable.
+				const float baseTileTexels = s_initialShadowMapResolution > 0 ?
+				                                 static_cast<float>(s_initialShadowMapResolution) :
+				                                 2048.0f;
+
+				// Priority percentile across the live pool: 1.0 = highest score.
+				// Rank, not raw value, so the redraw curve is invariant to the
+				// user formula's scale.
+				static std::vector<double> scoreRank;
+				scoreRank.clear();
+				for (int i = 0; i < s_lights.Size; i++)
+					if (s_lights.Lights[i].Light)
+						scoreRank.push_back(s_lights.Lights[i].lastScore);
+				std::sort(scoreRank.begin(), scoreRank.end());
+				auto scorePercentile = [&](double score) -> float {
+					if (scoreRank.size() < 2)
+						return 1.0f;
+					const auto it = std::lower_bound(scoreRank.begin(), scoreRank.end(), score);
+					return static_cast<float>(it - scoreRank.begin()) / static_cast<float>(scoreRank.size() - 1);
+				};
 
 				for (auto* e : pending) {
 					double interval = 0.0;
@@ -1103,101 +2015,71 @@ namespace ShadowCasterManager
 					//       Valient 2014 "Practical Shadow Maps".
 
 					float importance = 0.0f;
+					float sizeProxy = 0.0f;
 
 					if (auto* ni = e->Light->light.get()) {
-						auto& rtd = ni->GetLightRuntimeData();
-						float lightRadius = rtd.radius.x;
-						auto lp = ni->world.translate;
-
-						// Perceptual luminance (Rec.709) × engine fade factor.
-						float lum = 0.2126f * rtd.diffuse.red +
-						            0.7152f * rtd.diffuse.green +
-						            0.0722f * rtd.diffuse.blue;
-						float effectiveLum = lum * rtd.fade;
-
-						// Primary: screen-space projected solid angle.
-						// "How much of the view does this light's influence
-						// sphere occupy?" Industry standard for many-light
-						// shadow prioritisation -- see Olsson & Assarsson 2012,
-						// "Clustered Deferred and Forward Shading"; Wronski
-						// 2014, "Sample Distribution Shadow Maps"; CryEngine
-						// shadow LOD docs. Approximates angular radius from
-						// camera as radius/viewZ; solid angle ~ angularRadius^2.
-						// Constants (screenH / 2*tan(fovY/2))^2 drop out -- they're
-						// the same across all lights and don't affect ranking.
-						//
-						// Edge cases:
-						//   viewZ < -radius : light fully behind camera, coverage=0
-						//   |viewZ| < radius : light intersects camera plane;
-						//                      clamp effectiveZ to avoid blow-up.
-						float coverage = 0.0f;
-						if (camera) {
-							auto cp = camera->world.translate;
-							RE::NiPoint3 fwd = camera->world.rotate.GetVectorY();
-							float rx = lp.x - cp.x, ry = lp.y - cp.y, rz = lp.z - cp.z;
-							float viewZ = fwd.x * rx + fwd.y * ry + fwd.z * rz;
-							if (viewZ > -lightRadius) {
-								float effectiveZ = std::max(viewZ, lightRadius * 0.5f);
-								float angularRadius = lightRadius / effectiveZ;
-								coverage = angularRadius * angularRadius;
-							}
-						}
-
-						// Fallback: Skyrim-style quadratic distance falloff
-						// from camera/player. Covers two cases where coverage
-						// alone returns 0 but the user still sees shadows:
-						//   1. Light just outside the frustum (around a corner)
-						//      illuminating a visible wall.
-						//   2. Player-held torch behind the camera lighting
-						//      geometry ahead.
-						// Weighted at 0.3 -- coverage dominates when the light
-						// is in view, but out-of-view lights still get a floor
-						// proportional to their illumination at the viewer.
-						auto computeAtt = [&](const RE::NiPoint3& pos) -> float {
-							float dx = pos.x - lp.x, dy = pos.y - lp.y, dz = pos.z - lp.z;
-							float dist2 = dx * dx + dy * dy + dz * dz;
-							float r2 = lightRadius * lightRadius;
-							if (dist2 >= r2)
-								return 0.0f;
-							float t = dist2 / r2;
-							float a = 1.0f - t;
-							return a * a;  // matches Skyrim (1-(d/r)^2)^2 falloff
-						};
-						auto* plr = RE::PlayerCharacter::GetSingleton();
-						float attCam = camera ? computeAtt(camera->world.translate) : 0.0f;
-						float attPlr = plr ? computeAtt(plr->GetPosition()) : attCam;
-						float distanceFallback = std::max(attCam, attPlr) * 0.3f;
-
-						importance = effectiveLum * std::max(coverage, distanceFallback);
+						const auto geom = ComputeLightGeometry(ni, camera, ni->GetLightRuntimeData().radius.x);
+						// Legacy contribution metric, kept as the lightimportance
+						// formula variable; ranking decisions use lastScore (the
+						// ScoreFormula value) so one function owns priority.
+						importance = geom.lum * std::max(geom.coverage, std::max(geom.attCam, geom.attPlr) * 0.3f);
+						sizeProxy = geom.sizeProxy;
+						// A light that reaches neither the camera nor the player
+						// cannot show a close-up shadow: cap its tile class so
+						// out-of-range embedded lights (large radius, zero
+						// attenuation at the viewer) stop hoarding full tiles the
+						// rank budget then can't give to visible lights.
+						if (geom.attCam <= 0.0f && geom.attPlr <= 0.0f)
+							sizeProxy = std::min(sizeProxy, 0.25f);
 					}
 
-					// Exponential interval scaling: maxScale*(minScale/maxScale)^clamp(importance,0,1)
+					// Exponential interval scaling driven by the light's priority
+					// PERCENTILE among currently slotted lights (scale-invariant
+					// to user formula rescaling): maxScale*(minScale/maxScale)^pct.
 					float kMaxMult = s_settings.ImportanceMaxScale;
 					float kMinMult = std::min(s_settings.ImportanceMinScale, kMaxMult);
-					float clampedImp = std::min(importance, 1.0f);
+					float clampedImp = scorePercentile(e->lastScore);
 					interval *= static_cast<double>(kMaxMult * powf(kMinMult / kMaxMult, clampedImp));
 
 					FormulaHelper::SetParam(kFormulaParam_LightImportance, static_cast<double>(importance));
 					e->RedrawScore = e->LastDrawnFrame + interval;
 					e->lastImportance = importance;
 
-					// Cached shadow maps: if the geometry hash matches what we
-					// rendered last time, the shadow map currently in the slot
-					// is byte-identical to what a fresh re-render would produce.
-					// No need to redraw -- push the score sky-high so this entry
-					// loses every budget contest unless literally nothing else
-					// needs redrawing (defensive: still allow eventual refresh
-					// against any hashing bugs).
-					//
-					// Industry-standard pattern: UE5 "Cached Shadow Maps",
-					// Frostbite movable-light caching. The hash captures
-					// (1) light's own pose + radius and (2) each caster's
-					// worldBound + identity -- both rigid motion and engine-
-					// updated bounds (BSDynamicTriShape vertex changes update
-					// worldBound).
-					e->pendingGeomHash = ComputeShadowGeomHash(e->Light);
+					e->desiredScale = AtlasActive() ?
+					                      TileScaleForCoverage(sizeProxy, baseTileTexels, e->desiredScale) :
+					                      1.0f;
+					// Atlas mode: the render-pass rank budget owns pendingScale.
+					if (!AtlasActive())
+						e->pendingScale = e->desiredScale;
+
+					// Position step scaled to the tile class: at 128px a fire's
+					// flicker orbit is sub-texel and must not bust the cache;
+					// at full class the same motion is visible and should.
+					float posStep = 1.0f;
+					if (auto* ni2 = e->Light->light.get()) {
+						const float texels = baseTileTexels * std::max(e->pendingScale, kTileScaleFloor);
+						posStep = ni2->GetLightRuntimeData().radius.x / std::max(texels, 1.0f);
+					}
+					// ComputeShadowGeomHash's full geomList walk measured ~17us/light;
+					// reuse the cached hash until the caster count changes or this many
+					// frames pass. Winners latch this value below (see latchGeomHash).
+					constexpr int32_t kGeomHashRehashInterval = 4;
+					const auto geomSize = static_cast<std::uint32_t>(e->Light->geomList.size());
+					const bool dueForRehash = e->lastHashComputeFrame < 0 ||
+					                          geomSize != e->lastHashGeomListSize ||
+					                          (now - e->lastHashComputeFrame) >= kGeomHashRehashInterval;
+					if (dueForRehash) {
+						e->cachedPendingGeomHash = ComputeShadowGeomHash(e->Light, posStep);
+						e->lastHashComputeFrame = now;
+						e->lastHashGeomListSize = geomSize;
+					}
+					e->pendingGeomHash = e->cachedPendingGeomHash;
+					// Starvation backstop: an unchanged hash deprioritises a redraw, but a
+					// perpetually-losing light's geomList never refreshes to prove otherwise.
 					if (e->LastDrawnFrame >= 0 && e->lastGeomHash != 0 &&
-						e->pendingGeomHash == e->lastGeomHash) {
+						e->pendingGeomHash == e->lastGeomHash &&
+						e->pendingScale == e->renderedScale &&
+						(now - e->LastDrawnFrame) < kSleepRedrawIntervalFrames) {
 						e->RedrawScore += 1e15;
 					}
 				}
@@ -1209,6 +2091,13 @@ namespace ShadowCasterManager
 
 				std::sort(pending.begin(), pending.end(),
 					[](const LightEntry* a, const LightEntry* b) { return a->RedrawScore < b->RedrawScore; });
+
+				// Winners latch the scoring-pass hash: lastGeomHash staleness is
+				// bounded by kGeomHashRehashInterval, inside the
+				// kSleepRedrawIntervalFrames backstop.
+				auto latchGeomHash = [](LightEntry* e) {
+					e->lastGeomHash = e->pendingGeomHash;
+				};
 
 				for (auto* e : pending) {
 					if (maxRedraw <= 0)
@@ -1222,7 +2111,7 @@ namespace ShadowCasterManager
 						maxRedraw--;
 						e->RedrawFrame = true;
 						e->LastDrawnFrame = now;
-						e->lastGeomHash = e->pendingGeomHash;
+						latchGeomHash(e);
 						isFirst = false;
 						continue;
 					}
@@ -1231,7 +2120,7 @@ namespace ShadowCasterManager
 						maxRedraw--;
 						e->RedrawFrame = true;
 						e->LastDrawnFrame = now;
-						e->lastGeomHash = e->pendingGeomHash;
+						latchGeomHash(e);
 						continue;
 					}
 				}
@@ -1420,7 +2309,8 @@ namespace ShadowCasterManager
 						bool stillUsable;
 						{
 							ZoneNamedN(zEnable, "SCM::Engine::EnableLight", true);
-							stillUsable = SafeEnableAndValidate(e, camera, ssn, slot, isUsableLight);
+							s_cpuEnableUs.fetch_add(TimeUs([&] { stillUsable = SafeEnableAndValidate(e, camera, ssn, slot, isUsableLight); }), std::memory_order_relaxed);
+							s_cpuEnableN.fetch_add(1, std::memory_order_relaxed);
 						}
 						if (!stillUsable)
 							continue;
@@ -1630,6 +2520,22 @@ namespace ShadowCasterManager
 		// independent variables, the scm.* plots are the dependent outcomes.
 		// =====================================================================
 		{
+			// Read + reset the per-frame caster-cull count here (unconditionally,
+			// not inside TracyPlot's arg -- that expression is elided in non-Tracy
+			// builds, which would leak the counter).
+			// [[maybe_unused]]: consumed only by TracyPlot below, which is elided
+			// in non-Tracy builds -- but the exchange must still run to reset the
+			// counters, so they're read here unconditionally.
+			[[maybe_unused]] const uint32_t culledThisFrame = s_casterCullCount.exchange(0, std::memory_order_relaxed);
+			[[maybe_unused]] const uint32_t poolDropsThisFrame = s_cullPoolDropCount.exchange(0, std::memory_order_relaxed);
+			[[maybe_unused]] const uint32_t staticDraws = s_staticCasterDraws.exchange(0, std::memory_order_relaxed);
+			[[maybe_unused]] const uint32_t dynamicDraws = s_dynamicCasterDraws.exchange(0, std::memory_order_relaxed);
+			// Accumulated (not just plotted): the snapshot publishes the running
+			// total so a headless A/B can difference it across a run.
+			const uint32_t bakesThisFrame = s_staticBakeCount.exchange(0, std::memory_order_relaxed);
+			if (bakesThisFrame)
+				s_staticBakeTotal.fetch_add(bakesThisFrame, std::memory_order_relaxed);
+
 			// Sample slot occupancy at frame end (post-reconciliation).
 			for (int i = 0; i < s_lights.Size; i++)
 				if (s_lights.Lights[i].Light)
@@ -1655,6 +2561,58 @@ namespace ShadowCasterManager
 				snap.demoted.reserve(s_convertReason.size());
 				for (const auto& [ptr, reason] : s_convertReason)
 					snap.demoted.emplace_back(ptr, static_cast<uint8_t>(reason));
+				const auto& slotInfos = GetSlotInfos();
+				for (int i = s_lights.PointLightFirst(); i < s_lights.PointLightEnd(s_settings.ShadowLightCount); i++) {
+					const auto& e = s_lights.Lights[i];
+					if (!e.Light)
+						continue;
+					SchedSnapshot::SlotState st;
+					st.index = i;
+					st.light = reinterpret_cast<uintptr_t>(e.Light);
+					st.importance = e.lastImportance;
+					st.score = e.lastScore;
+					st.desiredScale = e.desiredScale;
+					st.budgetScale = e.budgetScale;
+					st.pendingScale = e.pendingScale;
+					st.renderedScale = e.renderedScale;
+					AtlasTileTexels tile{};
+					if (GetSlotTileTexels(i, tile)) {
+						st.tileX = tile.x;
+						st.tileY = tile.y;
+						st.tileSize = tile.size;
+						st.tileContentValid = tile.contentValid;
+					}
+					if (static_cast<size_t>(i) < slotInfos.size()) {
+						const auto& rec = slotInfos[i];
+						st.uploadRecorded = rec.valid;
+						st.uploadParamY = rec.paramY;
+						st.uploadRange = rec.range;
+					}
+					st.suppressed = IsSuppressed(reinterpret_cast<uintptr_t>(e.Light));
+					if (auto* ni = e.Light->light.get()) {
+						std::scoped_lock convLock(s_shadowConvertMutex);
+						st.promoted = s_shadowConvert.count(ni) > 0;
+					}
+					snap.slots.push_back(st);
+				}
+				snap.atlasDim = AtlasDim();
+				snap.atlasCapacityCells = AtlasCapacityCells();
+				snap.atlasOccupancy = AtlasOccupancy();
+				snap.atlasVramBytes = AtlasVRAMBytes();
+				const auto clearStats = GetAtlasClearStats();
+				snap.atlasTileReallocs = clearStats.tileReallocs;
+				snap.atlasOwnerInvalidations = clearStats.ownerInvalidations;
+				if (const uint32_t n = s_cpuAccumN.exchange(0, std::memory_order_relaxed))
+					snap.cpuAccumUsAvg = static_cast<uint32_t>(s_cpuAccumUs.exchange(0, std::memory_order_relaxed) / n);
+				if (const uint32_t n = s_cpuSubmitN.exchange(0, std::memory_order_relaxed))
+					snap.cpuSubmitUsAvg = static_cast<uint32_t>(s_cpuSubmitUs.exchange(0, std::memory_order_relaxed) / n);
+				if (const uint32_t n = s_cpuEnableN.exchange(0, std::memory_order_relaxed))
+					snap.cpuEnableUsAvg = static_cast<uint32_t>(s_cpuEnableUs.exchange(0, std::memory_order_relaxed) / n);
+				snap.avgLightCostUs = s_budget.GetAverageCostUs();
+				snap.avgRedrawsPerFrame = static_cast<float>(s_redrawSum) / static_cast<float>(kRedrawHistorySize);
+				snap.staticBakesTotal = s_staticBakeTotal.load(std::memory_order_relaxed);
+				snap.sleepSkips = s_schedDiag.sleep_skips;
+				snap.sleepSkipsTotal = s_sleepSkipTotal.load(std::memory_order_relaxed);
 				{
 					std::scoped_lock lock(s_schedSnapshotMutex);
 					s_schedSnapshot = std::move(snap);
@@ -1678,6 +2636,7 @@ namespace ShadowCasterManager
 			TracyPlot("scm.reconciliation.clears", (int64_t)s_schedDiag.reconciliation_clears);
 			TracyPlot("scm.slots.in_use", (int64_t)s_schedDiag.slots_in_use);
 			TracyPlot("scm.first_render_skips", (int64_t)s_schedDiag.first_render_skips);
+			TracyPlot("scm.sleep_skips", (int64_t)s_schedDiag.sleep_skips);
 
 			// Live config plots — record the *current* settings on each frame so
 			// a single capture spanning a settings change captures both sides.
@@ -1686,6 +2645,12 @@ namespace ShadowCasterManager
 			TracyPlot("cfg.ConvertExcessToNormal", (int64_t)(s_settings.ConvertExcessToNormal ? 1 : 0));
 			TracyPlot("cfg.Enabled", (int64_t)(s_settings.Enabled ? 1 : 0));
 			TracyPlot("cfg.RedrawBudgetMs", (double)s_settings.RedrawBudgetMs);
+			TracyPlot("cfg.CasterCullAngularMin", (double)s_settings.CasterCullAngularMin);
+			TracyPlot("scm.casters_culled", (int64_t)culledThisFrame);
+			TracyPlot("scm.cull_pool_drops", (int64_t)poolDropsThisFrame);
+			TracyPlot("scm.casters_static", (int64_t)staticDraws);
+			TracyPlot("scm.casters_dynamic", (int64_t)dynamicDraws);
+			TracyPlot("scm.static_bakes", (int64_t)bakesThisFrame);
 		}
 	}
 
@@ -1709,6 +2674,76 @@ namespace ShadowCasterManager
 		if (IsPortalGraphTransitioning())
 			return;
 
+		// Reader side of the teardown serialization: ClearLightArrays must not
+		// free lights/passes while this pass iterates them. Counter (not a
+		// shared_mutex) so nested engine re-entry on this thread stays defined;
+		// skip the pass outright when a teardown is already waiting.
+		if (s_teardownWaiting.load(std::memory_order_acquire))
+			return;
+		s_shadowFlushReaders.fetch_add(1, std::memory_order_acq_rel);
+		struct FlushReaderGuard
+		{
+			~FlushReaderGuard() { s_shadowFlushReaders.fetch_sub(1, std::memory_order_acq_rel); }
+		} flushReaderGuard;
+		if (s_teardownWaiting.load(std::memory_order_acquire))
+			return;  // teardown won the race between our check and increment
+
+		// Atlas resource creation happens here at the pass boundary so
+		// readiness cannot flip between draws of the same frame.
+		UpdateAtlas();
+
+		// Atlas rank budget: in importance order, each light gets the biggest
+		// class that still leaves a quarter cell for every lower-ranked
+		// light; without it, first arrivals hoard full tiles and later
+		// lights get no tile at all.
+		if (AtlasActive()) {
+			static std::vector<LightEntry*> ranked;
+			ranked.clear();
+			for (int i = s_lights.PointLightFirst(); i < s_lights.PointLightEnd(s_settings.ShadowLightCount); i++)
+				if (s_lights.Lights[i].Light)
+					ranked.push_back(&s_lights.Lights[i]);
+			// Two-key rank: geometry picks the class band, priority orders
+			// within it; score jitter can never reorder across bands, which
+			// keeps tile assignments cache-stable.
+			std::sort(ranked.begin(), ranked.end(),
+				[](const LightEntry* a, const LightEntry* b) {
+					if (a->desiredScale != b->desiredScale)
+						return a->desiredScale > b->desiredScale;
+					return a->lastScore > b->lastScore;
+				});
+			uint32_t cellsLeft = AtlasCapacityCells();
+			uint32_t remaining = static_cast<uint32_t>(ranked.size());
+			for (auto* e : ranked) {
+				remaining--;
+				float scale = e->desiredScale;
+				while (scale > kTileScaleFloor &&
+					   (cellsLeft < CellsForScale(scale) || cellsLeft - CellsForScale(scale) < remaining))
+					scale *= 0.5f;
+				e->budgetScale = scale;
+				// No demotion hold: holding pendingScale above the budget
+				// target across frames reproducibly crashes the engine batch
+				// renderer (either cell-accounting variant); root-cause before
+				// reintroducing (reproducer: Dragonsreach recorded replay).
+				//
+				// Promotion hold is the opposite direction and safe: adopt a
+				// LARGER class only after it stays wanted ~60 frames. Flicker
+				// jitter otherwise oscillates the class across a boundary, and at
+				// high occupancy each promotion realloc darkens a reclaim victim.
+				float target = std::min(e->desiredScale, scale);
+				if (e->pendingScale > 0.0f && target > e->pendingScale) {
+					if (++e->promoteStreak < 60) {
+						target = e->pendingScale;
+					} else {
+						e->promoteStreak = 0;
+					}
+				} else {
+					e->promoteStreak = 0;
+				}
+				e->pendingScale = target;
+				cellsLeft -= std::min(cellsLeft, CellsForScale(scale));
+			}
+		}
+
 		// VR: RenderActiveShadowCasterLights normally saves+clears g_drawStereo before
 		// iterating shadow casters, then restores it. Without this, each hemisphere
 		// render is doubled for both eyes -> 4-quadrant shadow map texture.
@@ -1722,6 +2757,7 @@ namespace ShadowCasterManager
 		CS_GPU_PASS("SCM::RenderScheduledShadowLights");
 
 		s_budget.Begin(1);
+		s_budget.BeginRenderBatch();
 
 		uint32_t tmp = 0;
 		// Sun first: BSShadowDirectionalLight::Render emits the "Directional
@@ -1755,15 +2791,138 @@ namespace ShadowCasterManager
 				auto& e = s_lights.Lights[i];
 				if (!e.Light || !e.RedrawFrame)
 					continue;
+				bool keepPriorContent = false;
+				bool emptyRender = false;
+				if (AtlasActive()) {
+					// Tile before raster: (re)size for the pending class and
+					// rect-clear once per redraw -- the paraboloid halves share
+					// the tile, so clearing inside the cascade would wipe the
+					// first half.
+					if (!EnsureSlotTile(i, e.pendingScale)) {
+						// Atlas exhausted even at the quarter class: the raster must
+						// still run. EnableLight already registered this light's passes,
+						// and an unconsumed group's passes are freed-but-not-unlinked at
+						// frame end; a recycled pass re-registered by RegisterPassSorted
+						// closes passGroupNext into a ring (RenderBatches never returns).
+						// The viewport hook collapses a tile-less raster to zero size,
+						// so consuming the group draws nothing. No tile marks are set,
+						// so RedrawFrame keeps the retry.
+						s_budget.BeginLight(e.Light, 1);
+						s_cpuSubmitUs.fetch_add(TimeUs([&] { e.Light->Render(tmp); }), std::memory_order_relaxed);
+						s_cpuSubmitN.fetch_add(1, std::memory_order_relaxed);
+						s_budget.EndLight(e.Light, 1);
+						continue;
+					}
+					// Split cache: the light's single accumulate this frame was
+					// filtered in EnableLight. On a bake frame render the static
+					// subset into the cache atlas; otherwise copy the cache into
+					// the tile and composite the movers over it (no clear -- the
+					// copy is the clear). Falls through to the full pass until the
+					// static atlas is ready (the first frames after atlas creation).
+					if (StaticAtlasReady() &&
+						!s_splitState[e.Light].splitExcluded && !s_splitState[e.Light].fullThisFrame) {
+						SplitState& st = s_splitState[e.Light];
+						if (st.bakeThisFrame) {
+							ZoneNamedN(zBake, "SCM::Render::StaticBake", true);
+							s_staticPassActive.store(true, std::memory_order_relaxed);
+							ClearStaticSlotTile(i);
+							s_budget.BeginLight(e.Light, 1);
+							s_cpuSubmitUs.fetch_add(TimeUs([&] { e.Light->Render(tmp); }), std::memory_order_relaxed);
+							s_cpuSubmitN.fetch_add(1, std::memory_order_relaxed);
+							s_budget.EndLight(e.Light, 1);
+							s_staticPassActive.store(false, std::memory_order_relaxed);
+							MarkSlotStaticRendered(i, st.pendingHash);  // atlas slot = source of truth
+							st.bakeThisFrame = false;
+							// Keep last frame's complete live content on bake
+							// frames -- copying the fresh static-only bake in
+							// flashed a mover-less (wrong-looking) shadow for one
+							// frame. Only a tile with no valid content (fresh
+							// alloc) takes the copy, where static-only beats
+							// garbage depths.
+							AtlasTileTexels bakeTile{};
+							if (!GetSlotTileTexels(i, bakeTile) || !bakeTile.contentValid)
+								CopyStaticTileToLive(i);
+							e.renderedScale = e.pendingScale;
+							// Live content unchanged this frame: never swap a
+							// staged promotion in on a bake.
+							MarkSlotTileRendered(i, false);
+							continue;
+						}
+						{
+							// Re-check bake validity AT COMPOSITE TIME: mode selection
+							// (phase A) ran before the per-frame owner reconciliation,
+							// so a reassigned slot can reach here holding the PREVIOUS
+							// light's bake -- compositing it displayed a different
+							// light's shadow. Movers-only over a clear for one frame
+							// beats that; the queued bake heals it next redraw.
+							uint64_t compositeHash = 0;
+							bool compositeValid = false;
+							GetSlotStaticState(i, compositeHash, compositeValid);
+							if (compositeValid) {
+								CopyStaticTileToLive(i);  // seed the tile with cached static depth
+							} else {
+								ClearSlotTile(i);
+								st.bakeQueued = true;
+							}
+							s_budget.BeginLight(e.Light, 1);
+							s_cpuSubmitUs.fetch_add(TimeUs([&] { e.Light->Render(tmp); }), std::memory_order_relaxed);  // composite movers on top (no clear)
+							s_cpuSubmitN.fetch_add(1, std::memory_order_relaxed);
+							s_budget.EndLight(e.Light, 1);
+							e.renderedScale = e.pendingScale;
+							// A movers-only frame (invalid seed) must not swap a
+							// staged promotion in: keep sampling the old complete
+							// tile until a seeded composite or full render lands.
+							// Frustum lights are split-excluded in EnableLight, so
+							// their raster held the FULL accumulate: complete
+							// content, and withholding froze their promotions.
+							const bool fullContent =
+								e.Light->GetIsFrustumLight() && !e.Light->geomList.empty();
+							MarkSlotTileRendered(i, compositeValid || fullContent);
+							continue;
+						}
+					}
+					// Empty-render guard (full-pass path): a redraw whose accumulate
+					// produced no casters -- e.g. a transient cull under redraw-budget
+					// churn -- would clear the tile and mark the empty result valid,
+					// degenerating a good shadow into a flat (wrong) tile. Mirror the
+					// bake-path guard above: keep the prior content by skipping the
+					// clear and the re-mark. The render MUST still run to consume the
+					// passes EnableLight registered (skipping it closes passGroupNext
+					// into a ring); with an empty geomList it draws nothing, so the
+					// held content survives. A tile with no valid content yet (fresh
+					// alloc / staged realloc reads contentValid=false) is not held --
+					// it clears and renders normally.
+					emptyRender = e.Light->geomList.empty();
+					AtlasTileTexels held{};
+					keepPriorContent = emptyRender &&
+					                   GetSlotTileTexels(i, held) && held.contentValid;
+					if (!keepPriorContent)
+						ClearSlotTile(i);
+				}
 				s_budget.BeginLight(e.Light, 1);
-				e.Light->Render(tmp);
+				s_cpuSubmitUs.fetch_add(TimeUs([&] { e.Light->Render(tmp); }), std::memory_order_relaxed);
+				s_cpuSubmitN.fetch_add(1, std::memory_order_relaxed);
 				s_budget.EndLight(e.Light, 1);
+				// Commit the content scale only after the raster actually ran:
+				// a skipped render must keep advertising the scale the slot
+				// still holds, or shaders sample tile UVs against full-slice
+				// content until the geometry hash happens to change.
+				if (!keepPriorContent) {
+					e.renderedScale = e.pendingScale;
+					// Never mark an EMPTY render valid: a starved or transiently
+					// culled fresh tile stays contentValid=false, so the sample side
+					// skips it and the light reads UNSHADOWED -- never a degenerate
+					// (cleared) tile. A high-pressure scene thus cannot show one.
+					if (!emptyRender)
+						MarkSlotTileRendered(i);
+				}
 			}
 		}
+
+		ServiceShadowFrameRecord();
+		s_budget.EndRenderBatch();
 
 		if (globals::game::isVR)
 			*globals::game::drawStereo = savedStereo;
 	}
-
-	// Replaces the call to RenderActiveShadowCasterLights.
 }

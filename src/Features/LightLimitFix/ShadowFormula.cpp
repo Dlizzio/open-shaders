@@ -1,8 +1,6 @@
 // ShadowFormula.cpp
-// exprtk-backed scoring formulas for the shadow caster scheduler: the
-// FormulaHelper wrapper, the shared symbol table, and the per-frame /
-// per-light parameter setup. The only translation unit that includes
-// exprtk.hpp (heavy header; keep it out of the other SCM modules).
+// exprtk-backed scoring formulas: FormulaHelper, the symbol table, per-frame/per-light param setup.
+// Only translation unit including exprtk.hpp (heavy header; keep it out of the other SCM modules).
 
 #include "../../Globals.h"
 #include "ShadowCasterInternal.h"
@@ -102,6 +100,130 @@ namespace ShadowCasterManager
 	// CalculateLightScore: evaluates s_formulaScore if available.
 	// =========================================================================
 
+	LightGeometry ComputeLightGeometry(const RE::NiLight* ni, const RE::NiCamera* camera, float lightRadius)
+	{
+		LightGeometry g{};
+		if (!ni)
+			return g;
+		const auto& rtd = const_cast<RE::NiLight*>(ni)->GetLightRuntimeData();
+		// Score on an EMA'd position anchor, not the live pose: flame flicker
+		// translates the light several units every frame, jittering every
+		// distance and area term below -- churning rank, redraw priority, and
+		// the membership gates. Fade is NOT smoothed: a light fading out must
+		// drop its score promptly, or it holds a shadow slot after it should
+		// have left and its stale shadow flickers in. Rendering keeps the live
+		// pose (shadows still dance).
+		static std::unordered_map<const RE::NiLight*, RE::NiPoint3> s_scoreAnchor;
+		PruneIfOversized(s_scoreAnchor, 1024);
+		const auto live = ni->world.translate;
+		auto [anchorIt, anchorNew] = s_scoreAnchor.try_emplace(ni, live);
+		if (!anchorNew) {
+			anchorIt->second.x += 0.15f * (live.x - anchorIt->second.x);
+			anchorIt->second.y += 0.15f * (live.y - anchorIt->second.y);
+			anchorIt->second.z += 0.15f * (live.z - anchorIt->second.z);
+		}
+		const auto lp = anchorIt->second;
+
+		// Perceptual luminance (Rec.709) x live fade. Valid even at zero
+		// radius, where every geometric term below collapses to 0.
+		g.lum = (0.2126f * rtd.diffuse.red + 0.7152f * rtd.diffuse.green + 0.0722f * rtd.diffuse.blue) * rtd.fade;
+		if (lightRadius <= 0.0f)
+			return g;
+
+		// Projected solid-angle proxy: angularRadius ~ radius/viewZ, coverage
+		// ~ angularRadius^2 (Olsson & Assarsson 2012; CryEngine shadow LOD).
+		// Screen constants drop out of the ranking. Camera intersecting the
+		// sphere clamps effectiveZ to avoid blow-up; fully behind = 0.
+		if (camera) {
+			auto* cam = const_cast<RE::NiCamera*>(camera);
+			const auto cp = camera->world.translate;
+			const RE::NiPoint3 fwd = camera->world.rotate.GetVectorY();
+			const float rx = lp.x - cp.x, ry = lp.y - cp.y, rz = lp.z - cp.z;
+			const float viewZ = fwd.x * rx + fwd.y * ry + fwd.z * rz;
+			if (viewZ > -lightRadius) {
+				const float effectiveZ = std::max(viewZ, lightRadius * 0.5f);
+				const float angularRadius = lightRadius / effectiveZ;
+				g.coverage = angularRadius * angularRadius;
+			}
+
+			// Screen area [0,1]: fraction of the viewport the light's influence
+			// SPHERE projects onto, clamped to the frustum. This is the correct
+			// view-impact signal -- a light behind the camera whose sphere still
+			// reaches into the view keeps a large area (its shadows fall on-screen),
+			// unlike coverage/forwardness which key on the light CENTER. Industry
+			// tiled/clustered-shadow importance (projected sphere area).
+			const float dist = std::sqrt(rx * rx + ry * ry + rz * rz);
+			if (dist < lightRadius + cam->GetNearPlane()) {
+				g.screenArea = 1.0f;  // camera within the sphere: it fills the view
+			} else {
+				const float inv = 1.0f / dist;
+				float coord[4] = { lp.x - rx * lightRadius * inv, lp.y - ry * lightRadius * inv,
+					lp.z - rz * lightRadius * inv, lightRadius };
+				float r1[2], r2[2];
+				GameFrustumOverlap(cam, coord, r1, r2, 0.00001f);
+				const float x0 = std::clamp(std::min(r1[0], r2[0]), -1.0f, 1.0f);
+				const float x1 = std::clamp(std::max(r1[0], r2[0]), -1.0f, 1.0f);
+				const float y0 = std::clamp(std::min(r1[1], r2[1]), -1.0f, 1.0f);
+				const float y1 = std::clamp(std::max(r1[1], r2[1]), -1.0f, 1.0f);
+				g.screenArea = std::clamp((x1 - x0) * (y1 - y0) * 0.25f, 0.0f, 1.0f);
+			}
+		}
+
+		// Skyrim's quadratic falloff (1-(d/r)^2)^2 at camera and player: the
+		// out-of-view floor (a light around the corner still shadows what you
+		// see) and the carried-light signal.
+		auto computeAtt = [&](const RE::NiPoint3& pos) -> float {
+			const float dx = pos.x - lp.x, dy = pos.y - lp.y, dz = pos.z - lp.z;
+			const float dist2 = dx * dx + dy * dy + dz * dz;
+			const float r2 = lightRadius * lightRadius;
+			if (dist2 >= r2)
+				return 0.0f;
+			const float a = 1.0f - dist2 / r2;
+			return a * a;
+		};
+		auto* plr = RE::PlayerCharacter::GetSingleton();
+		g.attCam = camera ? computeAtt(camera->world.translate) : 0.0f;
+		g.attPlr = plr ? computeAtt(plr->GetPosition()) : g.attCam;
+		// Third person: a light enclosing the PLAYER dominates the view around
+		// the player character even though the camera sits outside its sphere
+		// (the carried-torch case) -- same enclosure rule as camera-inside.
+		// First person degenerates to the camera test.
+		if (g.screenArea < 1.0f && plr) {
+			const auto pp = plr->GetPosition();
+			const float px = pp.x - lp.x, py = pp.y - lp.y, pz = pp.z - lp.z;
+			if (px * px + py * py + pz * pz < lightRadius * lightRadius)
+				g.screenArea = 1.0f;
+		}
+		g.sizeProxy = std::max(sqrtf(g.coverage), std::max(g.attCam, g.attPlr));
+		return g;
+	}
+
+	// SEH in its own function (no C++ unwinding objects) so MSVC accepts
+	// __try. NiAVObject::parent is not refcounted; during scene teardown a
+	// live light's chain can dangle, so a miss must be a false, not a CTD.
+	static bool WalkToPlayerRoot(const RE::NiAVObject* node, const RE::NiAVObject* root0, const RE::NiAVObject* root1) noexcept
+	{
+		__try {
+			for (int depth = 0; node && depth < 64; node = node->parent, ++depth)
+				if (node == root0 || node == root1)
+					return true;
+		} __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+		}
+		return false;
+	}
+
+	bool IsPlayerAttachedLight(const RE::NiLight* ni)
+	{
+		if (!ni)
+			return false;
+		auto* plr = RE::PlayerCharacter::GetSingleton();
+		if (!plr)
+			return false;
+		// Both 3D roots: a held torch parents under the active person's
+		// skeleton (the first-person one while in first person).
+		return WalkToPlayerRoot(ni, plr->Get3D(false), plr->Get3D(true));
+	}
+
 	void SetupSceneFormula(const RE::NiCamera* camera)
 	{
 		if (camera) {
@@ -188,6 +310,7 @@ namespace ShadowCasterManager
 		}
 		FormulaHelper::SetParam(kFormulaParam_LightIsSpot, isSpot ? 1.0 : 0.0);
 		FormulaHelper::SetParam(kFormulaParam_LightSpotVisible, spotVisible);
+		FormulaHelper::SetParam(kFormulaParam_LightPlayerAttached, IsPlayerAttachedLight(light->light.get()) ? 1.0 : 0.0);
 
 		float x, y, z;
 
@@ -207,6 +330,13 @@ namespace ShadowCasterManager
 
 			if (s_settings.PromoteNormalToShadow)
 				FormulaHelper::SetParam(kFormulaParam_LightNS, IsPromotedLight(nilight) ? 1.0 : 0.0);
+
+			const auto geom = ComputeLightGeometry(nilight, camera, nilight->GetLightRuntimeData().radius.x);
+			FormulaHelper::SetParam(kFormulaParam_LightCoverage, geom.coverage);
+			FormulaHelper::SetParam(kFormulaParam_LightScreenArea, geom.screenArea);
+			FormulaHelper::SetParam(kFormulaParam_LightLum, geom.lum);
+			FormulaHelper::SetParam(kFormulaParam_LightAttCam, geom.attCam);
+			FormulaHelper::SetParam(kFormulaParam_LightAttPlayer, geom.attPlr);
 		} else {
 			FormulaHelper::SetParam(kFormulaParam_LightIntensity, 0.0);
 			FormulaHelper::SetParam(kFormulaParam_LightRadius, 0.0);
@@ -219,6 +349,11 @@ namespace ShadowCasterManager
 			x = light->worldTranslate.x;
 			y = light->worldTranslate.y;
 			z = light->worldTranslate.z;
+			FormulaHelper::SetParam(kFormulaParam_LightCoverage, 0.0);
+			FormulaHelper::SetParam(kFormulaParam_LightScreenArea, 0.0);
+			FormulaHelper::SetParam(kFormulaParam_LightLum, 0.0);
+			FormulaHelper::SetParam(kFormulaParam_LightAttCam, 0.0);
+			FormulaHelper::SetParam(kFormulaParam_LightAttPlayer, 0.0);
 		}
 
 		FormulaHelper::SetParam(kFormulaParam_LightX, x);
@@ -244,12 +379,29 @@ namespace ShadowCasterManager
 		FormulaHelper::SetParam(kFormulaParam_PlayerLightDistance, playerLightDist);
 	}
 
-	double CalculateLightScore(const RE::BSShadowLight* light, const RE::NiCamera* camera, int32_t index)
+	double CalculateLightScore(const RE::BSShadowLight* light, const RE::NiCamera* camera, int32_t index, float* outImpact)
 	{
 		SetupLightFormula(light, camera, index);
 
-		if (s_formulaScore)
-			return s_formulaScore->Calculate();
+		if (outImpact) {
+			// Screen impact = the larger of "influence sphere fills the view"
+			// and "lights the camera or player". Read back from the params
+			// SetupLightFormula just set, so ComputeLightGeometry (and its EMA)
+			// is not advanced a second time.
+			const float sa = static_cast<float>(FormulaHelper::GetParam(kFormulaParam_LightScreenArea));
+			const float ac = static_cast<float>(FormulaHelper::GetParam(kFormulaParam_LightAttCam));
+			const float ap = static_cast<float>(FormulaHelper::GetParam(kFormulaParam_LightAttPlayer));
+			*outImpact = std::max(sa, std::max(ac, ap));
+		}
+
+		if (s_formulaScore) {
+			// Scores feed std::sort keys (selection, atlas budget) where a
+			// NaN/inf violates strict weak ordering: UB, and in practice an
+			// out-of-bounds introsort crash. Engine light data can be garbage
+			// mid-load and user formulas can divide by zero; sanitize here.
+			const double v = s_formulaScore->Calculate();
+			return std::isfinite(v) ? v : 0.0;
+		}
 
 		return 0.0;
 	}
