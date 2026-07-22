@@ -721,6 +721,10 @@ namespace ShadowCasterManager
 
 			// Step 1: vanilla shadow lights gated by activeLightMask / first-person mask.
 			for (uint32_t slot = 0; slot < casters.size() && added < maxCount; slot++) {
+				// Step 2 below still picks up any real caster here via a
+				// direct array scan once the vanilla mask runs out of bits.
+				if (slot >= kShadowMaskBits)
+					break;
 				uint32_t bit = 1u << slot;
 				if (!((firstPerson && (fpMask & bit)) || (lightData->activeLightMask & bit)))
 					continue;
