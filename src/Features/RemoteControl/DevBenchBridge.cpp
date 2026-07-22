@@ -381,6 +381,30 @@ namespace
 				{ "ptr", std::format("{:#018x}", ptr) },
 				{ "reason", ShadowCasterManager::SchedReasonName(reason) },
 			});
+		json slots = json::array();
+		// renderedScale histogram (full..sixteenth) so gates can assert the
+		// class ladder without walking the slot array.
+		int classes[5] = {};
+		for (const auto& s : snap.slots) {
+			int cls = 0;
+			for (float step = 1.0f; s.renderedScale < step && cls < 4; step *= 0.5f)
+				cls++;
+			classes[cls]++;
+			slots.push_back(json{
+				{ "slot", s.index },
+				{ "ptr", std::format("{:#018x}", s.light) },
+				{ "importance", s.importance },
+				{ "score", s.score },
+				{ "desiredScale", s.desiredScale },
+				{ "budgetScale", s.budgetScale },
+				{ "pendingScale", s.pendingScale },
+				{ "renderedScale", s.renderedScale },
+				{ "tile", json{ { "x", s.tileX }, { "y", s.tileY }, { "size", s.tileSize }, { "contentValid", s.tileContentValid } } },
+				{ "upload", json{ { "recorded", s.uploadRecorded }, { "paramY", s.uploadParamY }, { "range", s.uploadRange } } },
+				{ "suppressed", s.suppressed },
+				{ "promoted", s.promoted },
+			});
+		}
 		return json{
 			{ "valid", snap.valid },
 			{ "frame", snap.frame },
@@ -394,6 +418,27 @@ namespace
 			{ "invalidOther", snap.invalidOther },
 			{ "slotsInUse", snap.slotsInUse },
 			{ "lights", lights },
+			{ "slots", slots },
+			{ "classes", json{ { "full", classes[0] }, { "half", classes[1] }, { "quarter", classes[2] }, { "eighth", classes[3] }, { "sixteenth", classes[4] } } },
+			{ "atlas", json{
+						   { "dim", snap.atlasDim },
+						   { "capacityCells", snap.atlasCapacityCells },
+						   { "occupancy", snap.atlasOccupancy },
+						   { "vramBytes", snap.atlasVramBytes },
+						   { "tileReallocs", snap.atlasTileReallocs },
+						   { "ownerInvalidations", snap.atlasOwnerInvalidations },
+						   { "cpuAccumUsAvg", snap.cpuAccumUsAvg },
+						   { "cpuSubmitUsAvg", snap.cpuSubmitUsAvg },
+						   { "cpuEnableUsAvg", snap.cpuEnableUsAvg },
+					   } },
+			{ "budget", json{
+							{ "avgLightCostUs", snap.avgLightCostUs },
+							{ "avgRedrawsPerFrame", snap.avgRedrawsPerFrame },
+							{ "estPassMsPerFrame", snap.avgLightCostUs / 1000.0 * snap.avgRedrawsPerFrame },
+							{ "staticBakesTotal", snap.staticBakesTotal },
+							{ "sleepSkips", snap.sleepSkips },
+							{ "sleepSkipsTotal", snap.sleepSkipsTotal },
+						} },
 		};
 	}
 
@@ -493,7 +538,26 @@ namespace
 			});
 		}
 
-		return json{ { "error", "unknown kind" }, { "kind", kind }, { "supported", json::array({ "renderdoc", "screenshot" }) } };
+		if (kind == "shadowmaps") {
+			// Atomic request flags serviced by the render thread's shadow pass;
+			// everything lands under CommunityShaders/Captures. Default: one
+			// whole-atlas DDS + manifest. With frames=N: a multi-frame recorder
+			// (per-slot numeric state per frame; slot>=0 adds that light's
+			// caster set per pass mode, and frames<=16 adds per-frame tile DDS).
+			const uint32_t frames = a_args.value("frames", 0u);
+			const int32_t slot = a_args.value("slot", -1);
+			if (frames > 0) {
+				ShadowCasterManager::RequestShadowFrameRecord(frames, slot);
+				return json{ { "queued", true }, { "kind", "shadowmaps" }, { "frames", frames },
+					{ "slot", slot }, { "enqueued_at_frame", frame },
+					{ "note", "recorder armed; scm_frames_<N>.json (and scm_rec_slot<S>_f<N>.dds when slot>=0, frames<=16) under CommunityShaders/Captures at completion; watch the log" } };
+			}
+			ShadowCasterManager::RequestAtlasDump();
+			return json{ { "queued", true }, { "kind", "shadowmaps" }, { "enqueued_at_frame", frame },
+				{ "note", "written by the next shadow pass to Data/SKSE/Plugins/CommunityShaders/Captures (atlas mode only); watch the log for the path" } };
+		}
+
+		return json{ { "error", "unknown kind" }, { "kind", kind }, { "supported", json::array({ "renderdoc", "screenshot", "shadowmaps" }) } };
 	}
 
 	void CaptureToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
@@ -664,7 +728,7 @@ namespace DevBenchBridge
 		dvb->RegisterTool("openshaders.shadercache", shadercacheDesc, &ShadercacheToolHandler, nullptr);
 
 		static constexpr const char* captureDesc =
-			R"({"description":"Trigger a frame capture on the next render. Kind-dispatched. kind=renderdoc: RenderDoc multi-frame capture via the in-app API, honors frames (1-120, default 1); RenderDoc must be attached/loaded (check openshaders.feature list for RenderDoc.loaded). kind=screenshot: lossless screenshot via the Screenshot feature; frames is ignored. Fire-and-forget — no artifact path is returned synchronously.","inputSchema":{"type":"object","properties":{"kind":{"type":"string","enum":["renderdoc","screenshot"]},"frames":{"type":"number"}},"required":["kind"]}})";
+			R"({"description":"Trigger a frame capture on the next render. Kind-dispatched. kind=renderdoc: RenderDoc multi-frame capture via the in-app API, honors frames (1-120, default 1); RenderDoc must be attached/loaded (check openshaders.feature list for RenderDoc.loaded). kind=screenshot: lossless screenshot via the Screenshot feature; frames is ignored. kind=shadowmaps: writes the shadow atlas depth texture (DDS) + slot-manifest JSON to Data/SKSE/Plugins/CommunityShaders/Captures on the next shadow pass (atlas mode only): ground truth for tile contents without a RenderDoc attach. Fire-and-forget: no artifact path is returned synchronously.","inputSchema":{"type":"object","properties":{"kind":{"type":"string","enum":["renderdoc","screenshot","shadowmaps"]},"frames":{"type":"number"}},"required":["kind"]}})";
 		dvb->RegisterTool("openshaders.capture", captureDesc, &CaptureToolHandler, nullptr);
 
 		static constexpr const char* settingsDesc =
@@ -692,7 +756,7 @@ namespace DevBenchBridge
 			dvb->RegisterToolExtension("inspect", "shadercache", inspectCacheDesc, &InspectShadercacheHandler, nullptr);
 
 			static constexpr const char* inspectShadowsDesc =
-				R"({"description":"Open Shaders Light Limit Fix shadow-scheduler diagnostics -> {valid,frame,total,chosen,excess,invalidCamera,invalidPortal,invalidFrustum,invalidLod,invalidOther,slotsInUse,lights:[{ptr,reason}]}. reason: portal|frustum|lod|excess|other -- why a non-chosen light was demoted from a shadow caster. The scheduler fills this only while the settings menu is open or a dump was recently requested; calling this primes it, so if valid==false (idle) poll again after a frame (use inspect kind=openshaders frame_count to know a tick passed).","readOnly":true,"inputSchema":{"type":"object"}})";
+				R"({"description":"Open Shaders Light Limit Fix shadow-scheduler diagnostics -> {valid,frame,total,chosen,excess,invalid*,slotsInUse,lights:[{ptr,reason}],slots:[{slot,ptr,importance,score,desiredScale,budgetScale,pendingScale,renderedScale,tile:{x,y,size,contentValid}}],classes:{full,half,quarter,eighth,sixteenth},atlas:{dim,capacityCells,occupancy,vramBytes},budget:{avgLightCostUs,avgRedrawsPerFrame,estPassMsPerFrame,staticBakesTotal}}. reason: portal|frustum|lod|excess|other -- why a non-chosen light was demoted from a shadow caster. slots covers occupied point-light pool slots (tile.size 0 = no atlas tile); classes buckets renderedScale; atlas is all-zero when the shadow atlas is inactive; budget is the GPU-timestamp tracker (estPassMsPerFrame = avg cost x avg redraws, the REST perf A/B metric). The scheduler fills this only while the settings menu is open or a dump was recently requested; calling this primes it, so if valid==false (idle) poll again after a frame (use inspect kind=openshaders frame_count to know a tick passed).","readOnly":true,"inputSchema":{"type":"object"}})";
 			dvb->RegisterToolExtension("inspect", "llfshadows", inspectShadowsDesc, &InspectShadowsHandler, nullptr);
 		} else {
 			logger::info("DevBenchBridge: devbench build {} < 10500; CS menu + inspect extensions need 1.5.0", dvb->GetBuildNumber());

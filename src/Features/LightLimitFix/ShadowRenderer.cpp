@@ -6,6 +6,7 @@
 #include "GpuPass.h"
 #include "I18n/I18n.h"
 #include "Menu/ThemeManager.h"
+#include "ShadowCasterInternal.h"
 #include "State.h"
 #include "Util.h"
 
@@ -179,8 +180,70 @@ void LightLimitFix::CopyShadowLightData()
 				uintptr_t lightKey = reinterpret_cast<uintptr_t>(light);
 				const bool suppressed = ShadowCasterManager::IsSuppressed(lightKey);
 				sd[depthSlot].ShadowParam.y = suppressed ? -1.0f : (projValid ? range : 0.0f);
+				// ShadowParam.w: rasterized tile scale.
+				// Shader treats <= 0 as full slice, so zero-filled slots and
+				// mismatched DLL/shader builds degrade to vanilla sampling.
+				sd[depthSlot].ShadowParam.w = ShadowCasterManager::GetRenderedTileScale(stableSlot);
+				// AtlasRect: advertise the tile only once it holds rendered
+				// content; zero keeps the shader on the array-slice path.
+				if (ShadowCasterManager::AtlasActive()) {
+					ShadowCasterManager::AtlasRectUV rect{};
+					if (ShadowCasterManager::GetSlotAtlasRectUV(stableSlot, rect)) {
+						sd[depthSlot].AtlasRect = { rect.scaleX, rect.scaleY, rect.biasX, rect.biasY };
+						// Bias class scale must come from the SAME tile as the
+						// rect: per-light renderedScale can go stale across
+						// reallocs, and full-class bias on a small tile is
+						// 16-64x too little -- self-shadow acne over the
+						// light's whole footprint (a fluctuating dark halo).
+						sd[depthSlot].ShadowParam.w = rect.classScale;
+						// Between redraws, advertise the radius/bias the tile was
+						// rastered with, not the live light's: flame flicker
+						// animates the radius every frame and the drift against
+						// stale baked depth reads as pulsing false occlusion.
+						// ShadowProj stays live so shadows track light pose.
+						if (sd[depthSlot].ShadowParam.y > 0.0f) {
+							ShadowCasterManager::ShadowBakeSnapshot snap{};
+							if (ShadowCasterManager::SlotBakeSnapshotPending(stableSlot)) {
+								snap.radius = sd[depthSlot].ShadowParam.y;
+								snap.bias = sd[depthSlot].ShadowParam.z;
+								ShadowCasterManager::StoreSlotBakeSnapshot(stableSlot, snap);
+							} else if (ShadowCasterManager::LoadSlotBakeSnapshot(stableSlot, snap)) {
+								sd[depthSlot].ShadowParam.y = snap.radius;
+								sd[depthSlot].ShadowParam.z = snap.bias;
+							}
+						}
+					} else if (sd[depthSlot].ShadowParam.y > 0.0f) {
+						// No rendered tile behind this slot; atlas mode never
+						// writes the engine slices, so force the safe sentinel
+						// instead of sampling stale array depth (suppressed
+						// lights keep their -1 sentinel).
+						sd[depthSlot].ShadowParam.y = 0.0f;
+					}
+				}
+				// paramY records the FINAL sentinel state (after the atlas
+				// no-tile override above) so diagnostics see what shaders see.
+				// Name resolved once per NiLight (owner ref display name, then
+				// scenegraph node name, then form ID) so the table can identify
+				// which world light each row is.
+				static std::unordered_map<const RE::NiLight*, std::string> s_lightNames;
+				ShadowCasterManager::PruneIfOversized(s_lightNames, 1024);
+				std::string lightName;
+				if (auto* ni = light->light.get()) {
+					auto [nameIt, nameNew] = s_lightNames.try_emplace(ni);
+					if (nameNew) {
+						if (auto* ref = ni->GetUserData()) {
+							if (auto* base = ref->GetObjectReference()) {
+								const char* n = base->GetName();
+								nameIt->second = (n && n[0]) ? n : std::format("{:08X}", ref->GetFormID());
+							}
+						}
+						if (nameIt->second.empty() && !ni->name.empty())
+							nameIt->second = ni->name.c_str();
+					}
+					lightName = nameIt->second;
+				}
 				ShadowCasterManager::RecordSlot(depthSlot,
-					{ static_cast<uint32_t>(shadowTypeF), range, true, lightKey });
+					{ static_cast<uint32_t>(shadowTypeF), range, true, lightKey, sd[depthSlot].ShadowParam.y, std::move(lightName) });
 			}
 
 			plCount++;
@@ -236,6 +299,9 @@ void LightLimitFix::CopyShadowLightData()
 	}
 
 	context->PSSetShaderResources(103, 1, &shadowMapsSRV);
+
+	ID3D11ShaderResourceView* atlasSRV = ShadowCasterManager::AtlasSRV();
+	context->PSSetShaderResources(104, 1, &atlasSRV);
 }
 
 // ─── Debug helpers ────────────────────────────────────────────────────────────

@@ -10,6 +10,51 @@
 using Catch::Approx;
 using ShadowCasterManager::FrameTimePercentile90;
 using ShadowCasterManager::IsPlausibleShadowLightPtr;
+using ShadowCasterManager::kShadowSizeToTexels;
+using ShadowCasterManager::kTileScaleFloor;
+using ShadowCasterManager::TileScaleForCoverage;
+using ShadowCasterManager::TileScaleTarget;
+
+namespace
+{
+	// sizeProxy that asks for exactly `texels` at the classifier's scale.
+	float SizeForTexels(float texels)
+	{
+		return texels / kShadowSizeToTexels;
+	}
+}
+
+TEST_CASE("TileScaleTarget picks the smallest class meeting the target", "[scm]")
+{
+	// 2048 base: targets above half-class resolution stay full.
+	REQUIRE(TileScaleTarget(SizeForTexels(2000.0f), 2048.0f) == 1.0f);
+	REQUIRE(TileScaleTarget(SizeForTexels(1025.0f), 2048.0f) == 1.0f);
+	// Exactly satisfiable by a smaller class steps down.
+	REQUIRE(TileScaleTarget(SizeForTexels(1024.0f), 2048.0f) == 0.5f);
+	REQUIRE(TileScaleTarget(SizeForTexels(512.0f), 2048.0f) == 0.25f);
+	// Tiny lights clamp at the ladder floor, never zero.
+	REQUIRE(TileScaleTarget(0.0f, 2048.0f) == kTileScaleFloor);
+	// The base resolution scales the whole ladder.
+	REQUIRE(TileScaleTarget(SizeForTexels(1024.0f), 4096.0f) == 0.25f);
+}
+
+TEST_CASE("TileScaleForCoverage promotes immediately", "[scm]")
+{
+	REQUIRE(TileScaleForCoverage(SizeForTexels(2000.0f), 2048.0f, 0.25f) == 1.0f);
+	REQUIRE(TileScaleForCoverage(SizeForTexels(700.0f), 2048.0f, 0.25f) == 0.5f);
+}
+
+TEST_CASE("TileScaleForCoverage demotes lazily (hysteresis)", "[scm]")
+{
+	// Just below the class boundary: the headroom-inflated size still asks
+	// for the current class, so it holds (a flip would force a redraw).
+	REQUIRE(TileScaleForCoverage(SizeForTexels(900.0f), 2048.0f, 1.0f) == 1.0f);
+	// Clearly below even with headroom: demotes to the target class.
+	REQUIRE(TileScaleForCoverage(SizeForTexels(600.0f), 2048.0f, 1.0f) == 0.5f);
+	REQUIRE(TileScaleForCoverage(SizeForTexels(300.0f), 2048.0f, 0.5f) == 0.25f);
+	// The extended ladder reaches the sixteenth class for tiny lights.
+	REQUIRE(TileScaleForCoverage(SizeForTexels(100.0f), 2048.0f, 0.5f) == kTileScaleFloor);
+}
 
 TEST_CASE("IsPlausibleShadowLightPtr rejects null, near-null, misaligned, and non-canonical", "[scm]")
 {

@@ -1,10 +1,15 @@
-﻿// ShadowSlotAllocator.cpp
-// kSHADOWMAPS slot bookkeeping for the shadow caster scheduler: LightContainer
-// pool allocation (including the engine focus-shadow slot reservation),
-// verification of the slice count the GPU actually allocated, and VRAM
-// telemetry for the sizing UI.
+// ShadowSlotAllocator.cpp
+// kSHADOWMAPS slot bookkeeping: pool allocation, allocated-slice verification, VRAM telemetry.
 
+#include "../../Deferred.h"
 #include "../../Globals.h"
+#include "../../GpuPass.h"
+#include "../../State.h"
+#include "../../Utils/Game.h"
+#include "../../Utils/UI.h"
+#include "../Upscaling.h"
+#include "../VR.h"
+#include "I18n/I18n.h"
 #include "ShadowCasterInternal.h"
 
 namespace ShadowCasterManager
@@ -142,7 +147,7 @@ namespace ShadowCasterManager
 	// `desc.Texture2DArray.ArraySize` from the SRV desc returns 0; only the
 	// texture's own ArraySize is reliable. Returns false on any failure
 	// stage; out param is left untouched.
-	static bool TryReadShadowTextureDesc(D3D11_TEXTURE2D_DESC& out)
+	bool TryReadShadowTextureDesc(D3D11_TEXTURE2D_DESC& out)
 	{
 		auto* renderer = globals::game::renderer;
 		if (!renderer)
@@ -186,6 +191,10 @@ namespace ShadowCasterManager
 		if (s_slotCountLogged)
 			return;
 		s_slotCountLogged = true;
+		// Atlas boot mode expects the vanilla 8-slice array; the pool is
+		// intentionally larger, so skip the mismatch clamp.
+		if (s_bootAtlasEnabled)
+			return;
 		if (s_requestedSlotCount && actual != s_requestedSlotCount) {
 			logger::warn(
 				"[SCM] Requested {} kSHADOWMAPS slots, GPU allocated {} -- "
@@ -199,6 +208,10 @@ namespace ShadowCasterManager
 
 	uint32_t GetInstalledSlotCount()
 	{
+		// Atlas boot mode: shadow records are keyed by POOL slot while the
+		// engine array stays at the vanilla slice count; span the pool.
+		if (s_bootAtlasEnabled)
+			return static_cast<uint32_t>(std::max(s_installedShadowLightCount + 1, 1));
 		// Lazy-refresh; cheap once verified. Fall back to the requested
 		// count when verification can't complete -- a non-zero slot count
 		// is needed for the cluster pipeline to engage shadow handling.

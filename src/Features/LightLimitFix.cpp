@@ -116,6 +116,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	JsonPlacedLightsInteriorsOnly,
 	JsonPlacedLightsPortalStrictOnly)
 
+void LightLimitFix::DrawVRPerformanceSettings()
+{
+	ShadowCasterManager::DrawImpactCullControls(settings.ShadowSettings);
+}
+
 void LightLimitFix::DrawSettings()
 {
 	auto shaderCache = globals::shaderCache;
@@ -562,6 +567,14 @@ void LightLimitFix::LoadSettings(json& o_json)
 	// Raise saved values below the current floor so older configs migrate.
 	if (settings.ShadowSettings.MaxRedrawPerFrame < ShadowCasterManager::Settings::kMinMaxRedrawPerFrame)
 		settings.ShadowSettings.MaxRedrawPerFrame = ShadowCasterManager::Settings::kMinMaxRedrawPerFrame;
+
+	// Upgrade an untouched ScoreFormula to the current default; a customized
+	// formula never matches a legacy default verbatim and is left alone.
+	for (const char* legacy : ShadowCasterManager::kLegacyScoreFormulas)
+		if (settings.ShadowSettings.ScoreFormula == legacy) {
+			settings.ShadowSettings.ScoreFormula = ShadowCasterManager::Settings{}.ScoreFormula;
+			break;
+		}
 }
 
 void LightLimitFix::SaveSettings(json& o_json)
@@ -962,11 +975,17 @@ void LightLimitFix::UpdateLights()
 	// see which light a row corresponds to in 3D. Pulse cycles ~once per second
 	// using ImGui::GetTime() for a stable visual signal.
 	auto applyDebugOverrides = [](LightData& light, const void* lightPtr) {
+		const auto key = reinterpret_cast<uintptr_t>(lightPtr);
 		auto hoverKey = ShadowCasterManager::GetHoveredLight();
-		if (hoverKey != 0 && reinterpret_cast<uintptr_t>(lightPtr) == hoverKey) {
+		if (hoverKey != 0 && key == hoverKey) {
 			float t = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.2831853f);
 			light.color = { 1.0f, 0.0f, 1.0f };  // magenta
 			light.fade = 4.0f + t * 4.0f;        // pulsed intensity
+		} else if (ShadowCasterManager::IsHighlighted(key)) {
+			// Steady magenta on every light in the selected highlight group
+			// (populated by the table's group-button hover), distinct from
+			// the single pulsing hover light.
+			light.color = { 1.0f, 0.0f, 1.0f };
 		}
 	};
 

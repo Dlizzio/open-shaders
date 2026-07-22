@@ -52,6 +52,7 @@ add_executable(cpp_tests
     test_stringutils.cpp
     test_isl_radiusmath.cpp
     test_shadowcaster_math.cpp
+    test_atlas_allocator.cpp
     test_llf_sanitize.cpp
     test_hdr_png_metadata.cpp
     test_cacheinvalidation.cpp

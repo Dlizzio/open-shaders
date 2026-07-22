@@ -1,8 +1,5 @@
 // ShadowCasterInternal.h
-// Shared state and cross-module declarations for the ShadowCasterManager
-// implementation. Internal to the shadow scheduling subsystem -- include only
-// from the ShadowCaster*.cpp / Shadow*.cpp translation units in this
-// directory. The public API lives in ShadowCasterManager.h.
+// Shared state for the ShadowCasterManager implementation; include only from Shadow*.cpp. Public API is ShadowCasterManager.h.
 
 #pragma once
 
@@ -17,9 +14,21 @@
 #include <imgui.h>
 
 #include "ShadowCasterManager.h"
+#include "Utils/BootSnapshot.h"
 
 namespace ShadowCasterManager
 {
+	/// Bounds a per-light/per-caster memo map keyed by raw engine pointers:
+	/// dead keys accumulate silently, so drop the whole map past a cap. State
+	/// rebuilds transparently the next frame, so a full clear is cheaper than
+	/// tracking liveness.
+	template <class Map>
+	inline void PruneIfOversized(Map& map, size_t cap)
+	{
+		if (map.size() > cap)
+			map.clear();
+	}
+
 	// ---------------------------------------------------------------------
 	// Core scheduler state (definitions in ShadowCasterManager.cpp)
 	// ---------------------------------------------------------------------
@@ -33,16 +42,13 @@ namespace ShadowCasterManager
 	extern bool s_externalConflict;
 	extern std::string s_conflictMessage;
 
-	// Per-frame count of kSHADOWMAPS slots claimed by the engine's focus
-	// shadow renderer (player + tracked NPCs, max 4). Read from
-	// FocusShadowActors.size each frame; values clamp to [0, 4]. Reserves
-	// the slot range [kFocusShadowBaseSlotIndex .. +s_focusShadowSlots) =
-	// [4 .. 4+count) from the point-light pool dynamically: zero focus
-	// actors means the full pool is available, four means slots 4-7 are
-	// off-limits. Point lights occupying a freshly-claimed slot are
-	// ejected at scheduling time and re-allocated to a free slot or
-	// converted as excess.
+	// Per-frame slot count [0,4] the engine's focus shadow renderer claims;
+	// reserves [kFocusShadowBaseSlotIndex, +s_focusShadowSlots) from the pool.
 	extern int s_focusShadowSlots;
+
+	// Width of the vanilla shadow-caster bitmasks (activeLightMask, fpMask,
+	// GetShadowMask()); a slot >= this has no representable bit.
+	inline constexpr uint32_t kShadowMaskBits = 32u;
 
 	// Rolling redraw / budget-consumed history (128-frame window) for
 	// DrawSettings statistics.
@@ -100,6 +106,7 @@ namespace ShadowCasterManager
 		int reconciliation_clears = 0;       // slot freed because light gone from activeShadowLights
 		int slots_in_use = 0;                // sampled at frame end
 		int first_render_skips = 0;          // chosen lights deferred from shadow set: no valid slice yet
+		int sleep_skips = 0;                 // redraws elided by the empty-dynamic sleep predicate
 	};
 	extern SchedDiagCounters s_schedDiag;
 
@@ -157,6 +164,11 @@ namespace ShadowCasterManager
 	// ResetScene nulling/swapping ssn->portalGraph (exclusive) -- the cross-thread null deref.
 	extern std::shared_mutex s_portalGraphMutex;
 
+	// Serializes engine bulk teardown (ClearLightArrays) against an in-flight
+	// render: freeing mid-walk zeroes render-pass nodes under the walker.
+	extern std::atomic<int> s_shadowFlushReaders;
+	extern std::atomic<bool> s_teardownWaiting;
+
 	// User suppression set (lightKey = BSShadowLight pointer cast to uintptr_t).
 	// Persisted across light lifetimes so suppressing a torch survives the player
 	// leaving and returning to a cell.
@@ -208,6 +220,12 @@ namespace ShadowCasterManager
 		{ "lightimportance", "contribution score: lum(diffuse*fade) * max(att_cam,att_plr) where att=(1-(dist/radius)^2)^2; 0 in score formula", kFormulaParam_LightImportance },
 		{ "lightisspot", "1 if this is a spot/frustum shadow light (BSShadowFrustumLight); 0 for omni / hemi / sun", kFormulaParam_LightIsSpot },
 		{ "lightspotvisible", "1 if the spot's cone plausibly reaches the camera frustum, 0 otherwise. Always 1 for non-spot lights so existing omni-only formulas are unaffected", kFormulaParam_LightSpotVisible },
+		{ "lightplayerattached", "1 if the light is attached to the player's scene graph (held torch, Candlelight); its shadow sits at the viewer, where artifacts are most visible", kFormulaParam_LightPlayerAttached },
+		{ "lightcoverage", "projected screen coverage: (radius/viewZ)^2, clamped when the camera is inside the light (~4 max); 0 when fully behind the camera", kFormulaParam_LightCoverage },
+		{ "lightscreenarea", "view-impact 0..1: fraction of the screen the light's influence sphere covers, clamped to the frustum. ~1 for a light filling the view, ~0 for one whose lit volume barely reaches the screen. Correctly counts lights behind the camera whose light (and shadows) still reach the visible scene -- prefer this over lightcoverage", kFormulaParam_LightScreenArea },
+		{ "lightlum", "Rec.709 luminance of the diffuse color x engine fade", kFormulaParam_LightLum },
+		{ "lightattcam", "Skyrim falloff attenuation (1-(d/r)^2)^2 at the camera; 0 outside the radius", kFormulaParam_LightAttCam },
+		{ "lightattplayer", "Skyrim falloff attenuation (1-(d/r)^2)^2 at the player; 1 for a carried light", kFormulaParam_LightAttPlayer },
 		{ "camerax", "camera world X", kFormulaParam_CameraX },
 		{ "cameray", "camera world Y", kFormulaParam_CameraY },
 		{ "cameraz", "camera world Z", kFormulaParam_CameraZ },
@@ -218,6 +236,23 @@ namespace ShadowCasterManager
 		{ "stableframes", "consecutive frames EMA has been below frametarget", kFormulaParam_StableFrames },
 	};
 
+	/// True if the light's scene-graph ancestry reaches the player's 3D
+	/// (either person): held torches and Candlelight-style spell lights.
+	bool IsPlayerAttachedLight(const RE::NiLight* ni);
+
+	/// Geometric + photometric per-light signals, computed once per candidate
+	/// and shared between the formula variables and the scheduler.
+	struct LightGeometry
+	{
+		float lum = 0.0f;         ///< Rec.709 luminance of diffuse x fade
+		float coverage = 0.0f;    ///< projected solid-angle proxy; 0 behind camera
+		float attCam = 0.0f;      ///< Skyrim falloff attenuation at the camera
+		float attPlr = 0.0f;      ///< Skyrim falloff attenuation at the player
+		float sizeProxy = 0.0f;   ///< classifier input: max(sqrt(coverage), att)
+		float screenArea = 0.0f;  ///< viewport-clamped projected sphere area [0,1] (view impact)
+	};
+	LightGeometry ComputeLightGeometry(const RE::NiLight* ni, const RE::NiCamera* camera, float lightRadius);
+
 	/// Sets camera/scene formula params. Called once per scheduler frame.
 	void SetupSceneFormula(const RE::NiCamera* camera);
 
@@ -225,7 +260,9 @@ namespace ShadowCasterManager
 	void SetupLightFormula(const RE::BSShadowLight* light, const RE::NiCamera* camera, int32_t index);
 
 	/// Runs SetupLightFormula then evaluates s_formulaScore (0.0 when unset).
-	double CalculateLightScore(const RE::BSShadowLight* light, const RE::NiCamera* camera, int32_t index);
+	/// outImpact (optional): max(screenArea, attCam, attPlr) -- the light's
+	/// on-screen shadow relevance, for the impact-floor cull.
+	double CalculateLightScore(const RE::BSShadowLight* light, const RE::NiCamera* camera, int32_t index, float* outImpact = nullptr);
 
 	/// True if this NiLight was promoted normal->shadow (PromoteNormalToShadow).
 	bool IsPromotedLight(RE::NiLight* ni);
@@ -270,13 +307,12 @@ namespace ShadowCasterManager
 	/// the texture becomes readable.
 	void RefreshInstalledSlotCount();
 
+	/// Reads kSHADOWMAPS's underlying Texture2D desc (the SRV's ViewDimension
+	/// lies about the array). false while the texture isn't readable yet.
+	bool TryReadShadowTextureDesc(D3D11_TEXTURE2D_DESC& out);
+
 	// ---------------------------------------------------------------------
-	// Engine hooks module (ShadowEngineHooks.cpp): thin wrappers around game
-	// globals and engine functions, shared with the scheduler. All
-	// REL::RelocationID pairs are (SE_id, AE_id); VR addresses verified
-	// against the VR address library CSV. Raw pointers returned by the
-	// Get*Ptr/Get*Selected accessors are engine globals resolved once via
-	// the address library -- stable for the process lifetime, safe to cache.
+	// Engine hooks module (ShadowEngineHooks.cpp)
 	// ---------------------------------------------------------------------
 
 // Convenience: runtime-aware shadow-light field accessor (SE vs VR RuntimeData differ).
@@ -323,6 +359,8 @@ namespace ShadowCasterManager
 	void GameClearPortalVisibility(RE::BSPortalGraphEntry* entry);
 	bool GamePortalHasSharedVisibility(RE::BSPortalGraphEntry* a, RE::BSPortalGraphEntry* b);
 	void GameClearGeometryList(RE::BSLight* light);
+	void GameAttachGeometry(RE::BSLight* light, RE::BSGeometry* geom);
+	bool GameLightIsInRange(RE::BSLight* light, const RE::NiBound* bound, RE::NiLight* niLight, float scale);
 	void GameApplyLensFlare(RE::BSLight* light);
 	void GameVRPrepareShadowMaps(RE::BSLight* light);
 	void GameVRAccumulateShadowMaps(RE::BSLight* light);
@@ -331,10 +369,172 @@ namespace ShadowCasterManager
 	/// Culling process for the first shadow descriptor of a light.
 	RE::BSCullingProcess* GetLightCullingProcess(RE::BSShadowLight* light);
 
+	/// Installs the parabolic AppendVirtual hook that contribution-culls
+	/// point-light shadow casters. Called once from Install().
+	void InstallCasterCullHook();
+
 	// Boot-latched Enabled flag (captured by Install; read by IsActive and the
 	// restart-required UI label).
 	extern bool s_bootEnabled;
 	extern bool s_bootEnabledCaptured;
+
+	// Boot-latched snapshot of the kRestartFields hook toggles; latched by
+	// Install() alongside s_bootEnabled, read by the pending-restart banners.
+	extern Util::Settings::BootSnapshot<Settings> s_bootSnapshot;
+
+	// ---------------------------------------------------------------------
+	// Shadow atlas module (ShadowAtlas.cpp)
+	// ---------------------------------------------------------------------
+
+	// Boot-latched atlas enable: the kSHADOWMAPS array extension decision at
+	// BSShaderRenderTargets::Create depends on it, so runtime toggles cannot
+	// change it (mirrors s_bootEnabled).
+	extern bool s_bootAtlasEnabled;
+
+	// Engine kSHADOWMAPS slice count without the creation-loop patch; atlas
+	// mode keeps the array at this size, and pre-atlas frames must not
+	// schedule slots beyond it.
+	inline constexpr int32_t kVanillaShadowSliceCount = 8;
+
+	// D3D11 texture dimension ceiling; also the largest UI-selectable
+	// atlas resolution.
+	inline constexpr uint32_t kAtlasMaxResolution = 16384;
+
+	/// A slot's atlas tile in texels. contentValid only after the tile has
+	/// rendered at least once (freshly allocated tiles hold stale depth).
+	struct AtlasTileTexels
+	{
+		uint32_t x = 0;
+		uint32_t y = 0;
+		uint32_t size = 0;
+		uint32_t lastRenderFrame = 0;
+		bool contentValid = false;
+	};
+
+	/// Diagnostic counters for the atlas clear paths (cumulative since boot).
+	struct AtlasClearStats
+	{
+		uint32_t swallowed = 0;           ///< full-surface clears blocked on atlas views
+		uint32_t passedThrough = 0;       ///< clears on other views (proves the hook is live)
+		uint32_t tileClears = 0;          ///< our own per-tile ClearView calls
+		uint32_t tileReallocs = 0;        ///< class-change tile reallocations (cache busts)
+		uint32_t ownerInvalidations = 0;  ///< slot handed to a different light (content dropped)
+	};
+	AtlasClearStats GetAtlasClearStats();
+
+	/// True when the atlas is boot-enabled and its resources exist. Cheap
+	/// flag check, safe inside draw-time hooks; never creates resources.
+	bool AtlasActive();
+
+	/// Creates atlas resources on first use (runs the ClearView probe, which
+	/// stalls on a GPU readback) and tracks pool reallocation. Call once per
+	/// frame at the shadow-pass entry, never mid-pass: readiness must not
+	/// flip between draws of the same frame.
+	void UpdateAtlas();
+
+	ID3D11DepthStencilView* AtlasDSV(bool readOnly);
+	ID3D11ShaderResourceView* AtlasSRV();
+	uint32_t AtlasDim();
+	uint32_t AtlasBaseTile();
+	float AtlasOccupancy();
+
+	/// Atlas texture footprint in bytes (0 until resources exist).
+	uint64_t AtlasVRAMBytes();
+
+	/// The dimension a requested AtlasResolution would clamp+snap to this
+	/// session (0 until resources exist). UI restart banners must compare
+	/// through this, not the raw setting.
+	uint32_t AtlasSnapResolution(uint32_t requested);
+
+	/// Total allocator cells (quarter-class tiles) the atlas holds.
+	uint32_t AtlasCapacityCells();
+
+	/// Cells a tile of the given class scale consumes (full 16, half 4,
+	/// quarter 1).
+	uint32_t CellsForScale(float scale);
+
+	/// Ensures the slot has a tile sized for `scale` (reallocates on class
+	/// change; walks down classes under atlas pressure). false = no tile.
+	bool EnsureSlotTile(int32_t poolSlot, float scale);
+
+	/// Marks the slot's tile content valid; call after the light's Render.
+	/// a_swapComplete: the raster produced complete content, so a staged
+	/// promotion tile may swap in (false for bakes / movers-only composites).
+	void MarkSlotTileRendered(int32_t poolSlot, bool a_swapComplete = true);
+
+	/// Radius/bias a tile's depth was rastered with. Between redraws the upload
+	/// must advertise these instead of the live light's: flame flicker animates
+	/// the radius every frame, and receiver depth normalized by the live radius
+	/// drifts off depth baked at the old one (pulsing false occlusion over the
+	/// light's whole footprint). ShadowProj stays LIVE -- freezing it pins a
+	/// moving light's shadow in world space and goes stale across loads.
+	struct ShadowBakeSnapshot
+	{
+		float radius = 0.0f;
+		float bias = 0.0f;
+	};
+	/// True when content landed since the last store; the renderer must refresh
+	/// the snapshot from the live values it uploads that frame.
+	bool SlotBakeSnapshotPending(int32_t poolSlot);
+	void StoreSlotBakeSnapshot(int32_t poolSlot, const ShadowBakeSnapshot& snap);
+	bool LoadSlotBakeSnapshot(int32_t poolSlot, ShadowBakeSnapshot& out);
+
+	void FreeSlotTile(int32_t poolSlot);
+	void FreeAllTiles();
+
+	bool GetSlotTileTexels(int32_t poolSlot, AtlasTileTexels& out);
+	/// Free slot still holding a_owner's rendered tile within the orphan grace
+	/// window (-1 if none) -- lets a gate-flapped light reclaim its content.
+	int32_t FindFreeSlotByOwner(const void* a_owner);
+	/// Diagnostic: readback ONE slot's tile region to Captures/scm_rec_slot<S>_f<N>.dds (GPU stall).
+	void DumpSlotTileRegion(int32_t poolSlot, uint32_t a_stamp);
+
+	/// A slot's tile as the shader UV transform (uv * scale + bias). Owns the
+	/// AtlasRect packing convention. False until the tile has rendered content.
+	struct AtlasRectUV
+	{
+		float scaleX = 0.0f;
+		float scaleY = 0.0f;
+		float biasX = 0.0f;
+		float biasY = 0.0f;
+		/// Advertised tile size / full class, from the same tile as the rect;
+		/// feeds ShadowParam.w so the shader's bias scaling matches the rect.
+		float classScale = 1.0f;
+	};
+	bool GetSlotAtlasRectUV(int32_t poolSlot, AtlasRectUV& out);
+
+	/// Rect-clears the slot's tile to far depth. Call once per redraw before
+	/// the light renders (halves of a dual paraboloid share the tile).
+	void ClearSlotTile(int32_t poolSlot);
+
+	// --- Static/dynamic split cache (parallel static depth atlas) ------------
+
+	/// True once the parallel static-cache atlas resources exist. Lazily
+	/// created by UpdateAtlas once the live atlas is ready; a creation
+	/// failure latches the feature off (live atlas only).
+	bool StaticAtlasReady();
+
+	/// DSV of the parallel static-cache atlas (same dims/layout as the live
+	/// atlas). The depth-select hook returns this during a StaticOnly bake pass.
+	ID3D11DepthStencilView* StaticAtlasDSV(bool readOnly);
+
+	/// True only across a static-cache bake pass, so the depth-select hooks
+	/// route the engine's shadow render into the static atlas instead of live.
+	bool StaticPassRedirectActive();
+
+	/// Rect-clears the slot's static-cache tile to far depth (before a bake).
+	void ClearStaticSlotTile(int32_t poolSlot);
+
+	/// Copies the slot's baked static tile from the static atlas into the live
+	/// atlas tile, seeding the dynamic pass with the cached static depth.
+	void CopyStaticTileToLive(int32_t poolSlot);
+
+	/// Reads the slot's static-cache bookkeeping: the geom-hash baked into the
+	/// static tile and whether it holds valid content. False = no tile.
+	bool GetSlotStaticState(int32_t poolSlot, uint64_t& hashOut, bool& validOut);
+
+	/// Marks the slot's static tile baked with the given static-caster hash.
+	void MarkSlotStaticRendered(int32_t poolSlot, uint64_t staticHash);
 
 	// ---------------------------------------------------------------------
 	// Scheduler module entry points (called from the engine hook thunks)
