@@ -753,12 +753,15 @@ void ScreenSpaceGI::DrawSSGI()
 {
 	auto context = globals::d3d::context;
 
+	if (auto* setting = RE::GetINISetting("bSAOEnable:Display"))
+		setting->data.b = settings.EnableVanillaSSAO;
+
+	// Also write the live SAO params object so the toggle applies this frame instead
+	// of only at the next ImageSpaceManager reinit.
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 	GET_INSTANCE_MEMBER(BSImagespaceShaderISSAOBlurH, imageSpaceManager);
-
-	// Toggle vanilla SSAO
-	static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
-	*enableSSAO = settings.EnableVanillaSSAO;
+	if (auto* sao = BSImagespaceShaderISSAOBlurH)
+		sao->enableSAO = settings.EnableVanillaSSAO;
 
 	if (!(settings.Enabled && ShadersOK())) {
 		FLOAT clr[4] = { 0.f, 0.f, 0.f, 0.f };
