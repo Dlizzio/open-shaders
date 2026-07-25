@@ -6,6 +6,8 @@ private:
 	static constexpr std::string_view MOD_ID = "139185";
 
 public:
+	static constexpr int kMaxCloudLayers = 32;
+
 	struct alignas(16) Settings
 	{
 		float Opacity = 0.8f;
@@ -42,10 +44,19 @@ public:
 	void SkyShaderHacks();
 
 	Texture2D* texCubemapCloudOcc = nullptr;
+	Texture2D* texCloudShadowLayers[kMaxCloudLayers] = {};
 	Texture2D* texCubemapCloudOccCopy = nullptr;
+	Texture2D* texSelfShadowCopy = nullptr;
 
 	ID3D11RenderTargetView* cubemapCloudOccRTVs[6] = { nullptr };
 	ID3D11RenderTargetView* cubemapCloudOccCopyRTVs[6] = { nullptr };
+	ID3D11RenderTargetView* cloudShadowLayerRTVs[kMaxCloudLayers][6] = {};
+
+	UINT cubemapMipLevels = 1;
+	int currentLayerForDraw = 0;
+	uint32_t renderedLayersMask[6] = {};
+	uint32_t globalRenderedMask = 0;
+	int previouslyRenderedSide = -1;
 
 	ID3D11BlendState* cloudShadowBlendState = nullptr;
 
@@ -59,11 +70,16 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 
+	Settings GetCommonBufferData() const;
+
+	bool CloudRelightEnabled() const;
 	/**
 	 * @brief Clears the cloud occlusion render target for a given cubemap face if not yet cleared this frame.
 	 * @param side Cubemap face index (0-5).
 	 */
 	void CheckResourcesSide(int side);
+	void PropagateToCompletion(int side);
+	int FindCloudLayer(RE::BSRenderPass* Pass);
 	/**
 	 * @brief Checks if the current sky render pass is rendering clouds to the reflections cubemap and flags it for override.
 	 * @param Pass The BSRenderPass being set up for rendering.
