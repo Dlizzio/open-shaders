@@ -25,6 +25,7 @@ public:
 	}
 
 	virtual void DrawSettings() override;
+	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
 	virtual void Prepass() override;
 	virtual void LoadSettings(json& o_json) override;

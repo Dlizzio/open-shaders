@@ -733,7 +733,6 @@ namespace SIE
 		enum class GrassShaderTechniques
 		{
 			RenderDepth = 8,
-			TruePbr = 9,
 		};
 
 		enum class GrassShaderFlags

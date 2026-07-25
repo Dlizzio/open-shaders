@@ -6,6 +6,7 @@
 #include <imgui_stdlib.h>
 #include <thread>
 
+#include "CSEditor/EditorWindow.h"
 #include "FeatureIssues.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/RemoteControl.h"
@@ -847,7 +848,7 @@ void AdvancedSettingsRenderer::RenderTestingSection()
 				RE::Console::ExecuteCommand("player.setav speedmult 1000");
 				RE::Console::ExecuteCommand("tgm");
 				RE::Console::ExecuteCommand("tcl");
-				RE::Console::ExecuteCommand("set timescale to 0");
+				EditorWindow::GetSingleton()->PauseTime();
 				RE::Console::ExecuteCommand("set gamehour to 12");
 				RE::Console::ExecuteCommand("coc whiterun");
 				RE::Console::ExecuteCommand("fw 81a");

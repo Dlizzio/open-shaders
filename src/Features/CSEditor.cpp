@@ -19,6 +19,7 @@ namespace
 void CSEditor::DataLoaded()
 {
 	s_dataAvailable = true;
+	EditorWindow::MenuOpenCloseEventHandler::Register();
 }
 
 bool CSEditor::HasWidgetJsonFiles()
@@ -172,16 +173,7 @@ void CSEditor::Prepass()
 
 void CSEditor::UpdateWeatherLockAndTime()
 {
-	auto editorWindow = EditorWindow::GetSingleton();
-	if (editorWindow->IsWeatherLocked()) {
-		auto lockedWeather = editorWindow->GetLockedWeather();
-		auto sky = globals::game::sky;
-		if (sky && lockedWeather && sky->currentWeather != lockedWeather) {
-			sky->ForceWeather(lockedWeather, false);
-		}
-	}
-
-	editorWindow->UpdateTimeState();
+	EditorWindow::MaintainWeatherLock();
 }
 
 void CSEditor::LerpWeather(RE::TESWeather* oldWeather, RE::TESWeather* newWeather, float currentWeatherPct)
