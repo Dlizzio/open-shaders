@@ -18,21 +18,6 @@ namespace CloudRelight
 		return lerp(outMin, outMax, saturate((x - inMin) / (inMax - inMin)));
 	}
 
-	float GetSilverLiningLumaCap()
-	{
-		static const float kSdrSilverLiningLumaCap = 1.5;
-		if (SharedData::HDRData.x <= 0.5)
-			return kSdrSilverLiningLumaCap;
-
-		static const float kMenuSunNits = 100.0;
-		float paperWhiteNits = max(SharedData::HDRData.y, 1.0);
-		float peakNits = max(SharedData::HDRData.z, paperWhiteNits + 1.0);
-		float peakRatio = peakNits / paperWhiteNits;
-		float menuSunMul = (SharedData::HDRData.w > 1e-3) ? (kMenuSunNits / peakNits) : 1.0;
-
-		return kSdrSilverLiningLumaCap * max(1.0, peakRatio * menuSunMul);
-	}
-
 	namespace Phase
 	{
 		float SmoothstepUnchecked(float x)
@@ -152,8 +137,6 @@ namespace CloudRelight
 		float3 cloudColor = baseColor.rgb * vanillaMix;
 
 		float3 relitColor = baseColor.a * baseColor.rgb * phaseCloud * GetInnerShadow(viewDir, dirLightDir, textureSampler) * dirLightColor;
-		float relitLuma = max(dot(relitColor, float3(0.2126, 0.7152, 0.0722)), 1e-5);
-		relitColor *= min(1.0, GetSilverLiningLumaCap() / relitLuma);
 		cloudColor += relitColor;
 
 		return cloudColor;

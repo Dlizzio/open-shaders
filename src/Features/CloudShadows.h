@@ -46,7 +46,6 @@ public:
 	Texture2D* texCubemapCloudOcc = nullptr;
 	Texture2D* texCloudShadowLayers[kMaxCloudLayers] = {};
 	Texture2D* texCubemapCloudOccCopy = nullptr;
-	Texture2D* texSelfShadowCopy = nullptr;
 
 	ID3D11RenderTargetView* cubemapCloudOccRTVs[6] = { nullptr };
 	ID3D11RenderTargetView* cubemapCloudOccCopyRTVs[6] = { nullptr };
