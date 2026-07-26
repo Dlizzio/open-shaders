@@ -13,7 +13,10 @@ namespace
 		for (size_t i = 0; i < N; ++i) {
 			if (!j[i].is_number())
 				return false;
-			out[i] = j[i].get<float>();
+			const double value = j[i].get<double>();
+			if (!std::isfinite(value) || value < -FLT_MAX || value > FLT_MAX)
+				return false;
+			out[i] = static_cast<float>(value);
 		}
 		return true;
 	}

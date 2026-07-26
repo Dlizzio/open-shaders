@@ -32,6 +32,8 @@ struct HorizonFix : Feature
 	}
 
 	virtual void DrawSettings() override;
+	virtual void LoadSettings(json&) override {}
+	virtual void SaveSettings(json&) override {}
 
 	/** @brief Disables the feature when the HorizonFix plugin is not installed. */
 	virtual void PostPostLoad() override;

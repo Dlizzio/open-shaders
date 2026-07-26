@@ -1596,7 +1596,7 @@ void EditorWindow::LoadSettings()
 		try {
 			settings = j;
 		} catch (const nlohmann::json::exception& e) {
-			logger::warn("Failed to deserialize editor settings, using defaults: {}", e.what());
+			logger::warn("Failed to deserialize editor settings; keeping current settings: {}", e.what());
 		}
 	}
 	m_selectedCategory = settings.selectedCategory;

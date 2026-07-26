@@ -83,7 +83,7 @@ WaterCache::InstructionResult WaterCache::GetInstructions(const RE::TESWorldSpac
 	std::scoped_lock lock(currentCacheMutex);
 
 	if (!SetCurrentWorldSpaceLocked(worldSpace)) {
-		logger::error("[Unified Water] [Cache] Failed to set current cache to {} while getting instructions", worldSpace->GetFormEditorID());
+		logger::error("[Unified Water] [Cache] Failed to set current cache to {} while getting instructions", worldSpace ? worldSpace->GetFormEditorID() : "null");
 		return {};
 	}
 

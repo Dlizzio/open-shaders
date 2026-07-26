@@ -2795,7 +2795,7 @@ void Upscaling::RunUnderwaterMaskRepair()
 
 void Upscaling::ApplySharpening()
 {
-	if (settings.sharpnessDLSS <= 0.0f)
+	if (!settings.sharpnessEnabledDLSS || settings.sharpnessDLSS <= 0.0f)
 		return;
 
 	if (!sharpenerTexture)
