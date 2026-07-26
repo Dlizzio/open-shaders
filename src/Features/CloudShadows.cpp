@@ -56,6 +56,7 @@ bool CloudShadows::CloudRelightEnabled() const
 {
 	return globals::features::cloudRelight.loaded &&
 	       globals::features::cloudRelight.settings.enabled &&
+	       texSelfShadowCopy &&
 	       texCloudShadowLayers[0];
 }
 
@@ -64,21 +65,15 @@ void CloudShadows::CheckResourcesSide(int side)
 	static Util::FrameChecker global_frame_checker;
 	static Util::FrameChecker frame_checker[6];
 
-	auto context = globals::d3d::context;
-	float black[4] = { 0, 0, 0, 0 };
-
-	if (global_frame_checker.IsNewFrame()) {
+	if (global_frame_checker.IsNewFrame())
 		globalRenderedMask = 0;
-		if (CloudRelightEnabled()) {
-			// This cubemap is the empty prefix used by the first active cloud layer.
-			for (auto* rtv : cubemapCloudOccRTVs)
-				context->ClearRenderTargetView(rtv, black);
-		}
-	}
 
 	if (!frame_checker[side].IsNewFrame())
 		return;
 
+	auto context = globals::d3d::context;
+
+	float black[4] = { 0, 0, 0, 0 };
 	if (!CloudRelightEnabled()) {
 		context->ClearRenderTargetView(cubemapCloudOccRTVs[side], black);
 		return;
@@ -115,11 +110,10 @@ void CloudShadows::PropagateToCompletion(int side)
 
 				const uint32_t belowMask = renderedLayersMask[otherSide] & ((1u << newLayer) - 1);
 				const int srcLayer = HighestSetLayer(belowMask, 0);
-				Texture2D* source = belowMask ? texCloudShadowLayers[srcLayer] : texCubemapCloudOcc;
 				const UINT otherSubresource = D3D11CalcSubresource(0, otherSide, cubemapMipLevels);
 				context->CopySubresourceRegion(
 					texCloudShadowLayers[newLayer]->resource.get(), otherSubresource, 0, 0, 0,
-					source->resource.get(), otherSubresource, nullptr);
+					texCloudShadowLayers[srcLayer]->resource.get(), otherSubresource, nullptr);
 				renderedLayersMask[otherSide] |= 1u << newLayer;
 			}
 			remaining &= ~(1u << newLayer);
@@ -175,18 +169,17 @@ void CloudShadows::SkyShaderHacks()
 		layer = std::clamp(currentLayerForDraw, 0, kMaxCloudLayers - 1);
 		const uint32_t belowMask = renderedLayersMask[side] & ((1u << layer) - 1);
 		const int fromLayer = HighestSetLayer(belowMask, 0);
-		Texture2D* selfShadowTexture = belowMask ? texCloudShadowLayers[fromLayer] : texCubemapCloudOcc;
 		const UINT subresource = D3D11CalcSubresource(0, side, cubemapMipLevels);
+
+		context->CopyResource(texSelfShadowCopy->resource.get(), texCloudShadowLayers[layer]->resource.get());
 
 		if (layer > 0) {
 			context->CopySubresourceRegion(
 				texCloudShadowLayers[layer]->resource.get(), subresource, 0, 0, 0,
-				selfShadowTexture->resource.get(), subresource, nullptr);
+				texCloudShadowLayers[fromLayer]->resource.get(), subresource, nullptr);
 		}
 
-		// Sample only the layers already accumulated before this one. Including the
-		// current layer here suppresses the cloud body relative to its silver lining.
-		ID3D11ShaderResourceView* selfShadowSrv = selfShadowTexture->srv.get();
+		ID3D11ShaderResourceView* selfShadowSrv = texSelfShadowCopy->srv.get();
 		context->PSSetShaderResources(26, 1, &selfShadowSrv);
 
 		rtvs[3] = cloudShadowLayerRTVs[layer][side];
@@ -259,10 +252,7 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 		overrideSky = true;
 	} else {
 		auto context = globals::d3d::context;
-		const uint32_t belowMask = globalRenderedMask & ((1u << layer) - 1);
-		const int fromLayer = HighestSetLayer(belowMask, 0);
-		Texture2D* selfShadowTexture = belowMask ? texCloudShadowLayers[fromLayer] : texCubemapCloudOcc;
-		ID3D11ShaderResourceView* srv = selfShadowTexture->srv.get();
+		ID3D11ShaderResourceView* srv = texCloudShadowLayers[layer]->srv.get();
 		context->PSSetShaderResources(26, 1, &srv);
 	}
 }
@@ -357,7 +347,10 @@ void CloudShadows::SetupResources()
 		texCubemapCloudOccCopy = new Texture2D(texDesc, "CloudShadows::CubemapCloudOccCopy");
 		texCubemapCloudOccCopy->CreateSRV(srvDesc);
 
-		if (!globals::features::cloudRelight.loaded) {
+		if (globals::features::cloudRelight.loaded) {
+			texSelfShadowCopy = new Texture2D(texDesc, "CloudShadows::SelfShadowCopy");
+			texSelfShadowCopy->CreateSRV(srvDesc);
+		} else {
 			for (int i = 0; i < 6; ++i) {
 				reflections.cubeSideRTV[i]->GetDesc(&rtvDesc);
 				rtvDesc.Format = texDesc.Format;
