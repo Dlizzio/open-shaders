@@ -59,9 +59,9 @@ float2 ExtractVelocity(float4 colorSample)
 			int2 neighborCellIndex = int2(cellIndex) + int2(x, y);
 
 			// Skip out-of-bounds neighbors
-				if (neighborCellIndex.x < 0 || neighborCellIndex.y < 0 ||
-					neighborCellIndex.x >= int(GRID_SIZE) ||
-					neighborCellIndex.y >= int(GRID_SIZE))
+			if (neighborCellIndex.x < 0 || neighborCellIndex.y < 0 ||
+				neighborCellIndex.x >= int(GRID_SIZE) ||
+				neighborCellIndex.y >= int(GRID_SIZE))
 				continue;
 
 			// Get neighbor velocity

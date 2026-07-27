@@ -148,13 +148,13 @@ float2 GetVelocityTexCoord(float2 targetTexCoord)
 
 	// Initialize for sampling
 	float4 sum = float4(0.0f, 0.0f, 0.0f, 0.0f);
-		float pixelToSampleUnitsScale = float(g_SampleCount) / blurLength;
-		int samplePairCount = g_SampleCount >> 1;
+	float pixelToSampleUnitsScale = float(g_SampleCount) / blurLength;
+	int samplePairCount = g_SampleCount >> 1;
 
-		// Sample in pairs (mirrored)
-		for (int i = 0; i < samplePairCount; i++) {
-			// Calculate offset
-			float offset = (float(i) + 0.5f) / float(samplePairCount) * blurLength;
+	// Sample in pairs (mirrored)
+	for (int i = 0; i < samplePairCount; i++) {
+		// Calculate offset
+		float offset = (float(i) + 0.5f) / float(samplePairCount) * blurLength;
 		offset += GetDitheredOffset(pixelPos, i);
 
 		// Sample pairs in opposite directions

@@ -245,9 +245,9 @@ void LensFlare::SetupResources()
 		uint quarterW = std::max(fullW / 4, 1u);
 		uint quarterH = std::max(fullH / 4, 1u);
 
-		createTex(texFlare, fullW, fullH, "Post Processing Lens Flare Output");                 // full resolution (final output)
-		createTex(texThreshold, halfW, halfH, "Post Processing Lens Flare Threshold");          // half resolution
-		createTex(texGhostHalo, halfW, halfH, "Post Processing Lens Flare Ghost Halo");         // half resolution
+		createTex(texFlare, fullW, fullH, "Post Processing Lens Flare Output");                   // full resolution (final output)
+		createTex(texThreshold, halfW, halfH, "Post Processing Lens Flare Threshold");            // half resolution
+		createTex(texGhostHalo, halfW, halfH, "Post Processing Lens Flare Ghost Halo");           // half resolution
 		createTex(texBlurTemp, quarterW, quarterH, "Post Processing Lens Flare Blur Temporary");  // quarter resolution
 
 		logger::debug("LensFlare: textures created - full {}x{}, half {}x{}, quarter {}x{}", fullW, fullH, halfW, halfH, quarterW, quarterH);
