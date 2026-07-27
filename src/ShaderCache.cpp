@@ -9,6 +9,7 @@
 #endif
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <chrono>
 #include <d3dcompiler.h>
@@ -2433,24 +2434,6 @@ namespace SIE
 		}
 	}
 
-	template <typename ShaderType, typename MutexType>
-	void ReleaseShader(ShaderType& shaders,
-		MutexType& mutex, RE::BSShader::Type type, uint32_t descriptor)
-	{
-		std::lock_guard<MutexType> lockGuard(mutex);
-
-		if (static_cast<size_t>(type) < shaders.size()) {
-			auto& shaderMap = shaders[static_cast<size_t>(type)];
-			auto shaderIt = shaderMap.find(descriptor);
-			if (shaderIt != shaderMap.end()) {
-				auto& shaderPtr = shaderIt->second;
-				if (shaderPtr && shaderPtr->shader) {
-					shaderPtr->shader->Release();
-				}
-				shaderMap.erase(shaderIt);
-			}
-		}
-	}
 	bool ShaderCache::Clear(const std::string& a_path)
 	{
 		std::string lowerFilePath = Util::FixFilePath(a_path);
@@ -2471,42 +2454,7 @@ namespace SIE
 
 		// Step 2: Process the copied entries without holding hlslMapMutex
 		for (auto& entry : entries) {
-			// Remove shader key from shaderMap
-			{
-				std::unique_lock lockM{ mapMutex };
-				shaderMap.erase(entry.key);
-			}
-
-			// Handle vertex, pixel, and compute shaders (each will lock)
-			switch (entry.shaderClass) {
-			case SIE::ShaderClass::Vertex:
-				ReleaseShader(vertexShaders, vertexShadersMutex, entry.type, entry.descriptor);
-				break;
-			case SIE::ShaderClass::Pixel:
-				ReleaseShader(pixelShaders, pixelShadersMutex, entry.type, entry.descriptor);
-				break;
-			case SIE::ShaderClass::Compute:
-				ReleaseShader(computeShaders, computeShadersMutex, entry.type, entry.descriptor);
-				break;
-			default:
-				logger::warn("Unexpected shader class: {}", static_cast<int>(entry.shaderClass));
-				break;
-			}
-
-			// Delete the associated file
-			const auto& filePath = entry.diskPath;
-			const auto& filePathString = Util::WStringToString(filePath);
-			{
-				std::scoped_lock lockD{ compilationSet.compilationMutex };
-				std::error_code ec;  // Use the error_code overload to avoid exceptions for non-critical errors like the file not existing.
-				if (const bool removed = std::filesystem::remove(filePath, ec); ec) {
-					logger::warn("Error while trying to delete {}: {}", filePathString, ec.message());
-				} else if (removed) {
-					logger::debug("Deleted {}", filePathString);
-				}  // If !removed and no error, the file didn't exist, which is fine.
-			}
-
-			logger::debug("Marking recompile for shader: {}", entry.key);
+			EvictShader(entry.key, entry.type, entry.descriptor, entry.shaderClass, entry.diskPath);
 		}
 
 		if (!entries.empty()) {
@@ -3434,7 +3382,7 @@ namespace SIE
 
 	void ShaderCache::TrackActiveShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor)
 	{
-		if (!globals::state->IsDeveloperMode())
+		if (!IsTrackingActiveShaders())
 			return;
 
 		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
@@ -3448,17 +3396,23 @@ namespace SIE
 			info.shaderClass = shaderClass;
 			info.descriptor = descriptor;
 
-			// Construct disk path
-			info.diskPath = SIE::SShaderCache::GetDiskPath(
-				shader.shaderType == RE::BSShader::Type::ImageSpace ?
-					static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
-					shader.fxpFilename,
-				descriptor, shaderClass);
+			// Construct disk path. Unlike the HLSL source path (which uses originalShaderName for
+			// ImageSpace shaders), the compiled blob is always keyed on fxpFilename - see GetDiskPath's
+			// other call sites (AddCompletedShader, hlslRecord construction).
+			info.diskPath = SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
 		}
 
 		info.isActive = true;
 		info.drawCalls++;
 		info.lastUsed = std::chrono::steady_clock::now();
+
+		// Render thread only: BSShader::LoadShaders drives Get*Shader in bulk off-thread
+		// (Hooks.cpp BSShader_LoadShaders, TruePBR::GenerateShaderPermutations). Ingesting that
+		// would balloon a scene-scoped capture into a near-full clear.
+		if (activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0 &&
+			std::this_thread::get_id() == activeShaderCaptureThread.load(std::memory_order_relaxed)) {
+			capturedShaders.try_emplace(key, info);  // first sighting wins; info is descriptor-complete
+		}
 	}
 
 	void ShaderCache::ResetFrameShaderTracking()
@@ -3626,7 +3580,12 @@ namespace SIE
 
 	size_t ShaderCompilationTask::GetId() const
 	{
-		return descriptor + (static_cast<size_t>(shader.shaderType.underlying()) << 32) +
+		return MakeId(shaderClass, shader.shaderType.get(), descriptor);
+	}
+
+	size_t ShaderCompilationTask::MakeId(ShaderClass shaderClass, RE::BSShader::Type shaderType, uint32_t descriptor)
+	{
+		return descriptor + (static_cast<size_t>(shaderType) << 32) +
 		       (static_cast<size_t>(shaderClass) << 60);
 	}
 
