@@ -435,6 +435,10 @@ cbuffer AlphaTestRefCB : register(b11)
 
 #	define SampColorSampler SampBaseSampler
 
+#	if defined(SKYLIGHTING)
+#		define SKYLIGHTING_SHADOW_VIS
+#	endif
+
 #	if defined(DYNAMIC_CUBEMAPS)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #	endif
@@ -479,6 +483,10 @@ float GetSoftLightMultiplier(float angle, float rolloff)
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout = (PS_OUTPUT)0;
+
+#		if defined(SKYLIGHTING_SHADOW_VIS)
+	float skylightingShadowVisibility = 1.0;
+#		endif
 
 #		if !defined(TRUE_PBR)
 	float x;
@@ -663,12 +671,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #					else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #					endif
-	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal
+#					if defined(SKYLIGHTING_SHADOW_VIS)
+		,
+		skylightingShadowVisibility
+#					endif
+	);
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
 #				endif  // SKYLIGHTING
 
 	float3 albedo = baseColor.xyz * vertexColor;
 
-	float3 subsurfaceColor = dirLightColor * dirDetailedShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::VanillaNormalization();
+	float dirSoftShadow = dirDetailedShadow;
+#				if defined(SKYLIGHTING_SHADOW_VIS)
+	dirSoftShadow = skylightingShadowVisibility;
+#				endif
+
+	float3 subsurfaceColor = dirLightColor * dirSoftShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::VanillaNormalization();
 
 	if (complex)
 		lightsSpecularColor += dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, roughness, F0) * Color::VanillaNormalization();
@@ -856,6 +875,10 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
+#		if defined(SKYLIGHTING_SHADOW_VIS)
+	float skylightingShadowVisibility = 1.0;
+#		endif
+
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
 
 #		if defined(RENDER_DEPTH)
@@ -973,7 +996,13 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #				endif
-	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal
+#				if defined(SKYLIGHTING_SHADOW_VIS)
+		,
+		skylightingShadowVisibility
+#				endif
+	);
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
 #			endif  // SKYLIGHTING
 
 	float3 directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normal)));

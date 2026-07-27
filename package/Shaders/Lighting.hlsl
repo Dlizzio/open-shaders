@@ -858,6 +858,12 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		undef SKYLIGHTING
 #	endif
 
+#	if defined(SKYLIGHTING)
+#		if defined(RIM_LIGHTING) || defined(SOFT_LIGHTING) || defined(BACK_LIGHTING)
+#			define SKYLIGHTING_SHADOW_VIS
+#		endif
+#	endif
+
 #	include "Common/LightingCommon.hlsli"
 
 #	if defined(WATER_EFFECTS)
@@ -2042,7 +2048,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif  // BACK_LIGHTING
 
-#	if (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING) || defined(LOAD_SOFT_LIGHTING))
+#	if (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING))
 	float4 rimSoftLightColor = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
 #	endif  // RIM_LIGHTING || SOFT_LIGHTING
 
@@ -2339,7 +2345,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.Glossiness = 0;
 	material.SpecularColor = 0;
 #		endif
-#		if (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING) || defined(LOAD_SOFT_LIGHTING))
+#		if (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING))
 	material.rimSoftLightColor = rimSoftLightColor.xyz;
 #		endif
 #		if defined(BACK_LIGHTING)
@@ -2549,12 +2555,25 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #		endif
-#		if defined(DEFERRED)
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
-#		else
-	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal) : Skylighting::UNIT_SH;
+#		if defined(SKYLIGHTING_SHADOW_VIS)
+	float skylightingShadowVisibility = 1.0;
 #		endif
-
+#		if defined(DEFERRED)
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
+#			if defined(SKYLIGHTING_SHADOW_VIS)
+		,
+		skylightingShadowVisibility
+#			endif
+	);
+#		else
+	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
+#			if defined(SKYLIGHTING_SHADOW_VIS)
+									  ,
+									  skylightingShadowVisibility
+#			endif
+									  ) :
+	                              Skylighting::UNIT_SH;
+#		endif
 #	endif
 
 	float4 waterData = SharedData::GetWaterData(input.WorldPosition.xyz, eyeIndex);
@@ -2702,9 +2721,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirSoftShadow = 1.0;
 	float dirVSMDetailedShadow = 1.0;
 
-#	if defined(VOLUMETRIC_SHADOWS)
+#	if defined(VOLUMETRIC_SHADOWS) && !(defined(DEFERRED) && defined(SKYLIGHTING_SHADOW_VIS))
 	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows())
-		dirSoftShadow = ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, eyeIndex, dirVSMDetailedShadow);
+#		if !defined(SKYLIGHTING_SHADOW_VIS)
+		dirSoftShadow =
+#		endif
+			ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, eyeIndex, dirVSMDetailedShadow);
 #	endif
 
 	float dirDetailedShadow = 1.0;
@@ -2756,16 +2778,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		dirDetailedShadow = vsmDetailedShadow;
 #			endif
 
-#		else
+#		elif !defined(VOLUMETRIC_SHADOWS) && !defined(SKYLIGHTING_SHADOW_VIS)
 		dirSoftShadow = dirDetailedShadow;
 #		endif  // VOLUMETRIC_SHADOWS
 #	endif
+#	if defined(SKYLIGHTING_SHADOW_VIS)
+		skylightingShadowVisibility = dirSoftShadow;
+#	endif
+	}
+#	if !defined(DEFERRED)
+	else {
+		dirDetailedShadow = dirVSMDetailedShadow;
+	}
+#	endif
 
 #	if defined(SCREEN_SPACE_SHADOWS) && defined(DEFERRED)
-		if (!SharedData::InInterior && dirLightAngle >= 0.0)
-			dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, screenUV, screenNoise, eyeIndex);
+	if (!SharedData::InInterior && dirLightAngle >= 0.0)
+		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, screenUV, screenNoise, eyeIndex);
 #	endif  // SCREEN_SPACE_SHADOWS
-	}
 
 #	if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 	[branch] if (inWorld && SharedData::extendedMaterialSettings.EnableShadows)
@@ -2808,6 +2838,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		vertexNormal.xyz = worldNormal.xyz;
 		worldNormal.xyz = hairT;
 	}
+#	endif
+
+#	if defined(SKYLIGHTING_SHADOW_VIS)
+	dirSoftShadow = skylightingShadowVisibility;
 #	endif
 
 	float3 diffuseColor = 0.0.xxx;
@@ -3181,6 +3215,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	IndirectContext indirectContext = (IndirectContext)0;
 	IndirectLobeWeights indirectLobeWeights;
 
+#	if defined(MULTI_LAYER_PARALLAX)
+	float layerValue = MultiLayerParallaxData.x * TexLayerSampler.Sample(SampLayerSampler, uv).w;
+	float3 tangentViewDirection = mul(viewDirection, tbn);
+	float3 layerNormal = MultiLayerParallaxData.yyy * (normalColor.xyz * 2.0.xxx + float3(-1, -1, -2)) + float3(0, 0, 1);
+	float layerViewAngle = dot(-tangentViewDirection.xyz, layerNormal.xyz) * 2;
+	float3 layerViewProjection = -layerNormal.xyz * layerViewAngle.xxx - tangentViewDirection.xyz;
+	float2 layerUv = uv * MultiLayerParallaxData.zw + (0.0009765625 * (layerValue / abs(layerViewProjection.z))).xx * layerViewProjection.xy;
+
+	float3 layerColor = TexLayerSampler.Sample(SampLayerSampler, layerUv).xyz;
+
+	float mlpBlendFactor = saturate(viewNormalAngle) * (1.0 - baseColor.w);
+
+	material.BaseColor = lerp(material.BaseColor, layerColor, mlpBlendFactor);
+
+	indirectLobeWeights.diffuse *= 1.0 - mlpBlendFactor;
+#	endif  // MULTI_LAYER_PARALLAX
+
 	float3 ambientNormal = worldNormal.xyz;
 #	if defined(HAIR) && defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled) {
@@ -3336,27 +3387,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	color.xyz += transmissionColor;
 
 	color.xyz *= vertexColor;
-
-#	if defined(MULTI_LAYER_PARALLAX)
-	float layerValue = MultiLayerParallaxData.x * TexLayerSampler.Sample(SampLayerSampler, uv).w;
-	float3 tangentViewDirection = mul(viewDirection, tbn);
-	float3 layerNormal = MultiLayerParallaxData.yyy * (normalColor.xyz * 2.0.xxx + float3(-1, -1, -2)) + float3(0, 0, 1);
-	float layerViewAngle = dot(-tangentViewDirection.xyz, layerNormal.xyz) * 2;
-	float3 layerViewProjection = -layerNormal.xyz * layerViewAngle.xxx - tangentViewDirection.xyz;
-	float2 layerUv = uv * MultiLayerParallaxData.zw + (0.0009765625 * (layerValue / abs(layerViewProjection.z))).xx * layerViewProjection.xy;
-
-	float3 layerColor = TexLayerSampler.Sample(SampLayerSampler, layerUv).xyz;
-
-	float mlpBlendFactor = saturate(viewNormalAngle) * (1.0 - baseColor.w);
-
-#		if defined(SKYLIGHTING)
-	color.xyz = lerp(color.xyz, (diffuseColor + directionalAmbientColor * skylightingDiffuse) * vertexColor * layerColor, mlpBlendFactor);
-#		else
-	color.xyz = lerp(color.xyz, (diffuseColor + directionalAmbientColor) * vertexColor * layerColor, mlpBlendFactor);
-#		endif
-
-	indirectLobeWeights.diffuse *= 1.0 - mlpBlendFactor;
-#	endif  // MULTI_LAYER_PARALLAX
 
 #	if defined(SNOW)
 	if (useSnowSpecular)

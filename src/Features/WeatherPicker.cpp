@@ -91,6 +91,12 @@ void WeatherPicker::SaveSettings(json& o_json)
 	o_json = WeatherDetailsWindow;
 }
 
+void WeatherPicker::PostPostLoad()
+{
+	// Before the game loop starts, so no call site can be executing while it is rewritten.
+	EditorWindow::InstallWeatherLockHooks();
+}
+
 void WeatherPicker::DataLoaded()
 {
 	s_dataAvailable = true;

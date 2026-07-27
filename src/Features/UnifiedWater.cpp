@@ -1,4 +1,4 @@
-﻿#include "UnifiedWater.h"
+#include "UnifiedWater.h"
 
 #include "I18n/I18n.h"
 #include "Menu.h"
@@ -209,7 +209,7 @@ void UnifiedWater::DataLoaded()
 	waterCache = new WaterCache();
 
 	if (LoadOrderChanged()) {
-		logger::info("[Unified Water] Load order changed, regenerating flowmap and caches");
+		logger::info("[Unified Water] Load order or plugin version changed, regenerating flowmap and caches");
 
 		if (flowmap->RegenerateAndLoadFlowmap())
 			SetFlowmapTex();
@@ -347,13 +347,17 @@ bool UnifiedWater::LoadOrderChanged()
 
 	uint64_t hash = 14695981039346656037ull;
 
-	auto addToHash = [&](const RE::TESFile* file) {
-		if (!file || !file->fileName)
-			return;
-		for (auto p = reinterpret_cast<const unsigned char*>(file->fileName); *p; ++p) {
+	auto addBytes = [&](const unsigned char* p) {
+		for (; *p; ++p) {
 			hash ^= *p;
 			hash *= 1099511628211ull;
 		}
+	};
+
+	auto addToHash = [&](const RE::TESFile* file) {
+		if (!file || !file->fileName)
+			return;
+		addBytes(reinterpret_cast<const unsigned char*>(file->fileName));
 	};
 
 	if (const auto mods = dataHandler->GetLoadedMods()) {
@@ -367,6 +371,8 @@ bool UnifiedWater::LoadOrderChanged()
 		for (uint32_t i = 0, n = count; i < n; ++i)
 			addToHash(lightMods[i]);
 	}
+
+	addBytes(reinterpret_cast<const unsigned char*>(Plugin::VERSION.string().c_str()));
 
 	// Data/ root is subject to a persistent external lock while the game runs (reproduced:
 	// writes fail with ERROR_SHARING_VIOLATION for the whole session, unrelated to our own
@@ -563,6 +569,8 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	std::vector<std::pair<RE::BSTriShape*, const WaterCache::Instruction*>> built;
 	bool attaching = false;
 	RE::NiPointer<RE::BSMultiBoundNode> water;
+	// Keeps the backing RuntimeCache alive for as long as `built` holds pointers into it.
+	WaterCache::InstructionResult instructionResult;
 
 	if (block && block->loaded && !block->attached && block->chunk && block->water) {
 		// Keep terrain water alive while moving it out of its owning node
@@ -577,7 +585,8 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		const auto lodLevel = node->GetLODLevel();
 		const auto worldSpace = block->node->manager->worldSpace;
 
-		const auto instructions = singleton.waterCache->GetInstructions(worldSpace, lodLevel, node->baseCellX, node->baseCellY);
+		instructionResult = singleton.waterCache->GetInstructions(worldSpace, lodLevel, node->baseCellX, node->baseCellY);
+		const auto instructions = instructionResult.instructions;
 		if (!instructions) {
 			logger::warn("[Unified Water] No instructions found for {} chunk at {}, {}", worldSpace->GetFormEditorID(), node->baseCellX, node->baseCellY);
 			// Reattach the saved node before falling back to vanilla
