@@ -94,6 +94,8 @@ static const float3 noise3D[32] = {
 	}
 
 	// Shadow cascade sampling with bitmask accumulation
+	// Mono dispatch shared by both eyes (see Skylighting::Prepass); eye index is
+	// arbitrary but harmless for this coarse world-space visibility test.
 	float4 cellCentreCS = mul(FrameBuffer::CameraViewProj[0], float4(cellCentreMS, 1));
 	float2 screenUV = (cellCentreCS.xy / cellCentreCS.w) * float2(0.5, -0.5) + 0.5;
 	bool onScreen = cellCentreCS.w > 0 && all(screenUV > 0) && all(screenUV < 1);
