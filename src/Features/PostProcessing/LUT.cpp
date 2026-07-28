@@ -1,5 +1,6 @@
 #include "LUT.h"
 
+#include "PostProcessingUI.h"
 #include "State.h"
 #include "Util.h"
 
@@ -10,6 +11,11 @@
 #include <algorithm>
 #include <cctype>
 #include <imgui_stdlib.h>
+
+namespace
+{
+	constexpr float kLUTInputDragSpeed = 1e-3f;
+}
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LUT::Settings,
@@ -53,27 +59,31 @@ void LUT::DrawSettings()
 			ImGui::RadioButton(T("feature.post_processing.lut.map_per_channel", "Map Per Channel"), &LutType, 1);
 			ImGui::EndTable();
 		}
-	ImGui::InputFloat3(T("feature.post_processing.lut.input_min", "Input Min"), &settings.InputMin.x);
-	ImGui::InputFloat3(T("feature.post_processing.lut.input_max", "Input Max"), &settings.InputMax.x);
+	PostProcessingUI::RGBFloatDrag3(T("feature.post_processing.lut.input_min", "Input Min"), &settings.InputMin.x, kLUTInputDragSpeed);
+	PostProcessingUI::RGBFloatDrag3(T("feature.post_processing.lut.input_max", "Input Max"), &settings.InputMax.x, kLUTInputDragSpeed);
 }
 
 void LUT::RestoreDefaultSettings()
 {
 	settings = {};
+	tempPath = {};
+	Clear();
 }
 
 void LUT::LoadSettings(json& o_json)
 {
+	const auto oldPath = settings.LutPath;
 	settings = o_json;
 
 	tempPath = settings.LutPath;
-	logger::info("Loading LUT settings, LUT Path: {}", settings.LutPath);
 
 	try {
-		if (!tempPath.empty() && !firstLoad)
+		if (tempPath.empty()) {
+			Clear();
+		} else if (tempPath != oldPath || LutType == -1) {
+			logger::debug("Loading LUT texture: {}", tempPath);
 			ReadTexture(tempPath);
-		else if (firstLoad)
-			firstLoad = false;
+		}
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load LUT settings: {}", e.what());
 	}

@@ -168,6 +168,7 @@ struct ColorGrading : public PostProcessFeature
 	virtual void DrawSettings() override;
 
 	virtual void Draw(TextureInfo&) override;
+	void ResolveTonemapperFromSettings();
 	void UpdateColorSpaceTransforms(bool hdrEnabled = false);
 
 	void OutputTextures();

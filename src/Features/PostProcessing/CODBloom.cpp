@@ -23,21 +23,26 @@ void CODBloom::DrawSettings()
 	ImGui::Separator();
 
 	static int mipLevel = 1;
-	ImGui::SliderInt(T("feature.post_processing.codbloom.mip_level", "Mip Level"), &mipLevel, 1, (int)settings.MipBlendFactor.size() + 1, "%d", ImGuiSliderFlags_AlwaysClamp);
+	const int maxMipLevel = static_cast<int>(settings.MipBlendFactor.size());
+	if (mipLevel > maxMipLevel)
+		mipLevel = maxMipLevel;
+	ImGui::SliderInt(T("feature.post_processing.codbloom.mip_level", "Mip Level"), &mipLevel, 1, maxMipLevel, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.codbloom.the_greater_the_level_the_blurrier_the_part", "The greater the level, the blurrier the part it controls"));
 	ImGui::Indent();
 	{
-		ImGui::SliderFloat(T("feature.post_processing.codbloom.intensity", "Intensity"), &settings.MipBlendFactor[mipLevel - 1], 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T("feature.post_processing.codbloom.mip_level_intensity", "Mip Level Intensity"), &settings.MipBlendFactor[mipLevel - 1], 0.f, 1.f, "%.2f");
 	}
 	ImGui::Unindent();
 
 	if (ImGui::CollapsingHeader(T("feature.post_processing.codbloom.debug", "Debug"))) {
+		constexpr float kDebugMipPreviewScale = 0.2f;
+		const float previewScale = kDebugMipPreviewScale * Util::GetUIScale();
 		static int mip = 0;
 		ImGui::SliderInt(T("feature.post_processing.codbloom.debug_mip_level", "Debug Mip Level"), &mip, 0, (int)s_BloomMips - 1, "%d", ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
 
 		ImGui::BulletText(T("feature.post_processing.codbloom.texbloom", "texBloom"));
-		ImGui::Image(texBloomMipSRVs[mip].get(), { texBloom->desc.Width * .2f, texBloom->desc.Height * .2f });
+		ImGui::Image(texBloomMipSRVs[mip].get(), { texBloom->desc.Width * previewScale, texBloom->desc.Height * previewScale });
 	}
 }
 

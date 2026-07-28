@@ -36,7 +36,7 @@ void DoF::DrawSettings()
 	ImGui::Checkbox(T("feature.post_processing.do_f.auto_focus", "Auto Focus"), &settings.AutoFocus);
 
 	if (settings.AutoFocus) {
-		ImGui::SliderFloat2(T("feature.post_processing.do_f.focus_point", "Focus Point"), &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat2(T("feature.post_processing.do_f.focus_point_xy", "Focus Point X/Y"), &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 	ImGui::SliderFloat(T("feature.post_processing.do_f.transition_speed", "Transition Speed"), &settings.TransitionSpeed, 0.1f, 1.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.manual_focus", "Manual Focus"), &settings.ManualFocusPlane, 0.1f, 150.0f, "%.2f m");
@@ -45,7 +45,7 @@ void DoF::DrawSettings()
 	ImGui::SliderFloat(T("feature.post_processing.do_f.far_plane_max_blur", "Far Plane Max Blur"), &settings.FarPlaneMaxBlur, 0.0f, 8.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.near_plane_max_blur", "Near Plane Max Blur"), &settings.NearPlaneMaxBlur, 0.0f, 4.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.blur_quality", "Blur Quality"), &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
-	ImGui::SliderFloat(T("feature.post_processing.do_f.near_far_plane_distance_compenation", "Near-Far Plane Distance Compenation"), &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.post_processing.do_f.near_far_plane_distance_compensation", "Near-Far Plane Distance Compensation"), &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.bokeh_busy_factor", "Bokeh Busy Factor"), &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.petzval_strength", "Petzval Strength"), &settings.PetzvalStrength, 0.0f, 2.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.highlight_boost", "Highlight Boost"), &settings.HighlightBoost, 0.0f, 1.0f, "%.2f");
@@ -60,28 +60,31 @@ void DoF::DrawSettings()
 	}
 
 	if (ImGui::CollapsingHeader(T("feature.post_processing.do_f.debug", "Debug"))) {
+		const float uiScale = Util::GetUIScale();
+		const float focusPreviewScale = 64.0f * uiScale;
 		static float debugRescale = .3f;
+		const float debugTextureScale = debugRescale * uiScale;
 		ImGui::Text(T("feature.post_processing.do_f.debug_distance", "Debug Distance: %f"), debugDistance);
 		ImGui::Text(T("feature.post_processing.do_f.debug_focus_plane", "Debug Focus Plane: %f"), debugFocusPlane);
 		ImGui::SliderFloat(T("feature.post_processing.do_f.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
 
-		BUFFER_VIEWER_NODE(texFocus, 64.0f)
-		BUFFER_VIEWER_NODE(texPreFocus, 64.0f)
+		BUFFER_VIEWER_NODE(texFocus, focusPreviewScale)
+		BUFFER_VIEWER_NODE(texPreFocus, focusPreviewScale)
 
-		BUFFER_VIEWER_NODE(texCoC, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileTmp, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileTmp2, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileNeighbor, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCBlur1, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCBlur2, debugRescale)
+		BUFFER_VIEWER_NODE(texCoC, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCTileTmp, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCTileTmp2, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCTileNeighbor, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCBlur1, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCBlur2, debugTextureScale)
 
-		BUFFER_VIEWER_NODE(texPreBlurred, debugRescale)
-		BUFFER_VIEWER_NODE(texFarBlurred, debugRescale)
-		BUFFER_VIEWER_NODE(texNearBlurred, debugRescale)
+		BUFFER_VIEWER_NODE(texPreBlurred, debugTextureScale)
+		BUFFER_VIEWER_NODE(texFarBlurred, debugTextureScale)
+		BUFFER_VIEWER_NODE(texNearBlurred, debugTextureScale)
 
-		BUFFER_VIEWER_NODE(texBlurredFiltered, debugRescale)
-		BUFFER_VIEWER_NODE(texPostSmooth, debugRescale)
-		BUFFER_VIEWER_NODE(texPostSmooth2, debugRescale)
+		BUFFER_VIEWER_NODE(texBlurredFiltered, debugTextureScale)
+		BUFFER_VIEWER_NODE(texPostSmooth, debugTextureScale)
+		BUFFER_VIEWER_NODE(texPostSmooth2, debugTextureScale)
 	}
 }
 

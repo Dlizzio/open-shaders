@@ -15,23 +15,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void Camera::DrawSettings()
 {
-	ImGui::Checkbox(T("feature.post_processing.camera.fisheye", "Fisheye"), &settings.UseFE);
-	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip("%s", T("feature.post_processing.camera.enable_fisheye_effect", "Enable fisheye effect."));
-	}
-
-	if (settings.UseFE) {
-		ImGui::SliderFloat(T("feature.post_processing.camera.fov", "FOV"), &settings.FEFoV, 20.0f, 180.0f, "%1.0f °");
-		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("%s", T("feature.post_processing.camera.fov_in_degrees_set_to_in_game_fov", "FOV in degrees.\n\nSet to in-game FOV."));
-		}
-
-		ImGui::SliderFloat(T("feature.post_processing.camera.crop", "Crop"), &settings.FECrop, 0.0f, 1.0f, "%.3f");
-		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("%s", T("feature.post_processing.camera.how_much_to_crop_into_the_image", "How much to crop into the image.\n\n0 = circular, 1 = full-frame."));
-		}
-	}
-
 	ImGui::SliderFloat(T("feature.post_processing.camera.ca_amount", "CA amount"), &settings.CAStrength, 0.0f, 1.0f, "%.3f");
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("%s", T("feature.post_processing.camera.chromatic_aberration_strength", "Chromatic aberration strength."));
@@ -45,6 +28,25 @@ void Camera::DrawSettings()
 	ImGui::Combo(T("feature.post_processing.camera.noise_type", "Noise type"), &settings.NoiseType, "Film grain\0Color grain\0\0");
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("%s", T("feature.post_processing.camera.type_of_noise_to_apply", "Type of noise to apply."));
+	}
+
+	if (ImGui::CollapsingHeader(T("feature.post_processing.camera.fisheye", "Fisheye"))) {
+		ImGui::Checkbox(T("feature.post_processing.camera.enable_fisheye", "Enable Fisheye"), &settings.UseFE);
+		if (ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("%s", T("feature.post_processing.camera.enable_fisheye_effect", "Enable fisheye effect."));
+		}
+
+		if (settings.UseFE) {
+			ImGui::SliderFloat(T("feature.post_processing.camera.fov", "FOV"), &settings.FEFoV, 20.0f, 180.0f, "%1.0f deg");
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("%s", T("feature.post_processing.camera.fov_in_degrees_set_to_in_game_fov", "FOV in degrees.\n\nSet to in-game FOV."));
+			}
+
+			ImGui::SliderFloat(T("feature.post_processing.camera.crop", "Crop"), &settings.FECrop, 0.0f, 1.0f, "%.3f");
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("%s", T("feature.post_processing.camera.how_much_to_crop_into_the_image", "How much to crop into the image.\n\n0 = circular, 1 = full-frame."));
+			}
+		}
 	}
 }
 

@@ -22,11 +22,11 @@ void HistogramAutoExposure::DrawSettings()
 		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.applying_additional_exposure_adjustment_to_the_image", "Applying additional exposure adjustment to the image."));
 
 	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.adaptation_speed", "Adaptation Speed"), &settings.AdaptSpeed, 0.1f, 5.f, "%.2f");
-	ImGui::SliderFloat2(T("feature.post_processing.histogram_auto_exposure.focus_area", "Focus Area"), &settings.AdaptArea.x, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat2(T("feature.post_processing.histogram_auto_exposure.focus_area_width_height", "Focus Area Width/Height"), &settings.AdaptArea.x, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.specifies_the_proportion_of_the_area_width_height", "Specifies the proportion of the area [width, height] that auto exposure will adapt to."));
 
-	ImGui::SliderFloat2(T("feature.post_processing.histogram_auto_exposure.adaptation_range", "Adaptation Range"), &settings.AdaptationRange.x, -10.f, 21.f, "%.2f EV100");
+	ImGui::SliderFloat2(T("feature.post_processing.histogram_auto_exposure.adaptation_range_min_max", "Adaptation Range Min/Max"), &settings.AdaptationRange.x, -10.f, 21.f, "%.2f EV100");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(
 			T("feature.post_processing.histogram_auto_exposure.min_max_the_average_scene_luminance_will_be",
@@ -81,13 +81,16 @@ void HistogramAutoExposure::DrawSettings()
 		}
 
 		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.luminance_histogram_ev", "Luminance Histogram (%.0f - %.0f EV100)"), kMinEV100, kMaxEV100);
+		const float uiScale = Util::GetUIScale();
+		constexpr float kHistogramHeight = 120.f;
+		constexpr float kMarkerThickness = 2.f;
 		const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
-		const ImVec2 canvasSize = ImVec2(ImGui::GetContentRegionAvail().x, 120.f);
+		const ImVec2 canvasSize = ImVec2(ImGui::GetContentRegionAvail().x, kHistogramHeight * uiScale);
 		ImGui::InvisibleButton("##histogram_canvas", canvasSize);
 
 		auto* drawList = ImGui::GetWindowDrawList();
 		drawList->AddRectFilled(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(18, 18, 18, 255));
-		drawList->AddRect(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(80, 80, 80, 255));
+		drawList->AddRect(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(80, 80, 80, 255), 0.f, 0, uiScale);
 
 		const float binWidth = canvasSize.x / static_cast<float>(kHistogramBins);
 		for (int i = 0; i < kHistogramBins; i++) {
@@ -108,7 +111,7 @@ void HistogramAutoExposure::DrawSettings()
 
 		auto drawMarker = [&](float ev, ImU32 color) {
 			const float x = evToX(ev);
-			drawList->AddLine(ImVec2(x, canvasPos.y), ImVec2(x, canvasPos.y + canvasSize.y), color, 2.f);
+			drawList->AddLine(ImVec2(x, canvasPos.y), ImVec2(x, canvasPos.y + canvasSize.y), color, kMarkerThickness * uiScale);
 		};
 
 		drawMarker(settings.AdaptationRange.x, IM_COL32(255, 200, 0, 255));

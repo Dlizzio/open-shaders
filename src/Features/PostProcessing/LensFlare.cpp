@@ -2,8 +2,53 @@
 
 #include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
+#include "PostProcessingUI.h"
 #include "State.h"
 #include "Util.h"
+
+namespace
+{
+	using LensFlareSettings = LensFlare::Settings;
+
+	bool IsBokehGhostMode(int mode)
+	{
+		return mode >= static_cast<int>(LensFlare::GhostMode::Quality);
+	}
+
+	bool IsUltraGhostMode(int mode)
+	{
+		return mode == static_cast<int>(LensFlare::GhostMode::Ultra);
+	}
+
+	bool HasUltraKernelChanged(const LensFlareSettings& oldSettings, const LensFlareSettings& newSettings)
+	{
+		for (size_t i = 0; i < oldSettings.Ghosts.size(); ++i) {
+			if (oldSettings.Ghosts[i].Enabled != newSettings.Ghosts[i].Enabled ||
+				oldSettings.Ghosts[i].KernelScale != newSettings.Ghosts[i].KernelScale) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool ShouldInvalidateBokehFFT(const LensFlareSettings& oldSettings, const LensFlareSettings& newSettings)
+	{
+		if (!IsBokehGhostMode(oldSettings.GhostModeInt) && !IsBokehGhostMode(newSettings.GhostModeInt))
+			return false;
+
+		if (oldSettings.GhostModeInt != newSettings.GhostModeInt ||
+			oldSettings.FFTResolution != newSettings.FFTResolution ||
+			oldSettings.KernelScale != newSettings.KernelScale ||
+			oldSettings.FStop != newSettings.FStop ||
+			oldSettings.ApertureBlades != newSettings.ApertureBlades ||
+			oldSettings.ApertureRotation != newSettings.ApertureRotation) {
+			return true;
+		}
+
+		return (IsUltraGhostMode(oldSettings.GhostModeInt) || IsUltraGhostMode(newSettings.GhostModeInt)) &&
+		       HasUltraKernelChanged(oldSettings, newSettings);
+	}
+}
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LensFlare::Settings,
@@ -43,6 +88,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LensFlare::DrawSettings()
 {
+	const auto oldSettings = settings;
 	auto tooltip = [](const char* text) {
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(text);
@@ -51,10 +97,6 @@ void LensFlare::DrawSettings()
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.intensity", "Intensity"), &settings.Intensity, 0.0f, 1.0f, "%.3f");
 	tooltip("Master intensity for the entire lens flare effect");
 
-	// Threshold
-	ImGui::Spacing();
-	ImGui::Text(T("feature.post_processing.lens_flare.threshold", "Threshold"));
-	ImGui::Separator();
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.threshold_ev", "Threshold (EV100)"), &settings.ThresholdEV, -7.0f, 23.0f, "%+.2f EV100");
 	tooltip("Brightness threshold in EV100 (0 EV100 = 0.125 linear luminance).");
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.threshold_range", "Threshold Range"), &settings.ThresholdRange, 0.01f, 5.0f, "%.3f");
@@ -82,20 +124,8 @@ void LensFlare::DrawSettings()
 		ImGui::SliderFloat(T("feature.post_processing.lens_flare.aperture_rotation", "Aperture Rotation"), &settings.ApertureRotation, -180.0f, 180.0f, "%.1f deg");
 		tooltip("Rotation of the procedural aperture.");
 
-		// FFT Resolution
-		{
-			const char* resNames[] = { "128", "256", "512", "1024" };
-			int resValues[] = { 128, 256, 512, 1024 };
-			int curIdx = 1;
-			for (int i = 0; i < 4; i++)
-				if (resValues[i] == settings.FFTResolution)
-					curIdx = i;
-
-			if (ImGui::Combo(T("feature.post_processing.lens_flare.fft_resolution", "FFT Resolution"), &curIdx, resNames, 4))
-				settings.FFTResolution = resValues[curIdx];
-
-			tooltip("Resolution of the FFT convolution. Higher = sharper bokeh ghost shapes but more expensive.");
-		}
+		PostProcessingUI::FFTResolutionCombo(T("feature.post_processing.lens_flare.fft_resolution", "FFT Resolution"), settings.FFTResolution);
+		tooltip("Resolution of the FFT convolution. Higher = sharper bokeh ghost shapes but more expensive.");
 
 		ImGui::SliderFloat(T("feature.post_processing.lens_flare.kernel_scale", "Kernel Scale"), &settings.KernelScale, 0.01f, 0.5f, "%.3f");
 		tooltip("Base size of the bokeh kernel relative to FFT resolution.\nPer-ghost scales multiply this value in Ultra mode.");
@@ -170,25 +200,39 @@ void LensFlare::DrawSettings()
 		tooltip("Kawase blur cycles (down+up). 1 = sharp, 2+ = smoother");
 
 		static float debugRescale = .25f;
+		const float debugTextureScale = debugRescale * Util::GetUIScale();
 		ImGui::SliderFloat(T("feature.post_processing.lens_flare.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
-		BUFFER_VIEWER_NODE_TITLE(texThreshold, "Threshold (half-res)", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texGhostHalo, "Ghost + Halo (half-res)", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texFlare, "Final Flare Output", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texBlurTemp, "Blur Temp (quarter-res)", debugRescale);
+		BUFFER_VIEWER_NODE_TITLE(texThreshold, "Threshold (half-res)", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texGhostHalo, "Ghost + Halo (half-res)", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texFlare, "Final Flare Output", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texBlurTemp, "Blur Temp (quarter-res)", debugTextureScale);
 		if (settings.GhostModeInt >= (int)GhostMode::Quality) {
-			BUFFER_VIEWER_NODE_TITLE(texFFTResult, "FFT Convolution Result", debugRescale);
+			BUFFER_VIEWER_NODE_TITLE(texFFTResult, "FFT Convolution Result", debugTextureScale);
 		}
 	}
+
+	if (ShouldInvalidateBokehFFT(oldSettings, settings))
+		bokehFFTDirty = true;
 }
 
 void LensFlare::RestoreDefaultSettings()
 {
 	settings = {};
+	bokehFFTDirty = true;
 }
 
 void LensFlare::LoadSettings(json& o_json)
 {
-	settings = o_json;
+	const auto oldSettings = settings;
+	try {
+		settings = o_json;
+	} catch (const json::exception& e) {
+		logger::error("Failed to load Lens Flare settings: {}", e.what());
+		RestoreDefaultSettings();
+		return;
+	}
+	if (ShouldInvalidateBokehFFT(oldSettings, settings))
+		bokehFFTDirty = true;
 }
 
 void LensFlare::SaveSettings(json& o_json)

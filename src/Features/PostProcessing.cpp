@@ -7,6 +7,7 @@
 #include "State.h"
 #include "Util.h"
 
+#include "Features/PostProcessing/PostProcessingUI.h"
 #include "Features/Upscaling.h"
 
 #include <format>
@@ -38,7 +39,7 @@ void PostProcessing::DrawSettings()
 	}
 
 	ImGui::SameLine();
-	if (ImGui::Button(T("feature.post_processing.load", "Load"))) {
+	if (PostProcessingUI::ActionButton(T("feature.post_processing.load", "Load"))) {
 		if (presetIdx >= 0 && presetIdx < presets.size()) {
 			LoadPresetFrom(presets[presetIdx]);
 		}
@@ -50,7 +51,7 @@ void PostProcessing::DrawSettings()
 	ImGui::InputText("##NewPresetName", &newPresetName);
 
 	ImGui::SameLine();
-	if (ImGui::Button(T("feature.post_processing.save", "Save"))) {
+	if (PostProcessingUI::ActionButton(T("feature.post_processing.save", "Save"))) {
 		if (!newPresetName.empty())
 			SavePresetTo(newPresetName);
 	}
@@ -73,7 +74,7 @@ void PostProcessing::DrawSettings()
 				ImGui::PushID(feat->GetType().c_str());
 				ImGui::Checkbox("##Enabled", &feat->enabled);
 				ImGui::SameLine();
-				if (ImGui::Button(ICON_FA_BARS)) {
+				if (PostProcessingUI::IconButton(ICON_FA_BARS)) {
 					pipelineFeatIdx = i;
 					pipelinePageNum = 1;
 				}
@@ -88,7 +89,7 @@ void PostProcessing::DrawSettings()
 		}
 	} else if (pipelinePageNum == 1) {
 		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
-		if (ImGui::Button(backLabel.c_str())) {
+		if (PostProcessingUI::ActionButton(backLabel.c_str())) {
 			pipelinePageNum = 0;
 		}
 		ImGui::Separator();
@@ -104,7 +105,7 @@ void PostProcessing::DrawSettings()
 
 				ImGui::Spacing();
 				auto recompileLabel = std::format("{} {}", ICON_FA_SYNC, T("feature.post_processing.recompile_shaders", "Recompile Shaders"));
-				if (ImGui::Button(recompileLabel.c_str())) {
+				if (PostProcessingUI::ActionButton(recompileLabel.c_str())) {
 					feat->ClearShaderCache();
 				}
 				if (auto _tt = Util::HoverTooltipWrapper())
@@ -206,7 +207,7 @@ void PostProcessing::LoadSettings(json& o_json)
 
 void PostProcessing::ProcessSettings(json& o_json)
 {
-	logger::info("Loading post processing settings...");
+	logger::debug("Loading post processing settings...");
 
 	for (auto& feat : pipeline) {
 		if (feat && o_json.contains(feat->GetType())) {
@@ -214,13 +215,12 @@ void PostProcessing::ProcessSettings(json& o_json)
 				feat->enabled = o_json.value(feat->GetType(), json::object()).value("enabled", true);
 			json featSettings = o_json.value(feat->GetType(), json::object()).value("settings", json::object());
 			feat->LoadSettings(featSettings);
-			if (loaded)
-				feat->SetupResources();
 		}
 	}
 
-	if (o_json.contains("ppsettings"))
+	if (o_json.contains("ppsettings")) {
 		settings = o_json["ppsettings"];
+	}
 }
 
 void PostProcessing::SaveSettings(json& o_json)
@@ -643,7 +643,7 @@ void PostProcessing::ClearBorderMotionVectorsForFrameGen()
 void PostProcessing::Prepass()
 {
 	if (!pendingSettings.empty()) {
-		logger::info("Processing pending post processing settings...");
+		logger::debug("Processing pending post processing settings...");
 		ProcessSettings(pendingSettings);
 		pendingSettings = {};
 	}

@@ -9,14 +9,242 @@
 #include "Features/PostProcessing.h"
 #include "Menu.h"
 #include "OpenDRTIo.h"
+#include "PostProcessingUI.h"
 
 #include <DDSTextureLoader.h>
 #include <DirectXPackedVector.h>
 #include <DirectXTex.h>
 
+#include <algorithm>
+#include <cmath>
+
 #include "IconsFontAwesome5.h"
 
 #define I18N_KEY_PREFIX "feature.post_processing.color_grading."
+
+namespace
+{
+	using ColorSettings = ColorGrading::Settings;
+
+	struct ColorMixerHue
+	{
+		const char* label;
+		std::array<float, 4> color;
+	};
+
+	constexpr size_t ColorMixerHueCount = 7;
+	constexpr int AllRGBChannelCount = 3;
+	constexpr float AllRGBAllSliderWeight = 2.f;
+	constexpr float AllRGBChannelSliderWeight = 1.f;
+	constexpr float AllRGBSliderWeight = AllRGBAllSliderWeight + AllRGBChannelSliderWeight * AllRGBChannelCount;
+	constexpr float AllRGBDragSpeed = 1e-3f;
+	constexpr float ColorMixerSwatchHeight = 22.f;
+	constexpr float ColorMixerSwatchRounding = 4.f;
+	constexpr float ColorMixerSwatchSpacing = 8.f;
+	constexpr float SelectedSwatchThickness = 2.f;
+	constexpr float ZeroAllNeutral = 0.f;
+	constexpr float UnitAllNeutral = 1.f;
+
+	struct AllRGBControl
+	{
+		const char* id;
+		const char* label;
+		float4 ColorSettings::* value;
+		float min;
+		float max;
+		const char* format;
+	};
+
+	std::array<ColorMixerHue, ColorMixerHueCount> GetColorMixerHues()
+	{
+		return {
+			ColorMixerHue{ T(TKEY("reds"), "Reds"), { 1.f, 0.f, 0.f, 1.f } },
+			ColorMixerHue{ T(TKEY("oranges"), "Oranges"), { 0.714f, 0.486f, 0.004f, 1.f } },
+			ColorMixerHue{ T(TKEY("greens"), "Greens"), { 0.341f, 0.624f, 0.f, 1.f } },
+			ColorMixerHue{ T(TKEY("cyans"), "Cyans"), { 0.f, 0.631f, 0.569f, 1.f } },
+			ColorMixerHue{ T(TKEY("blues"), "Blues"), { 0.f, 0.584f, 0.851f, 1.f } },
+			ColorMixerHue{ T(TKEY("purples"), "Purples"), { 0.522f, 0.392f, 1.f, 1.f } },
+			ColorMixerHue{ T(TKEY("magentas"), "Magentas"), { 1.f, 0.137f, 0.741f, 1.f } },
+		};
+	}
+
+	std::array<AllRGBControl, 3> GetAscCdlControls()
+	{
+		return {
+			AllRGBControl{ "Slope", T(TKEY("slope"), "Slope"), &ColorSettings::slope, 0.f, 2.f, "%.2f" },
+			AllRGBControl{ "Power", T(TKEY("power"), "Power"), &ColorSettings::power, 0.f, 2.f, "%.2f" },
+			AllRGBControl{ "Offset", T(TKEY("offset"), "Offset"), &ColorSettings::cdlOffset, -1.f, 1.f, "%.2f" },
+		};
+	}
+
+	std::array<AllRGBControl, 6> GetShadowsMidtonesHighlightsControls()
+	{
+		return {
+			AllRGBControl{ "ShadowsGain", T(TKEY("shadows_gain"), "Shadows Gain"), &ColorSettings::shadowsGain, 0.f, 2.f, "%.3f" },
+			AllRGBControl{ "ShadowsOffset", T(TKEY("shadows_offset"), "Shadows Offset"), &ColorSettings::shadowsOffset, -0.5f, 0.5f, "%.3f" },
+			AllRGBControl{ "MidtonesGain", T(TKEY("midtones_gain"), "Midtones Gain"), &ColorSettings::midtonesGain, 0.f, 2.f, "%.3f" },
+			AllRGBControl{ "MidtonesOffset", T(TKEY("midtones_offset"), "Midtones Offset"), &ColorSettings::midtonesOffset, -0.5f, 0.5f, "%.3f" },
+			AllRGBControl{ "HighlightsGain", T(TKEY("highlights_gain"), "Highlights Gain"), &ColorSettings::highlightsGain, 0.f, 2.f, "%.3f" },
+			AllRGBControl{ "HighlightsOffset", T(TKEY("highlights_offset"), "Highlights Offset"), &ColorSettings::highlightsOffset, -0.5f, 0.5f, "%.3f" },
+		};
+	}
+
+	std::array<AllRGBControl, 2> GetContrastControls()
+	{
+		return {
+			AllRGBControl{ "Contrast", T(TKEY("contrast"), "Contrast"), &ColorSettings::contrast, 0.f, 2.f, "%.3f" },
+			AllRGBControl{ "Pivot", T(TKEY("pivot"), "Pivot"), &ColorSettings::pivot, 0.f, 1.f, "%.3f" },
+		};
+	}
+
+	std::array<AllRGBControl, 3> GetLiftGammaGainControls()
+	{
+		return {
+			AllRGBControl{ "Lift", T(TKEY("lift"), "Lift"), &ColorSettings::lift, -1.f, 1.f, "%.3f" },
+			AllRGBControl{ "Gamma", T(TKEY("gamma"), "Gamma"), &ColorSettings::gamma, -1.5f, 1.5f, "%.3f" },
+			AllRGBControl{ "Gain", T(TKEY("gain"), "Gain"), &ColorSettings::gain, 0.f, 2.f, "%.3f" },
+		};
+	}
+
+	float AverageRGB(const float4& value)
+	{
+		float total = 0.f;
+		for (int i = 0; i < AllRGBChannelCount; i++)
+			total += (&value.x)[i];
+		return total / static_cast<float>(AllRGBChannelCount);
+	}
+
+	void SetRGB(float4& value, float rgb)
+	{
+		for (int i = 0; i < AllRGBChannelCount; i++)
+			(&value.x)[i] = rgb;
+	}
+
+	float4 ApplyStoredAllRGB(const float4& value, float neutral)
+	{
+		const float commonOffset = value.x - neutral;
+		return { value.y + commonOffset, value.z + commonOffset, value.w + commonOffset, value.x };
+	}
+
+	float4 PackLiftGammaGainAllRGB(const float4& value, float neutral)
+	{
+		const auto applied = ApplyStoredAllRGB(value, neutral);
+		return { applied.w, applied.x, applied.y, applied.z };
+	}
+
+	float GetAllSliderWidth()
+	{
+		const auto& style = ImGui::GetStyle();
+		const float spacingWidth = style.ItemSpacing.x + style.ItemInnerSpacing.x * static_cast<float>(AllRGBChannelCount - 1);
+		const float availableWidth = ImGui::CalcItemWidth() - spacingWidth;
+		return std::max(availableWidth * AllRGBAllSliderWeight / AllRGBSliderWeight, ImGui::GetFrameHeight());
+	}
+
+	template <class OnAllChanged>
+	void DrawAllRGBSliders(const AllRGBControl& control, float& allValue, float* rgbValues, OnAllChanged onAllChanged)
+	{
+		ImGui::PushID(control.id);
+
+		const auto& style = ImGui::GetStyle();
+		const float allWidth = GetAllSliderWidth();
+		const float rgbWidth = ImGui::CalcItemWidth() - allWidth - style.ItemSpacing.x;
+
+		ImGui::SetNextItemWidth(allWidth);
+		if (ImGui::SliderFloat("##All", &allValue, control.min, control.max, control.format))
+			onAllChanged(allValue);
+		ImGui::SameLine(0.f, style.ItemSpacing.x);
+		ImGui::SetNextItemWidth(rgbWidth);
+		PostProcessingUI::RGBFloatDrag3("##RGB", rgbValues, AllRGBDragSpeed, control.min, control.max, control.format);
+		ImGui::SameLine();
+		ImGui::TextUnformatted(control.label);
+
+		ImGui::PopID();
+	}
+
+	void DrawRGBAll(ColorSettings& settings, const AllRGBControl& control)
+	{
+		auto& value = settings.*control.value;
+		ImGui::PushID(control.id);
+		auto* allValue = ImGui::GetStateStorage()->GetFloatRef(ImGui::GetID("##AllState"), AverageRGB(value));
+		ImGui::PopID();
+
+		DrawAllRGBSliders(control, *allValue, &value.x, [&](float newAll) {
+			SetRGB(value, newAll);
+		});
+	}
+
+	void DrawStoredAllRGB(ColorSettings& settings, const AllRGBControl& control)
+	{
+		auto& value = settings.*control.value;
+		DrawAllRGBSliders(control, value.x, &value.y, [](float) {});
+	}
+
+	template <size_t N>
+	void DrawRGBAllControls(ColorSettings& settings, const std::array<AllRGBControl, N>& controls)
+	{
+		for (const auto& control : controls)
+			DrawRGBAll(settings, control);
+	}
+
+	template <size_t N>
+	void DrawStoredAllRGBControls(ColorSettings& settings, const std::array<AllRGBControl, N>& controls)
+	{
+		for (const auto& control : controls)
+			DrawStoredAllRGB(settings, control);
+	}
+
+	float Scaled(float value)
+	{
+		return value * Util::GetUIScale();
+	}
+
+	ImVec2 ColorMixerSwatchSize()
+	{
+		const float spacingWidth = Scaled(ColorMixerSwatchSpacing) * static_cast<float>(ColorMixerHueCount - 1);
+		const float width = (ImGui::CalcItemWidth() - spacingWidth) / static_cast<float>(ColorMixerHueCount);
+		return { std::max(width, Scaled(ColorMixerSwatchHeight)), Scaled(ColorMixerSwatchHeight) };
+	}
+
+	void DrawColorMixerSwatch(const ColorMixerHue& hue, size_t index, int& hueId, const ImVec2& swatchSize)
+	{
+		const ImVec4 color{ hue.color[0], hue.color[1], hue.color[2], hue.color[3] };
+		const float rounding = Scaled(ColorMixerSwatchRounding);
+
+		ImGui::PushID(static_cast<int>(index));
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
+		if (ImGui::ColorButton("##Hue", color, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, swatchSize))
+			hueId = static_cast<int>(index);
+		ImGui::PopStyleVar();
+
+		if (hueId == static_cast<int>(index)) {
+			auto* drawList = ImGui::GetWindowDrawList();
+			drawList->AddRect(
+				ImGui::GetItemRectMin(),
+				ImGui::GetItemRectMax(),
+				ImGui::GetColorU32(ImGuiCol_CheckMark),
+				rounding,
+				0,
+				Scaled(SelectedSwatchThickness));
+		}
+
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(hue.label);
+		ImGui::PopID();
+	}
+
+	void DrawColorMixerSelectors(int& hueId)
+	{
+		const auto hues = GetColorMixerHues();
+		const ImVec2 swatchSize = ColorMixerSwatchSize();
+		const float swatchSpacing = Scaled(ColorMixerSwatchSpacing);
+
+		for (size_t i = 0; i < hues.size(); i++) {
+			if (i != 0)
+				ImGui::SameLine(0.f, swatchSpacing);
+			DrawColorMixerSwatch(hues[i], i, hueId, swatchSize);
+		}
+	}
+}
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ColorGrading::Settings,
@@ -331,9 +559,7 @@ void ColorGrading::DrawSettings()
 		}
 
 		if (ImGui::TreeNode(T(TKEY("asc_cdl"), "ASC CDL"))) {
-			Util::ShiftSlider(T(TKEY("slope"), "Slope"), &settings.slope.x, 0.f, 2.f, "%.2f");
-			Util::ShiftSlider(T(TKEY("power"), "Power"), &settings.power.x, 0.f, 2.f, "%.2f");
-			Util::ShiftSlider(T(TKEY("offset"), "Offset"), &settings.cdlOffset.x, -1.f, 1.f, "%.2f");
+			DrawRGBAllControls(settings, GetAscCdlControls());
 			ImGui::TreePop();
 		}
 
@@ -346,28 +572,9 @@ void ColorGrading::DrawSettings()
 
 		if (ImGui::TreeNode(T(TKEY("oklch_color_mixer"), "OKLCH Color Mixer"))) {
 			ImGui::Text(T(TKEY("oklch_color_mixer_tooltip"), "Adjust brightness, vibrance and hue shift of specific hues in the perceptually uniform OKLCH space."));
-			constexpr std::array<ImColor, 7> hues = { {
-				{ 255, 0, 0 },
-				{ 182, 124, 1 },
-				{ 87, 159, 0 },
-				{ 0, 161, 145 },
-				{ 0, 149, 217 },
-				{ 133, 100, 255 },
-				{ 255, 35, 189 },
-			} };
 			static int hueId = 0;
-			if (ImGui::BeginTable("##HueTable", 7)) {
-				for (int i = 0; i < 7; i++) {
-					ImGui::TableNextColumn();
-
-					ImGui::PushID(i);
-					ImGui::PushStyleColor(ImGuiCol_Text, hues[i].Value);
-					ImGui::RadioButton(ICON_FA_SQUARE, &hueId, i);
-					ImGui::PopStyleColor();
-					ImGui::PopID();
-				}
-				ImGui::EndTable();
-			}
+			hueId = std::clamp(hueId, 0, static_cast<int>(ColorMixerHueCount) - 1);
+			DrawColorMixerSelectors(hueId);
 			ImGui::SliderFloat(T(TKEY("hue_shift"), "Hue Shift"), &settings.oklchColorMixer[hueId].x, -1.f, 1.f, "%.3f");
 			ImGui::SliderFloat(T(TKEY("vibrance"), "Vibrance"), &settings.oklchColorMixer[hueId].y, 0.f, 3.f, "%.3f");
 			ImGui::SliderFloat(T(TKEY("brightness"), "Brightness"), &settings.oklchColorMixer[hueId].z, -1.f, 1.f, "%.3f");
@@ -375,28 +582,20 @@ void ColorGrading::DrawSettings()
 		}
 
 		if (ImGui::TreeNode(T(TKEY("shadows_midtones_highlights"), "Shadows/Midtones/Highlights"))) {
-			Util::ShiftSlider(T(TKEY("shadows_gain"), "Shadows Gain"), &settings.shadowsGain.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider(T(TKEY("shadows_offset"), "Shadows Offset"), &settings.shadowsOffset.x, -0.5f, 0.5f, "%.3f");
-			Util::ShiftSlider(T(TKEY("midtones_gain"), "Midtones Gain"), &settings.midtonesGain.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider(T(TKEY("midtones_offset"), "Midtones Offset"), &settings.midtonesOffset.x, -0.5f, 0.5f, "%.3f");
-			Util::ShiftSlider(T(TKEY("highlights_gain"), "Highlights Gain"), &settings.highlightsGain.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider(T(TKEY("highlights_offset"), "Highlights Offset"), &settings.highlightsOffset.x, -0.5f, 0.5f, "%.3f");
+			DrawRGBAllControls(settings, GetShadowsMidtonesHighlightsControls());
 			ImGui::InputFloat2(T(TKEY("shadows_start_end"), "Shadows Start/End"), &settings.shadowsHighlightsRange.x, "%.3f");
 			ImGui::InputFloat2(T(TKEY("highlights_start_end"), "Highlights Start/End"), &settings.shadowsHighlightsRange.z, "%.3f");
 			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNode(T(TKEY("contrast"), "Contrast"))) {
-			Util::ShiftSlider(T(TKEY("contrast"), "Contrast"), &settings.contrast.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider(T(TKEY("pivot"), "Pivot"), &settings.pivot.x, 0.f, 1.f, "%.3f");
+			DrawRGBAllControls(settings, GetContrastControls());
 			ImGui::TreePop();
 		}
 
 		ImGui::Text(T(TKEY("post_tonemapping_settings"), "Post-Tonemapping Settings"));
 		if (ImGui::TreeNode(T(TKEY("lift_gamma_gain"), "Lift Gamma Gain"))) {
-			ImGui::DragFloat4(T(TKEY("lift"), "Lift"), &settings.lift.x, 1e-3f, -1.f, 1.f, "%.3f");
-			ImGui::DragFloat4(T(TKEY("gamma"), "Gamma"), &settings.gamma.x, 1e-3f, -1.5f, 1.5f, "%.3f");
-			ImGui::DragFloat4(T(TKEY("gain"), "Gain"), &settings.gain.x, 1e-3f, 0.f, 2.f, "%.3f");
+			DrawStoredAllRGBControls(settings, GetLiftGammaGainControls());
 			ImGui::TreePop();
 		}
 	}
@@ -431,6 +630,7 @@ void ColorGrading::DrawSettings()
 						tonemappers[tonemapperType].cached_settings = settings.tonemapParams;
 						settings.tonemapParams = tonemappers[i].cached_settings;
 						tonemapperType = i;
+						settings.currentTonemapper = tonemappers[tonemapperType].name.data();
 						recompileFlag = true;
 					}
 
@@ -470,8 +670,12 @@ void ColorGrading::DrawSettings()
 				}
 
 				// Plot area
+				const float uiScale = Util::GetUIScale();
+				constexpr float kCurvePreviewHeight = 180.f;
+				const float lineThickness = uiScale;
+				const float curveThickness = 1.5f * uiScale;
 				float plotW = ImGui::GetContentRegionAvail().x;
-				float plotH = 180.f;
+				float plotH = kCurvePreviewHeight * uiScale;
 				ImVec2 canvasPos = ImGui::GetCursorScreenPos();
 				ImVec2 canvasSize = { plotW, plotH };
 				ImGui::InvisibleButton("##curve_canvas", canvasSize);
@@ -481,18 +685,18 @@ void ColorGrading::DrawSettings()
 
 				// Background
 				dl->AddRectFilled(canvasPos, { canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y }, IM_COL32(20, 20, 20, 255));
-				dl->AddRect(canvasPos, { canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y }, IM_COL32(80, 80, 80, 255));
+				dl->AddRect(canvasPos, { canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y }, IM_COL32(80, 80, 80, 255), 0.f, 0, lineThickness);
 
 				// Grid lines
 				auto gridColor = IM_COL32(50, 50, 50, 255);
 				for (int g = 1; g <= 3; g++) {
 					float gy = canvasPos.y + canvasSize.y * (1.f - (float)g / 4.f);
-					dl->AddLine({ canvasPos.x, gy }, { canvasPos.x + canvasSize.x, gy }, gridColor);
+					dl->AddLine({ canvasPos.x, gy }, { canvasPos.x + canvasSize.x, gy }, gridColor, lineThickness);
 				}
 				// Vertical grid at input = 1.0
 				{
 					float gx = canvasPos.x + canvasSize.x * (1.f / CurveMaxInput);
-					dl->AddLine({ gx, canvasPos.y }, { gx, canvasPos.y + canvasSize.y }, gridColor);
+					dl->AddLine({ gx, canvasPos.y }, { gx, canvasPos.y + canvasSize.y }, gridColor, lineThickness);
 				}
 
 				// Identity line (input = output, clamped to plot range)
@@ -502,7 +706,7 @@ void ColorGrading::DrawSettings()
 					float y0 = canvasPos.y + canvasSize.y;
 					float x1 = canvasPos.x + canvasSize.x * identityEndX;
 					float y1 = canvasPos.y + canvasSize.y * (1.f - std::min(1.f, yMax) / yMax);
-					dl->AddLine({ x0, y0 }, { x1, y1 }, IM_COL32(80, 80, 80, 128));
+					dl->AddLine({ x0, y0 }, { x1, y1 }, IM_COL32(80, 80, 80, 128), lineThickness);
 				}
 
 				// Draw RGB curves
@@ -512,7 +716,7 @@ void ColorGrading::DrawSettings()
 						float x1 = canvasPos.x + canvasSize.x * ((float)(i + 1) / (CurveSamples - 1));
 						float y0 = canvasPos.y + canvasSize.y * (1.f - std::clamp(data[i] / yMax, 0.f, 1.f));
 						float y1 = canvasPos.y + canvasSize.y * (1.f - std::clamp(data[i + 1] / yMax, 0.f, 1.f));
-						dl->AddLine({ x0, y0 }, { x1, y1 }, color, 1.5f);
+						dl->AddLine({ x0, y0 }, { x1, y1 }, color, curveThickness);
 					}
 				};
 
@@ -528,7 +732,7 @@ void ColorGrading::DrawSettings()
 					float preValue = t * CurveMaxInput;
 
 					// Vertical cursor line
-					dl->AddLine({ mousePos.x, canvasPos.y }, { mousePos.x, canvasPos.y + canvasSize.y }, IM_COL32(200, 200, 200, 100));
+					dl->AddLine({ mousePos.x, canvasPos.y }, { mousePos.x, canvasPos.y + canvasSize.y }, IM_COL32(200, 200, 200, 100), lineThickness);
 
 					ImGui::BeginTooltip();
 					ImGui::Text(T(TKEY("curve_preview_pre"), "Pre:  %.3f"), preValue);
@@ -548,7 +752,17 @@ void ColorGrading::DrawSettings()
 	}
 
 	ImGui::SeparatorText(T(TKEY("game_color_grading"), "Game Color Grading"));
-	ImGui::SliderFloat3(T(TKEY("cinematic_blend"), "Cinematic Blend"), &settings.gameCinematicBlend.x, 0.f, 1.f, "%.3f");
+	const std::array cinematicBlendLabels = {
+		T(TKEY("saturation_short"), "Sat"),
+		T(TKEY("brightness_short"), "Bri"),
+		T(TKEY("contrast_short"), "Con")
+	};
+	PostProcessingUI::LabeledSliderFloat3(
+		T(TKEY("cinematic_blend"), "Cinematic Blend"),
+		&settings.gameCinematicBlend.x,
+		cinematicBlendLabels,
+		0.f,
+		1.f);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T(TKEY("cinematic_blend_tooltip"), "Saturation, Brightness and Contrast."));
 	ImGui::SliderFloat(T(TKEY("fade_blend"), "Fade Blend"), &settings.gameFadeBlend, 0.f, 1.f, "%.3f");
@@ -586,26 +800,37 @@ void ColorGrading::RestoreDefaultSettings()
 {
 	settings = {};
 	TonemapperInfo::GetDefaultParams(tonemapperType, settings.tonemapParams);
+	settings.currentTonemapper = TonemapperInfo::GetTonemappers()[tonemapperType].name.data();
 	recompileFlag = true;
+}
+
+void ColorGrading::ResolveTonemapperFromSettings()
+{
+	auto& tonemappers = TonemapperInfo::GetTonemappers();
+	if (auto it = std::ranges::find_if(tonemappers, [&](TonemapperInfo& x) { return settings.currentTonemapper == x.name; });
+		it != tonemappers.end()) {
+		tonemapperType = static_cast<int>(it - tonemappers.begin());
+		return;
+	}
+
+	TonemapperInfo::GetDefaultParams(tonemapperType, settings.tonemapParams);
+	settings.currentTonemapper = tonemappers[tonemapperType].name.data();
 }
 
 void ColorGrading::LoadSettings(json& o_json)
 {
+	const bool oldUseOpenDrt = settings.useOpenDrt;
+	const int oldTonemapperType = tonemapperType;
+
 	try {
 		settings = o_json;
 		auto& spaces = getAvailableColorSpaces();
 		settings.processColorSpace = std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1);
-
-		auto& tonemappers = TonemapperInfo::GetTonemappers();
-		if (auto it = std::ranges::find_if(tonemappers, [&](TonemapperInfo& x) { return settings.currentTonemapper == x.name; });
-			it != tonemappers.end()) {
-			tonemapperType = (int)(it - tonemappers.begin());
-		} else {
-			TonemapperInfo::GetDefaultParams(tonemapperType, settings.tonemapParams);
-		}
+		ResolveTonemapperFromSettings();
 	} catch (const json::exception& e) {
 		logger::error("Failed to load Color Grading settings: {}", e.what());
 		RestoreDefaultSettings();
+		return;
 	}
 
 	try {
@@ -620,7 +845,7 @@ void ColorGrading::LoadSettings(json& o_json)
 		settings.odrtConfig = {};
 	}
 
-	recompileFlag = true;
+	recompileFlag = recompileFlag || settings.useOpenDrt != oldUseOpenDrt || tonemapperType != oldTonemapperType;
 }
 
 void ColorGrading::SaveSettings(json& o_json)
@@ -683,6 +908,8 @@ void ColorGrading::SetupResources()
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 	auto context = globals::d3d::context;
+
+	ResolveTonemapperFromSettings();
 
 	logger::debug("Creating buffers...");
 	{
@@ -921,7 +1148,9 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 
 	ColorCB colorCBData = {
 		.asccdl = { settings.slope, settings.power, settings.cdlOffset },
-		.liftgammagain = { settings.lift, settings.gamma, settings.gain },
+		.liftgammagain = { PackLiftGammaGainAllRGB(settings.lift, ZeroAllNeutral),
+			PackLiftGammaGainAllRGB(settings.gamma, ZeroAllNeutral),
+			PackLiftGammaGainAllRGB(settings.gain, UnitAllNeutral) },
 		.inOutGamma = settings.inOutGamma,
 		.oklchSaturation = settings.oklchSaturation,
 		.oklchColorMixer = { settings.oklchColorMixer[0], settings.oklchColorMixer[1], settings.oklchColorMixer[2], settings.oklchColorMixer[3], settings.oklchColorMixer[4], settings.oklchColorMixer[5], settings.oklchColorMixer[6] },
