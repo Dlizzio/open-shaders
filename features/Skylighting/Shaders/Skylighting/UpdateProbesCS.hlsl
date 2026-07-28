@@ -94,7 +94,7 @@ static const float3 noise3D[32] = {
 	}
 
 	// Shadow cascade sampling with bitmask accumulation
-	float4 cellCentreCS = mul(FrameBuffer::CameraViewProj, float4(cellCentreMS, 1));
+	float4 cellCentreCS = mul(FrameBuffer::CameraViewProj[0], float4(cellCentreMS, 1));
 	float2 screenUV = (cellCentreCS.xy / cellCentreCS.w) * float2(0.5, -0.5) + 0.5;
 	bool onScreen = cellCentreCS.w > 0 && all(screenUV > 0) && all(screenUV < 1);
 
@@ -105,11 +105,11 @@ static const float3 noise3D[32] = {
 		uint bitIndex = SharedData::FrameCount % 32;
 		float3 jitteredMS = cellCentreMS + noise3D[bitIndex] * 128;
 
-		float ndcDepth = FrameBuffer::GetShadowDepth(jitteredMS);
+		float ndcDepth = FrameBuffer::GetShadowDepth(jitteredMS, 0);
 		float linearDepth = SharedData::GetScreenDepth(ndcDepth);
 
 		if (linearDepth > 0 && linearDepth < shadowData.EndSplitDistances.y) {
-			float3 positionWS = jitteredMS + FrameBuffer::CameraPosAdjust.xyz;
+			float3 positionWS = jitteredMS + FrameBuffer::CameraPosAdjust[0].xyz;
 
 			uint cascadeIndex = (linearDepth > shadowData.EndSplitDistances.x) ? 1u : 0u;
 
