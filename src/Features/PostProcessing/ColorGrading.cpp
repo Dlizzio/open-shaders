@@ -753,9 +753,9 @@ void ColorGrading::DrawSettings()
 
 	ImGui::SeparatorText(T(TKEY("game_color_grading"), "Game Color Grading"));
 	const std::array cinematicBlendLabels = {
-		T(TKEY("saturation_short"), "Sat"),
-		T(TKEY("brightness_short"), "Brt"),
-		T(TKEY("contrast_short"), "Con")
+		T(TKEY("saturation_short"), "SAT"),
+		T(TKEY("brightness_short"), "BRT"),
+		T(TKEY("contrast_short"), "CON")
 	};
 	PostProcessingUI::LabeledSliderFloat3(
 		T(TKEY("cinematic_blend"), "Cinematic Blend"),

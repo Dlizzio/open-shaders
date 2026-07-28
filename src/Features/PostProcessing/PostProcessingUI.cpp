@@ -18,6 +18,7 @@ namespace PostProcessingUI
 	{
 		constexpr float ActionButtonHeight1080p = 29.f;
 		constexpr float ButtonIconScale = 0.95f;
+		constexpr float ButtonIconTextExtraSpacing1080p = 2.f;
 		constexpr std::array<const char*, 4> FFTResolutionLabels = { "128", "256", "512", "1024" };
 		constexpr std::array<int, FFTResolutionLabels.size()> FFTResolutionValues = { 128, 256, 512, 1024 };
 		constexpr int FFTResolutionDefaultIndex = 1;
@@ -89,7 +90,9 @@ namespace PostProcessingUI
 
 		float GetIconTextGap(const LeadingIcon& icon)
 		{
-			return icon.text != icon.textEnd ? ImGui::GetStyle().ItemInnerSpacing.x : 0.f;
+			return icon.text != icon.textEnd ?
+			           ImGui::GetStyle().ItemInnerSpacing.x + ButtonIconTextExtraSpacing1080p * Util::GetUIScale() :
+			           0.f;
 		}
 
 		float GetIconButtonContentWidth(const LeadingIcon& icon)
