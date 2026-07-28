@@ -919,7 +919,7 @@
     "feature.post_processing.color_grading.black_tightness_shape": "黑色紧缩形状",
     "feature.post_processing.color_grading.blues": "蓝色",
     "feature.post_processing.color_grading.brightness": "亮度",
-    "feature.post_processing.color_grading.brightness_short": "Bri",
+    "feature.post_processing.color_grading.brightness_short": "Brt",
     "feature.post_processing.color_grading.cinematic_blend": "电影混合",
     "feature.post_processing.color_grading.cinematic_blend_tooltip": "饱和度、亮度和对比度。",
     "feature.post_processing.color_grading.clip_point": "裁剪点",

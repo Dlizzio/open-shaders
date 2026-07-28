@@ -1478,7 +1478,7 @@
     "feature.post_processing.color_grading.black_tightness_shape": "Black Tightness Shape",
     "feature.post_processing.color_grading.blues": "Blues",
     "feature.post_processing.color_grading.brightness": "Brightness",
-    "feature.post_processing.color_grading.brightness_short": "Bri",
+    "feature.post_processing.color_grading.brightness_short": "Brt",
     "feature.post_processing.color_grading.cinematic_blend": "Cinematic Blend",
     "feature.post_processing.color_grading.cinematic_blend_tooltip": "Saturation, Brightness and Contrast.",
     "feature.post_processing.color_grading.clip_point": "Clip Point",
