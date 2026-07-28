@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <dxgi1_4.h>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <shared_mutex>
@@ -184,6 +185,15 @@ public:
 			pendingAbsolute.store(a_request, std::memory_order_relaxed);  // Open or Close
 	}
 
+	/** @brief Thread-safe navigation request for off-thread callers (e.g. devbench):
+	 *  SelectFeatureMenu itself is render-thread-only, so this stages the name and
+	 *  ProcessInputEventQueue hands it off next frame. */
+	void RequestFeatureMenu(std::string a_featureName)
+	{
+		std::lock_guard<std::mutex> lock(offThreadFeatureSelectionMutex);
+		offThreadFeatureSelection = std::move(a_featureName);
+	}
+
 	// Search bar state
 	std::string featureSearch;  // For left pane feature search
 	/** @brief Draws the in-game performance/debug overlay */
@@ -248,6 +258,11 @@ private:
 	// last-writer-wins; toggles accumulate so rapid sub-frame toggles aren't dropped.
 	std::atomic<VisibilityRequest> pendingAbsolute{ VisibilityRequest::None };  // None/Open/Close
 	std::atomic<unsigned int> pendingToggleCount{ 0 };
+
+	// Off-thread feature-menu selection request (see RequestFeatureMenu), drained into
+	// pendingFeatureSelection on the render thread in ProcessInputEventQueue.
+	std::mutex offThreadFeatureSelectionMutex;
+	std::string offThreadFeatureSelection;
 
 public:
 	// Display size tracking for cross-session resolution change detection
@@ -539,8 +554,23 @@ public:
 	/** @brief Gets the loaded ImFont pointer for the given role */
 	ImFont* GetFont(FontRole role) const { return loadedFontRoles[static_cast<size_t>(role)]; }
 
-	/** @brief Queues a feature to be selected in the left panel on the next frame */
-	void SelectFeatureMenu(const std::string& featureName);
+	/** @brief Queues a feature (by GetShortName()) or built-in page (by canonicalId, e.g.
+	 *  "Performance") to be selected in the left panel on the next frame.
+	 *  @param sectionAnchor Optional: an anchor id a feature's own DrawSettings can
+	 *  check (via pendingSectionAnchor) to scroll to a specific heading once selected,
+	 *  instead of leaving the panel at whatever scroll position it was last left at. */
+	void SelectFeatureMenu(const std::string& featureName, const std::string& sectionAnchor = "");
+
+	/** @brief Returns true and clears the pending section anchor if it matches @p anchor;
+	 *  a feature's own DrawSettings calls this to consume a hub subsection link's scroll
+	 *  target (see SelectFeatureMenu) exactly once, without exposing the raw field. */
+	bool ConsumeSectionAnchor(const std::string& anchor)
+	{
+		if (pendingSectionAnchor != anchor)
+			return false;
+		pendingSectionAnchor.clear();
+		return true;
+	}
 	static std::unordered_map<std::string, int> categoryCounts;  // Number of features in each feature category
 
 	bool overlayVisible = false;
@@ -605,6 +635,9 @@ private:
 
 	// Menu navigation
 	std::string pendingFeatureSelection;  // Feature to select on next frame
+	// Anchor id set alongside pendingFeatureSelection (see SelectFeatureMenu); a
+	// feature's DrawSettings consumes it via ConsumeSectionAnchor to scroll there.
+	std::string pendingSectionAnchor;
 
 	// Input event handling
 	std::vector<KeyEvent> _keyEventQueue;

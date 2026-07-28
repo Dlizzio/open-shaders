@@ -277,45 +277,59 @@ void Upscaling::DrawFoveationControls(bool showTuning)
 }
 
 // Narrower than the feature name: the hub section only covers the VR perf knobs.
-std::string Upscaling::GetVRPerformanceSectionLabel()
+std::string Upscaling::GetPerformanceSectionLabel()
 {
 	return T(TKEY("vr_perf_upscaling_header"), "Upscaling & Foveation");
 }
 
+// Central Performance hub view: the restart-pending diff for qualityMode, the one
+// thing the hub's own Performance/Balanced/Quality button row (which already shows
+// which preset is active via highlighting) can't convey on its own.
+void Upscaling::DrawPerformancePresets()
+{
+	// Only meaningful when an upscaler is active; match the same gate DrawSettings
+	// uses so the hub doesn't show an inert diff for None/TAA.
+	const auto upscaleMethod = GetUpscaleMethod();
+	if (upscaleMethod == UpscaleMethod::kNONE || upscaleMethod == UpscaleMethod::kTAA)
+		return;
+	// No pending-restart diff while an explicit scale owns the render res:
+	// the preset is inert and a restart wouldn't apply it.
+	if (perfMode.IsHookActive() && !perfMode.IsExplicitScaleLatched())
+		Util::UI::DrawSettingDiff(bootSnapshot, settings, &Settings::qualityMode);
+}
+
 // Central Performance hub view: the render-res PerfMode toggle and Foveated DLSS,
 // the two upscaler-owned VR perf knobs, bound to the same settings the upscaler panel shows.
-void Upscaling::DrawVRPerformanceSettings()
+void Upscaling::DrawPerformanceSettings()
 {
 	DrawPerfModeToggle();
-	// The upscale preset is only meaningful when an upscaler is active; match the same
-	// gate DrawSettings uses so the hub doesn't show an inert value for None/TAA.
-	const auto upscaleMethod = GetUpscaleMethod();
-	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
-		ImGui::Text("%s: %s", T(TKEY("vr_perf_upscale_preset"), "Upscale preset"), GetQualityModeName(settings.qualityMode));
-		// No pending-restart diff while an explicit scale owns the render res:
-		// the preset is inert and a restart wouldn't apply it.
-		if (perfMode.IsHookActive() && !perfMode.IsExplicitScaleLatched())
-			Util::UI::DrawSettingDiff(bootSnapshot, settings, &Settings::qualityMode);
-	}
-	DrawFoveationControls(false);
+	// Foveated DLSS is VR-only; hide rather than disable so flat users never see a
+	// control they can never activate (mirrors the gate at DrawSettings' own call site).
+	if (globals::game::isVR)
+		DrawFoveationControls(false);
 }
 
-uint Upscaling::VRProfileQualityMode(VRPerfProfile profile)
+namespace
 {
-	switch (profile) {
-	case VRPerfProfile::Performance:
-		return (uint)QualityMode::kPerformance;
-	case VRPerfProfile::Balanced:
-		return (uint)QualityMode::kBalanced;
-	default:
-		return (uint)QualityMode::kQuality;
-	}
-}
+	struct UpscalePreset
+	{
+		uint qualityMode;
+		bool foveation;
+	};
 
-// Foveated DLSS trades peripheral sharpness for speed, so only Performance opts into it.
-bool Upscaling::VRProfileFoveation(VRPerfProfile profile)
-{
-	return profile == VRPerfProfile::Performance;
+	// Foveated DLSS trades peripheral sharpness for speed, so only Performance opts into
+	// it. Single source of truth for Apply/MatchesPerformanceProfile below.
+	constexpr UpscalePreset GetUpscalePreset(Feature::PerfProfile profile)
+	{
+		switch (profile) {
+		case Feature::PerfProfile::Performance:
+			return { (uint)Upscaling::QualityMode::kPerformance, true };
+		case Feature::PerfProfile::Balanced:
+			return { (uint)Upscaling::QualityMode::kBalanced, false };
+		default:
+			return { (uint)Upscaling::QualityMode::kQuality, false };
+		}
+	}
 }
 
 // Single source for preset display names; the native tier reads DLAA under DLSS, Native AA otherwise.
@@ -337,20 +351,24 @@ const char* Upscaling::GetQualityModeName(uint qualityMode) const
 
 // PerfMode stays on for every profile; qualityMode and foveation latch at boot.
 // Profiles are preset-driven, so scale overrides are cleared.
-void Upscaling::ApplyVRPerformanceProfile(VRPerfProfile profile)
+void Upscaling::ApplyPerformanceProfile(PerfProfile profile)
 {
+	const auto preset = GetUpscalePreset(profile);
 	settings.renderAtUpscaleRes = true;
-	settings.qualityMode = VRProfileQualityMode(profile);
+	settings.qualityMode = preset.qualityMode;
 	settings.vrRenderScale = 0.0f;
-	foveatedRender.settings.enabled = VRProfileFoveation(profile) ? 1 : 0;
+	// Foveation is VR-only (DrawFoveationControls/IsRuntimeSupported); leave it alone on Flat.
+	if (globals::game::isVR)
+		foveatedRender.settings.enabled = preset.foveation ? 1 : 0;
 }
 
-bool Upscaling::MatchesVRPerformanceProfile(VRPerfProfile profile) const
+bool Upscaling::MatchesPerformanceProfile(PerfProfile profile) const
 {
+	const auto preset = GetUpscalePreset(profile);
 	return settings.renderAtUpscaleRes &&
 	       settings.vrRenderScale == 0.0f &&
-	       settings.qualityMode == VRProfileQualityMode(profile) &&
-	       (foveatedRender.settings.enabled != 0) == VRProfileFoveation(profile);
+	       settings.qualityMode == preset.qualityMode &&
+	       (!globals::game::isVR || (foveatedRender.settings.enabled != 0) == preset.foveation);
 }
 
 void Upscaling::DrawSettings()

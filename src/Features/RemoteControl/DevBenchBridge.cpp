@@ -635,22 +635,20 @@ namespace
 		}
 		if (action == "applyVRProfile") {
 			// Same broadcast path as the in-game hub button, exposed for headless automation/CI.
-			if (!globals::game::isVR)
-				return json{ { "error", "applyVRProfile is VR-only" }, { "action", action } };
 			const std::string profileName = a_args.value("profile", std::string{});
-			Feature::VRPerfProfile profile;
+			Feature::PerfProfile profile;
 			if (profileName == "performance")
-				profile = Feature::VRPerfProfile::Performance;
+				profile = Feature::PerfProfile::Performance;
 			else if (profileName == "balanced")
-				profile = Feature::VRPerfProfile::Balanced;
+				profile = Feature::PerfProfile::Balanced;
 			else if (profileName == "quality")
-				profile = Feature::VRPerfProfile::Quality;
+				profile = Feature::PerfProfile::Quality;
 			else
 				return json{ { "error", "unknown profile (performance|balanced|quality)" }, { "profile", profileName } };
 
 			task->AddTask([state, profile]() {
 				try {
-					Feature::ApplyVRPerformanceProfileToAll(profile);
+					Feature::ApplyPerformanceProfileToAll(profile);
 				} catch (const std::exception& e) {
 					logger::error("DevBenchBridge: settings(applyVRProfile) threw: {}", e.what());
 				} catch (...) {
@@ -690,11 +688,20 @@ namespace
 		else
 			return json{ { "error", "unknown op (open|close|toggle)" }, { "op", op } };
 
+		// Optional page navigation, e.g. "Performance" or a feature's GetShortName().
+		// RequestFeatureMenu is thread-safe (see its doc comment) for the same reason
+		// RequestVisibility is used below instead of calling SetVisible directly.
+		std::string page;
+		if (auto it = a_args.find("page"); it != a_args.end() && it->is_string())
+			page = it->get<std::string>();
+		if (!page.empty())
+			Menu::GetSingleton()->RequestFeatureMenu(page);
+
 		// SetVisible touches the ImGui context and the IsEnabled flag the render thread owns, so
 		// it can't run on this listener thread (nor on the SKSE main thread). Enqueue an atomic
 		// request the render loop consumes next frame, mirroring the ToggleKey path.
 		Menu::GetSingleton()->RequestVisibility(req);
-		return json{ { "op", op }, { "queued", true } };
+		return json{ { "op", op }, { "page", page }, { "queued", true } };
 	}
 
 	void MenuHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
@@ -732,7 +739,7 @@ namespace DevBenchBridge
 		dvb->RegisterTool("openshaders.capture", captureDesc, &CaptureToolHandler, nullptr);
 
 		static constexpr const char* settingsDesc =
-			R"({"description":"Save, load, reset, or apply a VR performance profile to the GLOBAL Open Shaders user configuration. Action-dispatched, all fire-and-forget on the main thread. save: persist current settings (State::Save). load: re-read settings from disk and apply (State::Load). reset: restore every feature to its defaults then persist. applyVRProfile: broadcast the named VR performance profile (params profile: performance|balanced|quality) through Feature::ApplyVRPerformanceProfile across all features, then persist; restart-gated fields (render preset, foveation, reprojection) take effect on next launch. Use after openshaders.feature set/reset to make changes durable, or to roll an A/B session back to the saved baseline.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["save","load","reset","applyVRProfile"]},"profile":{"type":"string","enum":["performance","balanced","quality"]}},"required":["action"]}})";
+			R"({"description":"Save, load, reset, or apply a performance profile to the GLOBAL Open Shaders user configuration. Action-dispatched, all fire-and-forget on the main thread. save: persist current settings (State::Save). load: re-read settings from disk and apply (State::Load). reset: restore every feature to its defaults then persist. applyVRProfile: broadcast the named performance profile (params profile: performance|balanced|quality) through Feature::ApplyPerformanceProfile across all features (Flat and VR alike), then persist; restart-gated fields (render preset, foveation, reprojection) take effect on next launch. Use after openshaders.feature set/reset to make changes durable, or to roll an A/B session back to the saved baseline.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["save","load","reset","applyVRProfile"]},"profile":{"type":"string","enum":["performance","balanced","quality"]}},"required":["action"]}})";
 		dvb->RegisterTool("openshaders.settings", settingsDesc, &SettingsToolHandler, nullptr);
 
 		// devbench 1.5.0+ generalized tool extensions: route the CS settings menu and the
@@ -744,7 +751,7 @@ namespace DevBenchBridge
 		// up with the on-screen window.
 		if (dvb->GetBuildNumber() >= 10500) {
 			static constexpr const char* menuDesc =
-				R"({"description":"Open, close, or toggle the Open Shaders in-game settings menu headlessly, the same window the ToggleKey (default End) shows. op: open|close|toggle (default toggle). Returns {op,queued:true}; the change is applied on the render thread on the next frame (open is a no-op while first-time setup is pending).","inputSchema":{"type":"object","properties":{"op":{"type":"string","enum":["open","close","toggle"]}}}})";
+				R"({"description":"Open, close, or toggle the Open Shaders in-game settings menu headlessly, the same window the ToggleKey (default End) shows. op: open|close|toggle (default toggle). page: OPTIONAL built-in page name (e.g. \"Performance\", \"Home\") or a feature's shortName (see openshaders.feature list) to navigate to on the next frame, same as clicking it in the left pane. Returns {op,page,queued:true}; the change is applied on the render thread on the next frame (open is a no-op while first-time setup is pending).","inputSchema":{"type":"object","properties":{"op":{"type":"string","enum":["open","close","toggle"]},"page":{"type":"string"}}}})";
 			dvb->RegisterToolExtension("menu", "CommunityShaders", menuDesc, &MenuHandler, nullptr);
 
 			static constexpr const char* inspectStateDesc =

@@ -7,6 +7,7 @@
 #include "I18n/I18n.h"
 #include "InverseSquareLighting.h"
 #include "LinearLighting.h"
+#include "Menu/PerformanceRenderer.h"
 #include "Utils/UI.h"
 
 #include "Deferred.h"
@@ -116,9 +117,67 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	JsonPlacedLightsInteriorsOnly,
 	JsonPlacedLightsPortalStrictOnly)
 
-void LightLimitFix::DrawVRPerformanceSettings()
+void LightLimitFix::DrawPerformanceSettings()
 {
-	ShadowCasterManager::DrawImpactCullControls(settings.ShadowSettings);
+	if (!settings.ShadowSettings.Enabled)
+		return;
+	ShadowCasterManager::DrawImpactCullSliders(settings.ShadowSettings);
+}
+
+void LightLimitFix::DrawPerformancePresets()
+{
+	// Indented link, not a SeparatorText header, so this reads as nested under Light
+	// Limit Fix rather than a sibling section; the hub's own row above (not here) applies presets.
+	PerformanceRenderer::DrawSubsectionLink(T("feature.light_limit_fix.shadow_limit_fix_header", "Shadow Limit Fix"), this, "ShadowLimitFix");
+	if (!settings.ShadowSettings.Enabled)
+		ImGui::TextDisabled("%s", T("feature.light_limit_fix.shadow_limit_fix_disabled_hub",
+									  "Shadow Limit Fix is disabled in this feature's settings."));
+	ImGui::Unindent();
+}
+
+namespace
+{
+	struct ImpactCullPreset
+	{
+		float floor;
+		float cull;
+	};
+
+	// Same three tiers DrawImpactCullControls' own preset buttons apply (Quality: no
+	// culling; Balanced/Performance: progressively stronger impact floor + angular cull).
+	// Single source of truth for Apply/MatchesPerformanceProfile below.
+	constexpr ImpactCullPreset GetImpactCullPreset(Feature::PerfProfile profile)
+	{
+		switch (profile) {
+		case Feature::PerfProfile::Performance:
+			return { 0.025f, 0.012f };
+		case Feature::PerfProfile::Balanced:
+			return { 0.001f, 0.008f };
+		default:
+			return { 0.0f, 0.0f };
+		}
+	}
+}
+
+void LightLimitFix::ApplyPerformanceProfile(PerfProfile profile)
+{
+	const auto preset = GetImpactCullPreset(profile);
+	settings.ShadowSettings.ShadowImpactFloor = preset.floor;
+	settings.ShadowSettings.CasterCullAngularMin = preset.cull;
+}
+
+bool LightLimitFix::MatchesPerformanceProfile(PerfProfile profile) const
+{
+	// Shadow Limit Fix off: these values have no effect, so don't veto the hub's
+	// active-profile detection for a knob the user can't currently apply.
+	if (!settings.ShadowSettings.Enabled)
+		return true;
+	const auto preset = GetImpactCullPreset(profile);
+	// Epsilon compare, not ==: a JSON save/load round-trip through float can
+	// perturb the last bit, which would otherwise permanently read as Custom.
+	constexpr float kEpsilon = 1e-4f;
+	return std::abs(settings.ShadowSettings.ShadowImpactFloor - preset.floor) <= kEpsilon &&
+	       std::abs(settings.ShadowSettings.CasterCullAngularMin - preset.cull) <= kEpsilon;
 }
 
 void LightLimitFix::DrawSettings()

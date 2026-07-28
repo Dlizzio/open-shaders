@@ -258,11 +258,24 @@ public:
 
 	/** @brief Draws the ImGui settings UI for light limit fix configuration and debug visualization. */
 	virtual void DrawSettings() override;
-	/** @brief Hub view: the Caster Cull + Light Impact Floor presets and sliders,
-	 *  bound to the same settings DrawSettings' own Advanced panel shows. */
-	void DrawVRPerformanceSettings() override;
-	std::string GetVRPerformanceSectionLabel() override { return GetDisplayName(); }
-	int GetVRPerformanceOrder() const override { return 25; }
+	/** @brief Hub view: the raw caster-cull sliders only -- presets live in
+	 *  DrawPerformancePresets so they stay visible outside Advanced. Empty
+	 *  when Shadow Limit Fix is off -- nothing to tune. */
+	void DrawPerformanceSettings() override;
+	/** @brief Hub view: draws an indented "Shadow Limit Fix" subsection link (the feature
+	 *  is otherwise labeled by its real display name, matching every other hub entry)
+	 *  and a disabled-state note. The hub's own preset row already applies the profile
+	 *  to this feature via ApplyPerformanceProfile, so no buttons are duplicated here. */
+	void DrawPerformancePresets() override;
+	/** @brief Section header is this feature's real display name (matching every
+	 *  other hub entry); the Shadow Limit Fix naming lives in the subsection
+	 *  DrawPerformancePresets draws underneath it, not in this top-level label. */
+	std::string GetPerformanceSectionLabel() override { return GetDisplayName(); }
+	int GetPerformanceOrder() const override { return 25; }
+	/** @brief Maps the hub profile onto the same Caster Cull + Light Impact Floor
+	 *  presets DrawImpactCullControls' own Quality/Balanced/Performance buttons use. */
+	void ApplyPerformanceProfile(PerfProfile profile) override;
+	bool MatchesPerformanceProfile(PerfProfile profile) const override;
 	/** @brief Draws the debug overlay warning when light visualization is enabled. */
 	virtual void DrawOverlay() override;
 	/** @brief Returns whether the debug overlay should be displayed. */
