@@ -1,19 +1,24 @@
 #pragma once
 
+#include <atomic>
 #include <d3d11.h>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include <winrt/base.h>
 
 #include "Utils/GpuTimestamps.h"
+#include "Utils/Macros.h"
 
 /**
  * @brief GPU and CPU profiler using D3D11 timestamp queries.
  *
  * Maintains a ring buffer of frames with paired begin/end timestamp queries
- * and rolling statistics (average, p95, p99) per named pass.
+ * and rolling statistics (average, p95, p99) per named pass. Capture is
+ * request-driven: no queries or QPC reads are issued unless a capture is
+ * active for the current frame.
  */
 class Profiler
 {
@@ -64,14 +69,25 @@ public:
 		float cpuAvgMs = 0.0f;
 		float cpuP95Ms = 0.0f;
 		float cpuP99Ms = 0.0f;
+		/// Whether this pass has ever recorded a GPU/CPU sample, vs. one
+		/// mode never having applied to it (a CPU-only scope has no GPU side).
+		bool hasGpu = false;
+		bool hasCpu = false;
+		/// Whether the LAST collected frame specifically had a fresh sample
+		/// for this side (vs. the stats reflecting an older, stale sample).
+		bool activeGpu = false;
+		bool activeCpu = false;
 		bool valid = false;
 
 		const float* historyBuffer = nullptr;
 		uint32_t historyHead = 0;
 		uint32_t historyCount = 0;
+		const float* cpuHistoryBuffer = nullptr;
+		uint32_t cpuHistoryHead = 0;
+		uint32_t cpuHistoryCount = 0;
 
 		/**
-		 * @brief Gets a history sample by age-ordered index (0 = oldest).
+		 * @brief Gets a GPU history sample by age-ordered index (0 = oldest).
 		 * @param index Zero-based index into the history ring buffer.
 		 */
 		float GetHistorySample(uint32_t index) const
@@ -79,6 +95,17 @@ public:
 			if (!historyBuffer || index >= historyCount)
 				return 0.0f;
 			return historyBuffer[(historyHead - historyCount + index + kHistorySize) % kHistorySize];
+		}
+
+		/**
+		 * @brief Gets a CPU history sample by age-ordered index (0 = oldest).
+		 * @param index Zero-based index into the history ring buffer.
+		 */
+		float GetCpuHistorySample(uint32_t index) const
+		{
+			if (!cpuHistoryBuffer || index >= cpuHistoryCount)
+				return 0.0f;
+			return cpuHistoryBuffer[(cpuHistoryHead - cpuHistoryCount + index + kHistorySize) % kHistorySize];
 		}
 	};
 
@@ -91,6 +118,18 @@ public:
 
 	/** @brief Releases all D3D11 query objects and resets state. */
 	void Release();
+
+	/** @brief Enables or disables runtime profiling; disabling cancels any pending capture. */
+	void SetUserEnabled(bool a_enabled);
+
+	/** @brief Gets whether the user has runtime profiling enabled. */
+	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
+
+	/** @brief Requests a timing capture for the next frame; consumers must re-request every frame. */
+	void RequestCapture();
+
+	/** @brief True while a capture is active; gates all query issuance and CPU timing. */
+	bool IsEnabled() const { return IsUserEnabled() && captureActive.load(std::memory_order_acquire); }
 
 	/**
 	 * @brief Registers optional callbacks invoked at pass begin/end (e.g. for RenderDoc markers).
@@ -105,9 +144,23 @@ public:
 
 	/** @brief Begins a new profiling frame; collects results from the oldest in-flight frame. */
 	void BeginFrame();
-	void BeginPass(const std::string& name, bool fireCallbacks = true);
+
+	/**
+	 * @brief Opens a named pass; returns false (no-op EndPass expected) at
+	 * capacity or before Initialize(). Passes may nest: each call acquires
+	 * its own slot, and EndPass closes the innermost still-open one.
+	 */
+	bool BeginPass(std::string_view name, bool fireCallbacks = true);
 	void EndPass(bool fireCallbacks = true);
 	void EndFrame();
+
+	/**
+	 * @brief Opens a CPU-only named scope (no GPU query); returns false (no-op
+	 * EndCpuPass expected) while disabled. Scopes may nest: each successful
+	 * call pushes its own slot, and EndCpuPass closes the innermost open one.
+	 */
+	bool BeginCpuPass(std::string_view name);
+	void EndCpuPass();
 
 	/** @brief Gets the per-pass timing results from the last collected frame. */
 	const std::vector<TimerResult>& GetResults() const { return results; }
@@ -126,6 +179,10 @@ public:
 		knownTimerIndex.clear();
 		totalTimeMs = 0.0f;
 		cpuTotalTimeMs = 0.0f;
+		activeCpuTimers.clear();
+		completedCpuTimers.clear();
+		// A cleared timer must not resurrect from a still-in-flight ring slot.
+		ResetPendingFrames();
 	}
 
 	/**
@@ -141,9 +198,41 @@ public:
 		knownTimerIndex.clear();
 		for (size_t i = 0; i < knownTimers.size(); i++)
 			knownTimerIndex[knownTimers[i].name] = i;
+		std::erase_if(activeCpuTimers, [&prefix](const CpuTimer& ct) {
+			return ct.name.starts_with(prefix);
+		});
+		std::erase_if(completedCpuTimers, [&prefix](const CompletedCpuTimer& ct) {
+			return ct.name.starts_with(prefix);
+		});
+		// The removed feature's name may still be pending in a non-live ring
+		// slot; purge those rather than filter by name. The currently-open
+		// slot (if any) is left alone, so a pending sample for this feature
+		// there can still repopulate knownTimers once it resolves.
+		ResetPendingFrames();
 	}
 
 private:
+	/// A CPU-only scope still open, awaiting EndCpuPass.
+	struct CpuTimer
+	{
+		std::string name;
+		LARGE_INTEGER cpuBegin{};
+		/// Nesting depth at acquisition, stamped once at Begin rather than
+		/// derived from activeCpuTimers.size() at End: ClearTimersForFeature
+		/// can erase a middle stack entry, which would desync a derived depth.
+		uint32_t depth = 0;
+	};
+
+	/// A CPU-only scope that finished this cycle, pending collection.
+	struct CompletedCpuTimer
+	{
+		std::string name;
+		float cpuMs = 0.0f;
+		/// Nesting depth at acquisition (0 = top-level); gates the frame
+		/// CPU total so a parent scope's time isn't double-counted.
+		uint32_t depth = 0;
+	};
+
 	struct FrameQueries
 	{
 		Util::TimestampQueryBatch batch;
@@ -152,9 +241,18 @@ private:
 			std::string name;
 			LARGE_INTEGER cpuBegin{};
 			float cpuMs = 0.0f;
+			/// Nesting depth at acquisition (0 = top-level); gates the
+			/// frame totals so a parent's time isn't double-counted.
+			uint32_t depth = 0;
 		};
 		std::vector<TimerMeta> timers;
+		/// LIFO stack of acquired-but-not-yet-closed slot indices, so EndPass
+		/// closes the innermost open pass regardless of nesting depth/order.
+		std::vector<int> activeStack;
 		bool inFlight = false;
+		/// CPU-only timers completed during this ring slot's cycle, held
+		/// until CollectResults drains them (mirrors the GPU query payload).
+		std::vector<CompletedCpuTimer> cpuTimers;
 	};
 
 	ID3D11Device* device = nullptr;
@@ -166,6 +264,11 @@ private:
 	uint32_t framesSinceInit = 0;
 	bool initialized = false;
 	bool frameActive = false;
+	// Enabled by default so profiling pages show data without an extra toggle;
+	// zero-overhead idling still holds because captureActive stays false until requested.
+	std::atomic_bool userEnabled{ true };
+	std::atomic_bool captureRequested{ false };
+	std::atomic_bool captureActive{ false };
 	double cpuTicksToMs = 0.0;
 
 	PerfEventCallback beginPerfEvent;
@@ -178,11 +281,79 @@ private:
 		std::string name;
 		RollingHistory gpu;
 		RollingHistory cpu;
+		/// Whether this pass has ever recorded a sample of that kind; a
+		/// CPU-only scope never has a GPU sample and vice versa.
+		bool hasGpu = false;
+		bool hasCpu = false;
 	};
 	std::vector<KnownTimer> knownTimers;
 	std::unordered_map<std::string, size_t> knownTimerIndex;
 	float totalTimeMs = 0.0f;
 	float cpuTotalTimeMs = 0.0f;
 
-	void CollectResults();
+	/// CPU-only scopes currently open (LIFO), so EndCpuPass closes the
+	/// innermost one regardless of nesting.
+	std::vector<CpuTimer> activeCpuTimers;
+	/// CPU-only scopes completed this cycle, not yet stored into a frame slot.
+	std::vector<CompletedCpuTimer> completedCpuTimers;
+
+	/// Drains the oldest in-flight frame's results if resolved; returns false
+	/// only when GPU data is still pending (retry next frame), never when
+	/// there's simply nothing to collect.
+	bool CollectResults();
+
+	KnownTimer& GetOrCreateTimer(const std::string& name);
+
+	/// Clears a ring slot's transient GPU/CPU state so a later ClearTimers
+	/// call can't have it resurrect a stale sample once it resolves.
+	static void ResetFrameState(FrameQueries& frame)
+	{
+		frame.batch.Reset();
+		frame.activeStack.clear();
+		frame.inFlight = false;
+		frame.cpuTimers.clear();
+	}
+
+	/// Resets every ring slot except one with an open scope: frames[writeFrame]
+	/// while frameActive, whose batch/activeStack a still-open BeginPass/
+	/// BeginCpuPass call is relying on.
+	void ResetPendingFrames()
+	{
+		for (uint32_t i = 0; i < kFrameLatency; i++) {
+			if (frameActive && i == writeFrame)
+				continue;
+			ResetFrameState(frames[i]);
+		}
+	}
 };
+
+/**
+ * @brief RAII CPU-only profiling scope; pairs with CS_PROFILE_CPU_SCOPE.
+ */
+class ScopedCpuPass
+{
+public:
+	ScopedCpuPass(Profiler* a_profiler, std::string_view a_name)
+	{
+		// Only remember the profiler if BeginCpuPass actually opened a slot;
+		// a no-op Begin paired with an unconditional End would pop and
+		// mistime whatever scope is innermost when this one is disabled.
+		if (a_profiler && a_profiler->BeginCpuPass(a_name))
+			profiler = a_profiler;
+	}
+	~ScopedCpuPass()
+	{
+		if (profiler)
+			profiler->EndCpuPass();
+	}
+
+	ScopedCpuPass(const ScopedCpuPass&) = delete;
+	ScopedCpuPass& operator=(const ScopedCpuPass&) = delete;
+
+private:
+	Profiler* profiler = nullptr;
+};
+
+/// Times a CPU-only scope (no GPU query); see ScopedCpuPass.
+#define CS_PROFILE_CPU_SCOPE(profiler, name) \
+	ScopedCpuPass CS_DETAIL_CONCAT(cs_profile_cpu_scope_, __LINE__) { profiler, name }
