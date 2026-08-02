@@ -294,6 +294,57 @@ static std::string GetConfigPath(State::ConfigMode a_configMode)
 	}
 }
 
+static bool WriteConfigAtomically(const std::filesystem::path& a_configPath, std::string_view a_contents)
+{
+	auto temporaryPath = a_configPath;
+	temporaryPath += std::format(".{}.{}.tmp", GetCurrentProcessId(), GetCurrentThreadId());
+
+	std::ofstream output{ temporaryPath, std::ios::binary | std::ios::trunc };
+	if (!output.is_open()) {
+		logger::warn("Failed to open temporary config file for saving: {}", temporaryPath.string());
+		return false;
+	}
+
+	output.write(a_contents.data(), static_cast<std::streamsize>(a_contents.size()));
+	output.close();
+	if (output.fail()) {
+		logger::warn("Failed to write temporary config file: {}", temporaryPath.string());
+		std::error_code cleanupError;
+		std::filesystem::remove(temporaryPath, cleanupError);
+		return false;
+	}
+
+	if (!MoveFileExW(temporaryPath.c_str(), a_configPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		const auto error = GetLastError();
+		logger::warn("Failed to replace config file {}: Windows error {}", a_configPath.string(), error);
+		std::error_code cleanupError;
+		std::filesystem::remove(temporaryPath, cleanupError);
+		return false;
+	}
+
+	return true;
+}
+
+static void SaveUserOverrides(const nlohmann::json& a_settings)
+{
+	auto* overrideManager = SettingsOverrideManager::GetSingleton();
+	for (auto* feature : Feature::GetFeatureList()) {
+		const std::string featureName = feature->GetShortName();
+		const auto featureSettings = a_settings.find(feature->GetName());
+		if (!feature->loaded || !overrideManager->HasFeatureOverrides(featureName) || featureSettings == a_settings.end()) {
+			continue;
+		}
+
+		const json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
+		overrideManager->SaveUserOverride(featureName, *featureSettings, overrideSettings);
+	}
+
+	const json globalOverrideSettings = overrideManager->GetMergedOverrideSettings("Global", json::object());
+	if (!globalOverrideSettings.empty()) {
+		overrideManager->SaveUserOverride("Global", a_settings, globalOverrideSettings);
+	}
+}
+
 void State::Load(ConfigMode a_configMode, bool a_allowReload)
 {
 	json settings;
@@ -529,31 +580,12 @@ void State::SaveToJson(nlohmann::json& settings)
 
 	settings["Version"] = Plugin::VERSION.string();
 
-	// Save feature settings and user overrides
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
+	// Save feature settings
 	for (auto* feature : Feature::GetFeatureList()) {
 		const std::string featureSettingsName = feature->GetName();
 		if (feature->loaded || !settings.contains(featureSettingsName) || !settings[featureSettingsName].is_object()) {
 			feature->Save(settings);
 		}
-
-		// If feature has overrides, save user modifications to .user file
-		const std::string featureName = feature->GetShortName();
-		if (overrideManager->HasFeatureOverrides(featureName) && feature->loaded) {
-			json currentSettings;
-			feature->SaveSettings(currentSettings);
-
-			// Get the merged override settings (all overrides applied to empty base)
-			json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
-
-			// Save user override only if settings differ from override
-			overrideManager->SaveUserOverride(featureName, currentSettings, overrideSettings);
-		}
-	}
-
-	json globalOverrideSettings = overrideManager->GetMergedOverrideSettings("Global", json::object());
-	if (!globalOverrideSettings.empty()) {
-		overrideManager->SaveUserOverride("Global", settings, globalOverrideSettings);
 	}
 }
 
@@ -667,27 +699,25 @@ void State::Save(ConfigMode a_configMode)
 		existingConfig.close();
 	}
 
-	std::ofstream o{ configPath };
-
-	// Check if the file opened successfully
-	if (!o.is_open()) {
-		logger::warn("Failed to open config file for saving: {}", configPath);
-		return;  // Exit early if file cannot be opened
-	}
-
-	SaveToJson(settings);
-
+	std::string serializedSettings;
 	try {
-		o << settings.dump(1);
-		logger::info("Saving settings to {}", configPath);
+		SaveToJson(settings);
+		serializedSettings = settings.dump(1);
 	} catch (const std::exception& e) {
-		logger::warn("Failed to write settings to file: {}. Error: {}", configPath, e.what());
+		logger::warn("Failed to serialize settings for {}: {}", configPath, e.what());
+		return;
 	}
+
+	if (!WriteConfigAtomically(configPath, serializedSettings)) {
+		return;
+	}
+	logger::info("Saving settings to {}", configPath);
 
 	// A real user save is the only signal that a Disable-at-Boot change (restart-
 	// gated) was actually intentional; record it so next boot's disk-cache mismatch
 	// can auto-resolve instead of holding for the "Rebuild Cache" menu action.
 	if (a_configMode == ConfigMode::USER) {
+		SaveUserOverrides(settings);
 		if (auto* shaderCache = globals::shaderCache)
 			shaderCache->MarkExpectedFeatureFlip();
 	}
