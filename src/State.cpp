@@ -532,7 +532,10 @@ void State::SaveToJson(nlohmann::json& settings)
 	// Save feature settings and user overrides
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
 	for (auto* feature : Feature::GetFeatureList()) {
-		feature->Save(settings);
+		const std::string featureSettingsName = feature->GetName();
+		if (feature->loaded || !settings.contains(featureSettingsName) || !settings[featureSettingsName].is_object()) {
+			feature->Save(settings);
+		}
 
 		// If feature has overrides, save user modifications to .user file
 		const std::string featureName = feature->GetShortName();
@@ -546,6 +549,11 @@ void State::SaveToJson(nlohmann::json& settings)
 			// Save user override only if settings differ from override
 			overrideManager->SaveUserOverride(featureName, currentSettings, overrideSettings);
 		}
+	}
+
+	json globalOverrideSettings = overrideManager->GetMergedOverrideSettings("Global", json::object());
+	if (!globalOverrideSettings.empty()) {
+		overrideManager->SaveUserOverride("Global", settings, globalOverrideSettings);
 	}
 }
 
@@ -633,7 +641,6 @@ void State::LoadFromJson(nlohmann::json& settings)
 void State::Save(ConfigMode a_configMode)
 {
 	std::string configPath = GetConfigPath(a_configMode);
-	std::ofstream o{ configPath };
 
 	try {
 		std::filesystem::create_directories(Util::PathHelpers::GetCommunityShaderPath());
@@ -642,13 +649,32 @@ void State::Save(ConfigMode a_configMode)
 		return;
 	}
 
+	json settings = json::object();
+	std::ifstream existingConfig{ configPath };
+	if (existingConfig.is_open()) {
+		try {
+			json existingSettings;
+			existingConfig >> existingSettings;
+			for (auto* feature : Feature::GetFeatureList()) {
+				const std::string featureSettingsName = feature->GetName();
+				if (!feature->loaded && existingSettings.contains(featureSettingsName) && existingSettings[featureSettingsName].is_object()) {
+					settings[featureSettingsName] = existingSettings[featureSettingsName];
+				}
+			}
+		} catch (const nlohmann::json::exception& e) {
+			logger::warn("Failed to preserve inactive feature settings from {}: {}", configPath, e.what());
+		}
+		existingConfig.close();
+	}
+
+	std::ofstream o{ configPath };
+
 	// Check if the file opened successfully
 	if (!o.is_open()) {
 		logger::warn("Failed to open config file for saving: {}", configPath);
 		return;  // Exit early if file cannot be opened
 	}
 
-	json settings;
 	SaveToJson(settings);
 
 	try {
