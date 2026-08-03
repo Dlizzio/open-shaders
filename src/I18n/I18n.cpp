@@ -16,16 +16,6 @@ namespace
 		static const std::regex pattern(R"(^[a-zA-Z]{2,3}(_[a-zA-Z]{2,4})?$)");
 		return std::regex_match(locale, pattern);
 	}
-
-	std::string ApplyOpenShadersBranding(std::string text)
-	{
-		constexpr std::string_view source = "CS Editor";
-		constexpr std::string_view replacement = "OS Editor";
-		for (auto position = text.find(source); position != std::string::npos; position = text.find(source, position + replacement.size())) {
-			text.replace(position, source.size(), replacement);
-		}
-		return text;
-	}
 }
 
 void I18n::Init()
@@ -104,7 +94,7 @@ const char* I18n::Get(std::string_view key, const char* defaultText) const
 		}
 
 		// Store string in deque (pointer-stable: deque never invalidates on push_back)
-		defaultStorage_.emplace_back(ApplyOpenShadersBranding(defaultText ? std::string(defaultText) : keyStr));
+		defaultStorage_.emplace_back(defaultText ? std::string(defaultText) : keyStr);
 		const char* ptr = defaultStorage_.back().c_str();
 		defaultCache_.emplace(keyStr, ptr);
 		return ptr;
@@ -286,7 +276,7 @@ bool I18n::LoadLocaleInto(const std::string& locale,
 				continue;
 
 			if (value.is_string()) {
-				target[key] = ApplyOpenShadersBranding(value.get<std::string>());
+				target[key] = value.get<std::string>();
 				++count;
 			}
 		}
