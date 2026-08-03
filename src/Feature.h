@@ -14,6 +14,22 @@
 #	include <Tracy/TracyD3D11.hpp>
 #endif
 
+struct SceneSettingDescriptor
+{
+	std::vector<std::string> settingPath;
+	std::string key;
+	std::string displayName;
+	std::vector<std::string> displayPath;
+	json value;
+};
+
+struct SceneSettingUpdate
+{
+	std::vector<std::string> settingPath;
+	std::string key;
+	json value;
+};
+
 struct Feature
 {
 	// For global settings search
@@ -159,6 +175,9 @@ public:
 	 * them via the "Disable at Boot" menu.
 	 */
 	virtual bool IsDisabledByDefault() const { return GetReleaseStage() != ReleaseStage::Release; }
+	virtual bool IsAlwaysEnabled() const { return false; }
+	virtual bool UsesMainSettings() const { return true; }
+	virtual bool HasRestoreDefaults() const { return true; }
 
 	/**
 	 * Whether the feature will show up in the GUI menu
@@ -306,6 +325,9 @@ public:
 	virtual void SaveSettings(json&) {}
 	virtual void LoadSettings(json&) {}
 	virtual void RestoreDefaultSettings() {}
+	static bool IsSceneSettingPrimitive(const json& value);
+	virtual bool GetSceneSettingValue(const std::vector<std::string>& settingPath, const std::string& key, json& outValue);
+	virtual bool ApplySceneSettings(const std::vector<SceneSettingUpdate>& settings);
 
 	/**
 	 * @brief Live runtime diagnostics (counters, gauges), distinct from persisted
@@ -366,13 +388,6 @@ public:
 	 * Features should override this to provide their weather analysis section name and draw function.
 	 */
 	virtual WeatherAnalysisConfig GetWeatherAnalysisConfig() const { return {}; }
-
-	/**
-	 * @brief Called during feature initialization to register weather-controllable variables
-	 * Features should register their weather variables here using the WeatherVariables::GlobalWeatherRegistry
-	 * The weather system will automatically handle save/load/lerp for all registered variables
-	 */
-	virtual void RegisterWeatherVariables() {}
 
 	/**
 	 * @brief Returns constraints this feature imposes on other features' settings

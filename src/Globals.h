@@ -43,6 +43,7 @@ struct HDRDisplay;
 struct PostProcessing;
 struct ScreenshotFeature;
 struct Skin;
+struct SceneManager;
 
 class State;
 class Deferred;
@@ -50,7 +51,6 @@ struct TruePBR;
 class RenderDoc;
 class RemoteControl;
 class Menu;
-class WeatherManager;
 class SceneSettingsManager;
 
 namespace SIE
@@ -138,6 +138,7 @@ namespace globals
 		extern TruePBR truePBR;
 		extern Skin skin;
 		extern PostProcessing postProcessing;
+		extern SceneManager sceneManager;
 
 		namespace llf
 		{
@@ -316,7 +317,6 @@ namespace globals
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
 	extern Profiler* profiler;
-	extern WeatherManager* weatherManager;
 	extern SceneSettingsManager* sceneSettingsManager;
 
 	/** @brief Initializes core singletons (ShaderCache, State, Menu, Deferred). Called once at plugin load. */

@@ -14,6 +14,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/SceneManager.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -32,8 +33,6 @@
 #include "Utils/FileSystem.h"
 #include "Utils/SphericalHarmonics.h"
 #include "VRAPI/CSpluginapi.h"
-#include "WeatherManager.h"
-#include "WeatherVariableRegistry.h"
 
 #ifdef TRACY_ENABLE
 static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
@@ -56,29 +55,19 @@ void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 void State::Draw()
 {
 	ZoneScoped;
+	if (globals::features::sceneManager.loaded)
+		globals::features::sceneManager.Update();
 
 	auto shaderCache = globals::shaderCache;
-	auto weatherManager = globals::weatherManager;
-	auto sceneSettingsManager = globals::sceneSettingsManager;
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
-	auto& csEditor = globals::features::csEditor;
-	auto& weatherPicker = globals::features::weatherPicker;
 	auto& skin = globals::features::skin;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
 	auto& volumetricShadows = globals::features::volumetricShadows;
 
 	if (shaderCache->IsEnabled()) {
-		// Process deferred cell transitions (interior detection)
-		sceneSettingsManager->Update();
-
-		if (csEditor.loaded || weatherPicker.loaded) {
-			ZoneScopedN("WeatherManager::UpdateFeatures");
-			weatherManager->UpdateFeatures();
-		}
-
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			ZoneScopedN("TerrainBlending::TerrainShaderHacks");
 			terrainBlending.TerrainShaderHacks();
@@ -269,11 +258,6 @@ void State::Setup()
 	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
 	globals::deferred->SetupResources();
 
-	// Load per-weather settings after features are setup
-	globals::weatherManager->LoadPerWeatherSettingsFromDisk();
-
-	// Load scene-specific settings (Interior Only, etc.)
-	globals::sceneSettingsManager->LoadAll();
 }
 
 static std::string GetConfigPath(State::ConfigMode a_configMode)
@@ -344,6 +328,7 @@ static void SaveUserOverrides(const nlohmann::json& a_settings)
 
 void State::Load(ConfigMode a_configMode, bool a_allowReload)
 {
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 	json settings;
 	bool errorDetected = false;
 
@@ -459,22 +444,21 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		for (auto* feature : Feature::GetFeatureList()) {
 			try {
 				const std::string featureName = feature->GetShortName();
-				if (!disabledFeatures.contains(featureName) && feature->IsDisabledByDefault()) {
+				if (feature->IsAlwaysEnabled()) {
+					disabledFeatures.erase(featureName);
+				} else if (!disabledFeatures.contains(featureName) && feature->IsDisabledByDefault()) {
 					disabledFeatures[featureName] = true;
 					logger::info("Feature '{}' is disabled by default", featureName);
 				}
-				bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+				bool isDisabled = !feature->IsAlwaysEnabled() && disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 				if (!isDisabled) {
 					logger::info("Loading Feature: '{}'", featureName);
 
 					// Load base feature settings from merged config (default + user)
 					feature->Load(settings);
 
-					// Register weather variables (features opt-in by implementing this)
-					feature->RegisterWeatherVariables();
-
 					// Apply feature-specific overrides on top (overrides take priority over user settings)
-					if (overridesDiscovered > 0 && overrideManager->HasFeatureOverrides(featureName)) {
+					if (feature->UsesMainSettings() && overridesDiscovered > 0 && overrideManager->HasFeatureOverrides(featureName)) {
 						json featureJson;
 						feature->SaveSettings(featureJson);  // Get current settings as JSON
 
@@ -496,9 +480,6 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 							logger::warn("Invalid override settings for {}, keeping original settings.", feature->GetName());
 						}
 					}
-
-					// Capture current values as user settings baseline for weather overrides
-					WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(featureName);
 				} else {
 					logger::info("Feature '{}' is disabled at boot.", featureName);
 				}
@@ -534,6 +515,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 void State::SaveToJson(nlohmann::json& settings)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 	const auto shaderCache = globals::shaderCache;
 
 	globals::menu->Save(settings["Menu"]);
@@ -1298,6 +1280,12 @@ void State::ClearDisabledFeatures()
 
 bool State::SetFeatureDisabled(const std::string& featureName, bool isDisabled)
 {
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (feature->GetShortName() == featureName && feature->IsAlwaysEnabled()) {
+			disabledFeatures.erase(featureName);
+			return false;
+		}
+	}
 	bool wasPreviouslyDisabled = disabledFeatures.count(featureName) > 0 ? disabledFeatures[featureName] : false;  // Properly check if it exists
 	disabledFeatures[featureName] = isDisabled;
 
@@ -1313,6 +1301,9 @@ bool State::SetFeatureDisabled(const std::string& featureName, bool isDisabled)
 
 bool State::IsFeatureDisabled(const std::string& featureName)
 {
+	for (auto* feature : Feature::GetFeatureList())
+		if (feature->GetShortName() == featureName && feature->IsAlwaysEnabled())
+			return false;
 	return disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 }
 

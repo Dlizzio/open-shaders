@@ -20,6 +20,7 @@
 #	include "Globals.h"
 #	include "Menu.h"
 #	include "Profiler.h"
+#	include "SceneSettingsManager.h"
 #	include "ShaderCache.h"
 #	include "State.h"
 #	include "Utils/SettingsPatch.h"
@@ -185,6 +186,8 @@ namespace
 			}
 			if (!target)
 				return json{ { "error", "unknown or missing shortName" }, { "shortName", shortName } };
+			if (target->IsAlwaysEnabled())
+				return json{ { "error", "feature is always enabled" }, { "shortName", shortName } };
 			auto* task = SKSE::GetTaskInterface();
 			if (!task)
 				return json{ { "error", "SKSE task interface unavailable" }, { "shortName", shortName } };
@@ -213,6 +216,7 @@ namespace
 					logger::warn("DevBenchBridge: refused to enable VR-unsupported feature '{}' on a VR runtime", shortName);
 					return;
 				}
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 				target->loaded = applied;
 				if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 					const std::string payload = json{ { "shortName", shortName }, { "enabled", applied } }.dump();
@@ -237,6 +241,7 @@ namespace
 				auto* feature = Feature::FindFeatureByShortName(shortName);
 				if (!feature)
 					return json{ { "error", "feature not found or not loaded" }, { "shortName", shortName } };
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 				json blob;
 				feature->SaveSettings(blob);
 				return blob;
@@ -300,6 +305,7 @@ namespace
 				auto* feature = Feature::FindFeatureByShortName(shortName);
 				if (!feature)
 					return json{ { "error", "feature not found or not loaded" }, { "shortName", shortName } };
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 				try {
 					std::vector<std::string> unknown;
 					if (!Util::Settings::ApplyPatch(*feature, blob, unknown))
@@ -322,6 +328,7 @@ namespace
 				auto* feature = Feature::FindFeatureByShortName(shortName);
 				if (!feature)
 					return json{ { "error", "feature not found or not loaded" }, { "shortName", shortName } };
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 				try {
 					feature->RestoreDefaultSettings();
 					logger::info("DevBenchBridge: feature(reset, {}) applied", shortName);
@@ -719,6 +726,7 @@ namespace
 			// Restore every feature to its defaults, then persist. Mirrors what the UI's
 			// global reset does: per-feature RestoreDefaultSettings followed by a Save.
 			task->AddTask([state]() {
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 				for (auto* f : Feature::GetFeatureList()) {
 					try {
 						f->RestoreDefaultSettings();
@@ -751,6 +759,7 @@ namespace
 				return json{ { "error", "unknown profile (performance|balanced|quality)" }, { "profile", profileName } };
 
 			task->AddTask([state, profile]() {
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 				try {
 					Feature::ApplyPerformanceProfileToAll(profile);
 				} catch (const std::exception& e) {

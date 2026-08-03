@@ -450,6 +450,9 @@ namespace Util
 			return ImGui::SliderFloat4(label, v, v_min, v_max, format, flags);
 	}
 
+	bool InvertedCheckbox(const char* label, bool* storedValue);
+	bool RadioButton(const char* label, unsigned int* storedValue, unsigned int buttonValue);
+	const void* GetActiveControlStorageAddress();
 	ImVec2 GetNativeViewportSizeScaled(float scale);
 
 	// Icon loading functions
@@ -477,46 +480,6 @@ namespace Util
 	 * @return The offset to add to cursor X position to center the content
 	 */
 	float GetCenterOffsetForContent(float contentWidth);
-
-	/**
-	 * Weather-controlled UI helpers
-	 * These functions automatically check if a setting has a weather-specific override
-	 * and disable the control if it's being controlled by the current weather
-	 */
-	namespace WeatherUI
-	{
-		/**
-		 * Check if a specific setting is currently controlled by weather
-		 * @param feature The feature to check
-		 * @param settingName The name of the setting (must match registered weather variable name)
-		 * @return True if weather is overriding this setting
-		 */
-		bool IsWeatherControlled(Feature* feature, const char* settingName);
-
-		/**
-		 * Weather-aware slider float that greys out when controlled by weather
-		 * @param label The label for the slider
-		 * @param feature The feature this setting belongs to
-		 * @param settingName The name of the setting (must match registered weather variable name)
-		 * @param value Pointer to the value
-		 * @param min Minimum value
-		 * @param max Maximum value
-		 * @param format Display format
-		 * @return True if value was changed (only possible when not weather-controlled)
-		 */
-		bool SliderFloat(const char* label, Feature* feature, const char* settingName, float* value, float min, float max, const char* format = "%.3f");
-
-		/**
-		 * Weather-aware checkbox that greys out when controlled by weather
-		 */
-		bool Checkbox(const char* label, Feature* feature, const char* settingName, bool* value);
-
-		/**
-		 * Weather-aware color edit that greys out when controlled by weather
-		 */
-		bool ColorEdit3(const char* label, Feature* feature, const char* settingName, float col[3]);
-		bool ColorEdit4(const char* label, Feature* feature, const char* settingName, float col[4]);
-	}
 
 	/**
 	 * Constraint-aware UI helpers
@@ -1748,10 +1711,18 @@ namespace Util
 		std::string windowName;
 	};
 
+	struct FlyoutStyle
+	{
+		ImVec2 windowPadding;
+		float windowRounding;
+		float windowBackgroundAlpha;
+		float contentAlpha;
+	};
+
 	class FlyoutScope
 	{
 	public:
-		FlyoutScope(FlyoutState& state, ImGuiID itemId, bool sourcePressed);
+		FlyoutScope(FlyoutState& state, ImGuiID itemId, bool sourcePressed, const FlyoutStyle& style);
 		~FlyoutScope();
 
 		FlyoutScope(const FlyoutScope&) = delete;

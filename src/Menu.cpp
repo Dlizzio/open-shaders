@@ -911,6 +911,9 @@ void Menu::DrawDisableAtBootSettings()
 
 		// Display sorted features
 		for (auto* feature : featureList) {
+			if (feature->IsAlwaysEnabled())
+				continue;
+
 			const std::string featureName = feature->GetShortName();
 			const auto checkboxLabel = std::format("{}##DisableAtBoot{}", feature->GetDisplayName(), featureName);
 			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];

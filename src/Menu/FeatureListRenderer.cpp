@@ -23,11 +23,11 @@
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
+#include "SceneSettingsUIHooks.h"
 #include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
-#include "WeatherVariableRegistry.h"
 
 namespace
 {
@@ -645,7 +645,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Subheading);
 
 	const auto featureName = feat->GetShortName();
-	bool isDisabled = globals::state->IsFeatureDisabled(featureName);
+	bool isDisabled = !feat->IsAlwaysEnabled() && globals::state->IsFeatureDisabled(featureName);
 	bool isLoaded = feat->loaded;
 	bool hasFailedMessage = !feat->failedLoadedMessage.empty();
 	auto& themeSettings = globals::menu->GetSettings().Theme;
@@ -728,7 +728,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		return;
 
 	const auto featureName = feat->GetShortName();
-	bool isDisabled = globals::state->IsFeatureDisabled(featureName);
+	bool isDisabled = !feat->IsAlwaysEnabled() && globals::state->IsFeatureDisabled(featureName);
 	bool isLoaded = feat->loaded;
 	bool hasFailedMessage = !feat->failedLoadedMessage.empty();
 
@@ -764,7 +764,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	// Check if override is available for this feature
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
+	bool hasOverrides = feat->UsesMainSettings() && overrideManager && overrideManager->HasFeatureOverrides(featureName);
 
 	// Get available content width for positioning
 	float availableWidth = ImGui::GetContentRegionAvail().x;
@@ -780,118 +780,138 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	// Returns title-only height for button alignment
 	const auto stage = feat->GetReleaseStage();
 	const std::string stageTag = Feature::GetReleaseStageTag(stage);  // empty for Release; color unused when tag is empty
-	const float actionsButtonSize = ImGui::GetFrameHeight() * FEATURE_ACTION_BUTTON_SCALE;
+	const bool canRestoreDefaults = !isDisabled && isLoaded && feat->HasRestoreDefaults();
+	const bool canApplyOverrides = !isDisabled && isLoaded && hasOverrides;
+	const bool hasFeatureActions = !feat->IsAlwaysEnabled() || canRestoreDefaults || canApplyOverrides;
+	const float actionsButtonSize = hasFeatureActions ? ImGui::GetFrameHeight() * FEATURE_ACTION_BUTTON_SCALE : 0.0f;
 	const float titleOnlyHeight = DrawFeatureHeader(
 		feat->GetDisplayName(), isLoaded ? feat->version : "", description, stageTag, StageTagColor(stage), actionsButtonSize);
 
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
 
-	// Position the action button to the right of the header, middle-aligned with title only
-	// Calculate Y position to middle-align the button with title text only (not description)
-	const float buttonY = titleStartPos.y + (titleOnlyHeight - actionsButtonSize) * 0.5f;
+	if (hasFeatureActions) {
+		// Position the action button to the right of the header, middle-aligned with title only
+		const float buttonY = titleStartPos.y + (titleOnlyHeight - actionsButtonSize) * 0.5f;
+		ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - actionsButtonSize, buttonY));
 
-	ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - actionsButtonSize, buttonY));
+		bool bootEnabled = !isDisabled;
+		if (g_featureActionsFlyoutFeature != featureName) {
+			Util::CloseFlyout(g_featureActionsFlyout);
+			g_featureActionsFlyoutFeature = featureName;
+		}
 
-	// Feature actions dropdown
-	bool bootEnabled = !isDisabled;
-	if (g_featureActionsFlyoutFeature != featureName) {
-		Util::CloseFlyout(g_featureActionsFlyout);
-		g_featureActionsFlyoutFeature = featureName;
-	}
+		ImGui::PushID(featureName.c_str());
+		const bool actionsButtonPressed = ImGui::Button("##FeatureActions", ImVec2(actionsButtonSize, actionsButtonSize));
+		const ImGuiID actionsButtonId = ImGui::GetItemID();
+		const ImVec2 actionsButtonMin = ImGui::GetItemRectMin();
+		const ImVec2 actionsButtonMax = ImGui::GetItemRectMax();
+		auto* actionsButtonDrawList = ImGui::GetWindowDrawList();
+		float arrowProgress = 0.0f;
+		{
+			const auto& style = ImGui::GetStyle();
+			const float highlightGap = std::max(0.0f, style.WindowPadding.x - style.ItemSpacing.x * 0.5f);
+			const ImVec2 flyoutPadding(
+				style.WindowPadding.x, highlightGap + style.ItemSpacing.y * 0.5f);
+			Util::FlyoutScope flyout(
+				g_featureActionsFlyout, actionsButtonId, actionsButtonPressed,
+				{ flyoutPadding, style.WindowRounding,
+					ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).w, style.Alpha });
+			arrowProgress = g_featureActionsFlyout.activeId == actionsButtonId ?
+			                    Util::GetFlyoutEasedProgress(g_featureActionsFlyout) :
+			                    0.0f;
 
-	ImGui::PushID(featureName.c_str());
-	const bool actionsButtonPressed = ImGui::Button("##FeatureActions", ImVec2(actionsButtonSize, actionsButtonSize));
-	const ImGuiID actionsButtonId = ImGui::GetItemID();
-	const ImVec2 actionsButtonMin = ImGui::GetItemRectMin();
-	const ImVec2 actionsButtonMax = ImGui::GetItemRectMax();
-	auto* actionsButtonDrawList = ImGui::GetWindowDrawList();
-	float arrowProgress = 0.0f;
-	{
-		Util::FlyoutScope flyout(g_featureActionsFlyout, actionsButtonId, actionsButtonPressed);
-		arrowProgress = g_featureActionsFlyout.activeId == actionsButtonId ?
-		                    Util::GetFlyoutEasedProgress(g_featureActionsFlyout) :
-		                    0.0f;
+			if (flyout) {
+				bool closeFlyout = false;
+				if (!feat->IsAlwaysEnabled()) {
+					{
+						const bool failedToLoad = !feat->failedLoadedMessage.empty();
+						if (failedToLoad)
+							ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
+						const SKSE::stl::scope_exit restoreTextColor([failedToLoad]() noexcept {
+							if (failedToLoad)
+								ImGui::PopStyleColor();
+						});
 
-		if (flyout) {
-			bool closeFlyout = false;
-			{
-				const bool failedToLoad = !feat->failedLoadedMessage.empty();
-				if (failedToLoad)
-					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
-				const SKSE::stl::scope_exit restoreTextColor([failedToLoad]() noexcept {
-					if (failedToLoad)
-						ImGui::PopStyleColor();
-				});
-
-				if (Util::FlyoutMenuItem(
-						T("menu.features.enable_at_boot", "Enable at Boot"),
-						bootEnabled,
-						true,
-						FEATURE_ACTION_CHECKMARK_LEFT_OFFSET * Util::GetUIScale())) {
-					const bool nowDisabled = feat->ToggleAtBootSetting();
-					bootEnabled = !nowDisabled;
-					logger::info("{}: {} at boot.", featureName, nowDisabled ? "Disabled" : "Enabled");
-				}
-			}
-
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					T("menu.features.boot_toggle_tooltip",
-						"Toggle feature loading at boot.\n"
-						"Current state: %s\n"
-						"Restart required for changes to take effect.\n"
-						"Disabling removes performance impact."),
-					bootEnabled ? T("menu.features.enabled", "Enabled") : T("menu.features.disabled", "Disabled"));
-			}
-
-			if (!isDisabled && isLoaded) {
-				ImGui::Separator();
-				if (Util::FlyoutMenuItem(T("menu.features.restore_defaults", "Restore Defaults"))) {
-					feat->RestoreDefaultSettings();
-					closeFlyout = true;
-				}
-
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("%s", T("menu.features.restore_defaults_tooltip", "Restore default settings for this feature"));
-				}
-
-				if (hasOverrides) {
-					if (Util::FlyoutMenuItem(T("menu.features.apply_override", "Apply Override"), false, !sceneControlled)) {
-						closeFlyout = true;
-						if (feat->ReapplyOverrideSettings()) {
-							logger::info("Successfully reapplied override settings for {}", featureName);
-						} else {
-							logger::warn("Failed to reapply override settings for {}", featureName);
+						if (Util::FlyoutMenuItem(
+								T("menu.features.enable_at_boot", "Enable at Boot"),
+								bootEnabled,
+								true,
+								FEATURE_ACTION_CHECKMARK_LEFT_OFFSET * Util::GetUIScale())) {
+							const bool nowDisabled = feat->ToggleAtBootSetting();
+							bootEnabled = !nowDisabled;
+							logger::info("{}: {} at boot.", featureName, nowDisabled ? "Disabled" : "Enabled");
 						}
 					}
 
 					if (auto _tt = Util::HoverTooltipWrapper()) {
-						if (sceneControlled) {
-							ImGui::Text(
-								"%s",
-								T("menu.features.cannot_apply_overrides_scene",
-									"Cannot apply overrides while scene-specific settings are active.\n"
-									"Pause scene settings for this feature first."));
-						} else {
-							ImGui::Text(
-								"%s",
-								T("menu.features.restore_override_tooltip",
-									"Restores original override settings from mod files.\n"
-									"This will discard your customizations and revert to\n"
-									"the mod author's recommended settings."));
+						ImGui::Text(
+							T("menu.features.boot_toggle_tooltip",
+								"Toggle feature loading at boot.\n"
+								"Current state: %s\n"
+								"Restart required for changes to take effect.\n"
+								"Disabling removes performance impact."),
+							bootEnabled ? T("menu.features.enabled", "Enabled") : T("menu.features.disabled", "Disabled"));
+					}
+				}
+
+				if (canRestoreDefaults || canApplyOverrides) {
+					if (!feat->IsAlwaysEnabled())
+						ImGui::Separator();
+
+					if (canRestoreDefaults) {
+						if (Util::FlyoutMenuItem(T("menu.features.restore_defaults", "Restore Defaults"))) {
+							SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
+							feat->RestoreDefaultSettings();
+							closeFlyout = true;
+						}
+
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::Text("%s", T("menu.features.restore_defaults_tooltip", "Restore default settings for this feature"));
+						}
+					}
+
+					if (canApplyOverrides) {
+						if (Util::FlyoutMenuItem(T("menu.features.apply_override", "Apply Override"), false, !sceneControlled)) {
+							closeFlyout = true;
+							SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
+							if (feat->ReapplyOverrideSettings()) {
+								logger::info("Successfully reapplied override settings for {}", featureName);
+							} else {
+								logger::warn("Failed to reapply override settings for {}", featureName);
+							}
+						}
+
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							if (sceneControlled) {
+								ImGui::Text(
+									"%s",
+									T("menu.features.cannot_apply_overrides_scene",
+										"Cannot apply overrides while scene-specific settings are active.\n"
+										"Pause scene settings for this feature first."));
+							} else {
+								ImGui::Text(
+									"%s",
+									T("menu.features.restore_override_tooltip",
+										"Restores original override settings from mod files.\n"
+										"This will discard your customizations and revert to\n"
+										"the mod author's recommended settings."));
+							}
 						}
 					}
 				}
+
+				if (closeFlyout)
+					Util::RequestCloseFlyout(g_featureActionsFlyout);
 			}
-
-			if (closeFlyout)
-				Util::RequestCloseFlyout(g_featureActionsFlyout);
 		}
-	}
 
-	DrawFeatureActionsArrow(actionsButtonDrawList, actionsButtonMin, actionsButtonMax, arrowProgress);
-	ImGui::PopID();
+		DrawFeatureActionsArrow(actionsButtonDrawList, actionsButtonMin, actionsButtonMax, arrowProgress);
+		ImGui::PopID();
+	} else if (g_featureActionsFlyoutFeature == featureName) {
+		Util::CloseFlyout(g_featureActionsFlyout);
+		g_featureActionsFlyoutFeature.clear();
+	}
 
 	// Restore cursor position after the title and separator
 	ImGui::SetCursorScreenPos(cursorPosAfterHeader);
@@ -907,48 +927,36 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		ImGui::Text("%s", T("menu.features.enable_to_access_config", "Enable the feature above to access its configuration options."));
 	} else {
 		if (isLoaded) {
-			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			if (weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
-				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
-				if (ImGui::Checkbox(T("menu.features.pause_weather_overrides", "Pause Weather Overrides"), &paused)) {
-					weatherRegistry->SetFeaturePaused(feat->GetShortName(), paused);
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text(
-						"%s",
-						T("menu.features.pause_weather_tooltip",
-							"Temporarily disable weather-based setting adjustments for this feature.\n"
-							"This state is not saved."));
-				}
-				ImGui::Separator();
-			}
-
-			// Scene-specific settings toggle (Interior Only / TimeOfDay / Weather-Specific)
+			// Scene-specific settings toggle
 			// Show toggle whenever scene entries exist for this feature, even if feature-paused
 			{
 				const auto& featureShortName = feat->GetShortName();
 				auto* sceneMgr = globals::sceneSettingsManager;
 				bool scenePaused = sceneMgr->IsFeaturePaused(featureShortName);
-				if (sceneControlled || scenePaused) {
+				if (sceneMgr->HasAnySceneEntriesForFeature(featureShortName) || scenePaused) {
 					bool active = !scenePaused;
-					if (Util::FeatureToggle("##PauseSceneSettings", &active))
+					if (Util::FeatureToggle("##PauseSceneSettings", &active)) {
 						sceneMgr->SetFeaturePaused(featureShortName, !active);
+						scenePaused = !active;
+						sceneControlled = sceneMgr->HasActiveSettingsForFeature(featureShortName) && !scenePaused;
+					}
 					ImGui::SameLine();
 					ImGui::Text("%s", T("menu.features.scene_specific_settings", "Scene Specific Settings"));
 					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::Text("%s", T(scenePaused ? "menu.features.scene_paused_tooltip" : "menu.features.scene_active_tooltip",
-											  scenePaused ? "Paused - click to resume" : "Active - click to pause"));
+						const auto* tooltip = scenePaused ?
+						                          T("menu.features.scene_paused_tooltip", "Paused - click to resume") :
+						                          T("menu.features.scene_active_tooltip", "Active - click to pause");
+						ImGui::Text("%s", tooltip);
 					}
 					ImGui::Separator();
 				}
 			}
 
-			// Disable feature settings while scene overrides are actively applied (not paused)
-			if (sceneControlled)
-				ImGui::BeginDisabled();
-
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			feat->DrawSettings();
+			{
+				SceneSettingsUIHooks::FeatureDrawGuard featureDrawGuard(feat, sceneControlled);
+				feat->DrawSettings();
+			}
 
 			if (feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
 				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
@@ -956,9 +964,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			}
 
 			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
-
-			if (sceneControlled)
-				ImGui::EndDisabled();
 
 			// --- Reactive constraint detection ---
 			// Compare the current full constraint set against g_knownConstraintKeys.

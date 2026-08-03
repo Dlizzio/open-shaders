@@ -10,6 +10,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "SceneSettingsManager.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "menu.performance."
@@ -126,7 +127,10 @@ void PerformanceRenderer::Render(Feature* host)
 	ImGui::TextUnformatted(T(TKEY("profiles_label"), "Profile:"));
 	ImGui::SameLine();
 	DrawProfileButtonRow(profiles, labels, tooltips, activeIdx,
-		[](Feature::PerfProfile p) { Feature::ApplyPerformanceProfileToAll(p); });
+		[](Feature::PerfProfile p) {
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
+			Feature::ApplyPerformanceProfileToAll(p);
+		});
 
 	// Generic per-section tooltips: unlike the global row above, a section's row can't
 	// claim specifics (render resolution, foveation) that only apply to SOME features.
@@ -162,7 +166,10 @@ void PerformanceRenderer::Render(Feature* host)
 			if (feature->MatchesPerformanceProfile(profiles[i]))
 				featureActiveIdx = i;
 		DrawProfileButtonRow(profiles, labels, sectionTooltips, featureActiveIdx,
-			[feature](Feature::PerfProfile p) { feature->ApplyPerformanceProfile(p); });
+			[feature](Feature::PerfProfile p) {
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
+				feature->ApplyPerformanceProfile(p);
+			});
 		// Presets stay visible: they're the primary surface, same as the global
 		// buttons above. Only raw sliders/knobs collapse into Advanced below.
 		try {

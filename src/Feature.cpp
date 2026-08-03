@@ -26,6 +26,7 @@
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/SceneManager.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -48,8 +49,6 @@
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
-#include "WeatherManager.h"
-#include "WeatherVariableRegistry.h"
 
 #include "State.h"
 #include "TruePBR.h"
@@ -157,6 +156,9 @@ void Feature::Load(json& o_json)
 			logger::error("Feature has empty short name, cannot add to feature issues list");
 		}
 	} else {
+		if (!UsesMainSettings())
+			return;
+
 		// No errors, load settings now
 		if (o_json[GetName()].is_structured()) {
 			logger::info("Loading {} settings", GetName());
@@ -175,7 +177,93 @@ void Feature::Load(json& o_json)
 
 void Feature::Save(json& o_json)
 {
-	SaveSettings(o_json[GetName()]);
+	if (UsesMainSettings())
+		SaveSettings(o_json[GetName()]);
+}
+
+bool Feature::IsSceneSettingPrimitive(const json& value)
+{
+	return value.is_boolean() || value.is_number_integer() || value.is_number_float() || value.is_string();
+}
+
+namespace
+{
+	json* FindSceneSetting(json& settings, const std::vector<std::string>& path, const std::string& key)
+	{
+		json* node = &settings;
+		for (const auto& segment : path) {
+			if (!node->is_object())
+				return nullptr;
+			auto it = node->find(segment);
+			if (it == node->end())
+				return nullptr;
+			node = &*it;
+		}
+		if (!node->is_object())
+			return nullptr;
+
+		auto it = node->find(key);
+		return it != node->end() ? &*it : nullptr;
+	}
+
+	bool AreSceneSettingTypesCompatible(const json& currentValue, const json& newValue)
+	{
+		return currentValue.type() == newValue.type() || (currentValue.is_number() && newValue.is_number());
+	}
+}
+
+bool Feature::GetSceneSettingValue(const std::vector<std::string>& settingPath, const std::string& key, json& outValue)
+{
+	if (key.empty())
+		return false;
+
+	json settings;
+	SaveSettings(settings);
+	if (!settings.is_object())
+		return false;
+
+	auto* value = FindSceneSetting(settings, settingPath, key);
+	if (!value || !IsSceneSettingPrimitive(*value))
+		return false;
+
+	outValue = *value;
+	return true;
+}
+
+bool Feature::ApplySceneSettings(const std::vector<SceneSettingUpdate>& updates)
+{
+	if (updates.empty())
+		return true;
+
+	json originalSettings;
+	SaveSettings(originalSettings);
+	if (!originalSettings.is_object())
+		return false;
+
+	auto candidateSettings = originalSettings;
+	for (const auto& update : updates) {
+		auto* currentValue = FindSceneSetting(candidateSettings, update.settingPath, update.key);
+		if (update.key.empty() || !currentValue || !IsSceneSettingPrimitive(*currentValue) ||
+			!IsSceneSettingPrimitive(update.value) || !AreSceneSettingTypesCompatible(*currentValue, update.value))
+			return false;
+		*currentValue = update.value;
+	}
+
+	try {
+		LoadSettings(candidateSettings);
+		return true;
+	} catch (const std::exception& e) {
+		logger::warn("Failed to apply scene settings for {}: {}", GetShortName(), e.what());
+	} catch (...) {
+		logger::warn("Failed to apply scene settings for {}: unknown error", GetShortName());
+	}
+
+	try {
+		LoadSettings(originalSettings);
+	} catch (...) {
+		logger::error("Failed to restore {} after a scene setting error", GetShortName());
+	}
+	return false;
 }
 
 bool Feature::ValidateCache(CSimpleIniA& a_ini)
@@ -257,6 +345,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::csEditor,
 		&globals::features::weatherPicker,
 		&globals::features::csUtility,
+		&globals::features::sceneManager,
 		&globals::features::screenshotFeature,
 		&globals::features::linearLighting,
 		&globals::features::unifiedWater,
@@ -386,6 +475,8 @@ std::vector<std::string> Feature::GetLoadedFeatureNames()
 
 bool Feature::ToggleAtBootSetting()
 {
+	if (IsAlwaysEnabled())
+		return false;
 	auto state = globals::state;
 	const std::string featureName = GetShortName();
 	auto disabled = state->IsFeatureDisabled(featureName);
