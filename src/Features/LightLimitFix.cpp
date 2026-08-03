@@ -586,6 +586,8 @@ void LightLimitFix::SetupResources()
 
 void LightLimitFix::Reset()
 {
+	effectLightValidationCache.clear();
+
 	std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
 
 	for (auto& particleLight : currentParticleLights) {
@@ -1376,22 +1378,18 @@ namespace
 		return true;
 	}
 
-	// SEH-guarded read of sceneLights[0]->light. The pointer-value plausibility
-	// check can't distinguish a live BSLight from a stale-but-canonical one, so
-	// reading dirLight->light can itself AV (#92). Treat any fault as "no NiLight"
-	// so the caller skips the engine's null-deref path instead of crashing in the
-	// guard. Kept in its own function (no C++ unwinding objects) per MSVC's __try
-	// restriction. Matches the __except(1) AV-guard pattern used elsewhere here.
-	RE::NiLight* SafeReadDirectionalNiLight(RE::BSLight* dirLight)
+	// Pointer plausibility cannot distinguish a live BSLight from stale mapped memory.
+	// Keep the SEH read free of C++ unwinding objects for MSVC's __try restriction.
+	RE::NiLight* SafeReadNiLight(RE::BSLight* a_light)
 	{
 #if defined(_MSC_VER)
 		__try {
-			return dirLight->light.get();
+			return a_light->light.get();
 		} __except (1) {
 			return nullptr;
 		}
 #else
-		return dirLight->light.get();
+		return a_light->light.get();
 #endif
 	}
 }
@@ -1407,7 +1405,7 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 		RE::BSLight* dirLight = (Pass->numLights > 0 && Pass->sceneLights) ? Pass->sceneLights[0] : nullptr;
 		// A stale-but-canonical dirLight passes the pointer-value check yet still AVs on
 		// dirLight->light, so capture the NiLight under SEH and reuse it below (no second deref).
-		RE::NiLight* niLight = IsPlausibleShadowLightPtr(reinterpret_cast<std::uintptr_t>(dirLight)) ? SafeReadDirectionalNiLight(dirLight) : nullptr;
+		RE::NiLight* niLight = IsPlausibleShadowLightPtr(reinterpret_cast<std::uintptr_t>(dirLight)) ? SafeReadNiLight(dirLight) : nullptr;
 		if (Pass->numLights == 0 || !IsSafeDirectionalNiLight(niLight)) {
 			directionalSlotSafe = false;
 			// One stale light is hit by many passes per frame; dedupe on the NiLight value
@@ -1470,16 +1468,22 @@ namespace
 
 void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
-	// Defensive guard: BSEffectShader::SetupGeometry derefs Pass->sceneLights[i]->light->fade with
-	// no null check, and sceneLights[] is a raw BSLight** that can outlive its lights (recycled
-	// garbage, or a half-destroyed BSLight with NULL NiLight -> AV). Clamp numLights to the entries
-	// the engine can safely deref: cheap range/alignment check, then a VirtualQuery readability
-	// probe (the real boundary -- a freed light passes the cheap checks but points to unmapped
-	// memory). Entries failing any check stop the loop, matching the engine's bail-on-first-bad.
+	// Validate each raw scene-light pair on first use per frame; cache hits still SEH-read the
+	// BSLight field so unmapped or changed entries fall back to the full guard.
 	if (Pass && Pass->sceneLights && Pass->numLights > 0) {
 		std::uint8_t validCount = 0;
+		auto& validationCache = globals::features::lightLimitFix.effectLightValidationCache;
 		for (std::uint8_t i = 0; i < Pass->numLights; ++i) {
 			RE::BSLight* bsLight = Pass->sceneLights[i];
+			if (const auto cached = validationCache.find(bsLight); cached != validationCache.end()) {
+				const auto currentNiLight = SafeReadNiLight(bsLight);
+				if (currentNiLight == cached->second) {
+					++validCount;
+					continue;
+				}
+				validationCache.erase(cached);
+			}
+
 			if (!IsSafeLightRange(bsLight, kBSLightEngineReadSize)) {
 				static int loggedBsLight = 0;
 				if (loggedBsLight++ < 10) {
@@ -1490,7 +1494,7 @@ void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* Thi
 				}
 				break;
 			}
-			RE::NiLight* niLight = bsLight->light.get();
+			RE::NiLight* niLight = SafeReadNiLight(bsLight);
 			if (!IsSafeLightRange(niLight, kNiLightEngineReadSize)) {
 				// Catches both NULL (engine cleared the NiPointer) and
 				// garbage (BSLight memory recycled). NULL is the more common
@@ -1508,6 +1512,8 @@ void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* Thi
 				}
 				break;
 			}
+
+			validationCache.insert_or_assign(bsLight, niLight);
 			++validCount;
 		}
 		if (validCount < Pass->numLights)
