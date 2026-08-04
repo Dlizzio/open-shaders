@@ -2577,17 +2577,23 @@ namespace Util
 			       ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 		}
 
-		ImVec2 GetFlyoutPos(FlyoutState& state, const ImVec2& anchorMax,
-			float slideOffset, float scale, const ImRect& visible, bool& canOpen)
+		ImVec2 GetFlyoutPos(FlyoutState& state, const ImVec2& sourceMin, const ImVec2& sourceMax,
+			float slideOffset, float scale, const ImRect& visible, const FlyoutStyle& style, bool& canOpen)
 		{
 			const float gap = kFlyoutGap * scale;
-			ImVec2 pos(anchorMax.x, anchorMax.y + gap - slideOffset);
+			const float horizontalPivot = style.centerOnSource ? 0.5f : 1.0f;
+			ImVec2 pos(
+				style.centerOnSource ? (sourceMin.x + sourceMax.x) * 0.5f : sourceMax.x,
+				sourceMax.y + gap - slideOffset);
 
-			canOpen = state.lastSize.y <= 0.0f || anchorMax.y + gap + state.lastSize.y <= visible.Max.y;
-			const float minRight = state.lastSize.x > 0.0f ?
-			                           std::min(visible.Max.x, visible.Min.x + state.lastSize.x) :
-			                           visible.Min.x;
-			pos.x = std::clamp(pos.x, minRight, visible.Max.x);
+			canOpen = state.lastSize.y <= 0.0f || sourceMax.y + gap + state.lastSize.y <= visible.Max.y;
+			if (state.lastSize.x > 0.0f) {
+				const float minimumAnchor = visible.Min.x + state.lastSize.x * horizontalPivot;
+				const float maximumAnchor = visible.Max.x - state.lastSize.x * (1.0f - horizontalPivot);
+				pos.x = minimumAnchor <= maximumAnchor ?
+				            std::clamp(pos.x, minimumAnchor, maximumAnchor) :
+				            (visible.Min.x + visible.Max.x) * 0.5f;
+			}
 
 			pos.x = std::floor(pos.x + 0.5f);
 			pos.y = std::floor(pos.y + 0.5f);
@@ -2596,7 +2602,7 @@ namespace Util
 
 		bool BeginFlyoutImpl(FlyoutState& state, ImGuiID itemId, bool sourcePressed, const FlyoutStyle& flyoutStyle)
 		{
-			IM_ASSERT(ImGui::GetItemID() == itemId);
+			const ImGuiID submittedItemId = ImGui::GetItemID();
 			const ImVec2 sourceMin = ImGui::GetItemRectMin();
 			const ImVec2 sourceMax = ImGui::GetItemRectMax();
 
@@ -2606,8 +2612,10 @@ namespace Util
 			state.lastFrame = currentFrame;
 
 			if (state.pendingFocusReturnId == itemId) {
-				ImGui::FocusItem();
-				ImGui::SetNavCursorVisible(true);
+				if (submittedItemId == itemId) {
+					ImGui::FocusItem();
+					ImGui::SetNavCursorVisible(true);
+				}
 				state.pendingFocusReturnId = 0;
 			}
 
@@ -2627,8 +2635,10 @@ namespace Util
 					state.closeTimer = 0.0f;
 					state.keepOpenForNavigation = navigationPressed;
 					focusOnOpen = navigationPressed;
-				} else {
+				} else if (!flyoutStyle.keepOpenOnSourcePress) {
 					RequestCloseFlyout(state);
+				} else {
+					state.closeTimer = 0.0f;
 				}
 			} else {
 				const bool wantsOpen = (hovered && state.blockedHoverId != itemId) || sourcePressed;
@@ -2668,14 +2678,15 @@ namespace Util
 			const float alpha = std::min(state.openProgress * kFlyoutAlphaScale, 1.0f);
 			bool canOpen = true;
 			const ImVec2 flyoutPos = GetFlyoutPos(
-				state, sourceMax, slideOffset, scale, GetFlyoutWindowRect(), canOpen);
+				state, sourceMin, sourceMax, slideOffset, scale, GetFlyoutWindowRect(), flyoutStyle, canOpen);
 			if (!canOpen) {
 				state.blockedHoverId = itemId;
 				ResetFlyout(state, true);
 				return false;
 			}
 
-			ImGui::SetNextWindowPos(flyoutPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+			ImGui::SetNextWindowPos(
+				flyoutPos, ImGuiCond_Always, ImVec2(flyoutStyle.centerOnSource ? 0.5f : 1.0f, 0.0f));
 			ImGui::SetNextWindowBgAlpha(flyoutStyle.windowBackgroundAlpha * alpha);
 			if (focusOnOpen)
 				ImGui::SetNextWindowFocus();
@@ -2694,7 +2705,8 @@ namespace Util
 			state.lastSize = ImGui::GetWindowSize();
 			state.flyoutMin = ImGui::GetWindowPos();
 			state.flyoutMax = ImVec2(state.flyoutMin.x + state.lastSize.x, state.flyoutMin.y + state.lastSize.y);
-			if (visible)
+			constexpr auto popupFlags = ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel;
+			if (visible && !ImGui::IsPopupOpen(nullptr, popupFlags))
 				ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
 
 			if (!visible) {

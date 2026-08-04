@@ -6,9 +6,17 @@
 #include "SceneSettingsManager.h"
 #include "Utils/UI.h"
 
+#include <imgui_internal.h>
+
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
 namespace
 {
 	using CheckboxFn = bool (*)(const char*, bool*);
+	using ButtonFn = bool (*)(const char*, const ImVec2&);
 	using CheckboxFlagsIntFn = bool (*)(const char*, int*, int);
 	using CheckboxFlagsUIntFn = bool (*)(const char*, unsigned int*, unsigned int);
 	using RadioButtonIntFn = bool (*)(const char*, int*, int);
@@ -17,18 +25,34 @@ namespace
 	using ComboStringFn = bool (*)(const char*, int*, const char*, int);
 	using ComboGetterFn = bool (*)(const char*, int*, const char* (*)(void*, int), void*, int, int);
 	using DragFloatFn = bool (*)(const char*, float*, float, float, float, const char*, ImGuiSliderFlags);
+	using DragFloatNFn = bool (*)(const char*, float*, float, float, float, const char*, ImGuiSliderFlags);
 	using DragIntFn = bool (*)(const char*, int*, float, int, int, const char*, ImGuiSliderFlags);
+	using DragIntNFn = bool (*)(const char*, int*, float, int, int, const char*, ImGuiSliderFlags);
+	using DragScalarFn = bool (*)(const char*, ImGuiDataType, void*, float, const void*, const void*, const char*, ImGuiSliderFlags);
+	using DragScalarNFn = bool (*)(const char*, ImGuiDataType, void*, int, float, const void*, const void*, const char*, ImGuiSliderFlags);
 	using SliderFloatFn = bool (*)(const char*, float*, float, float, const char*, ImGuiSliderFlags);
+	using SliderFloatNFn = bool (*)(const char*, float*, float, float, const char*, ImGuiSliderFlags);
 	using SliderIntFn = bool (*)(const char*, int*, int, int, const char*, ImGuiSliderFlags);
+	using SliderIntNFn = bool (*)(const char*, int*, int, int, const char*, ImGuiSliderFlags);
+	using SliderScalarFn = bool (*)(const char*, ImGuiDataType, void*, const void*, const void*, const char*, ImGuiSliderFlags);
+	using SliderScalarNFn = bool (*)(const char*, ImGuiDataType, void*, int, const void*, const void*, const char*, ImGuiSliderFlags);
 	using SliderAngleFn = bool (*)(const char*, float*, float, float, const char*, ImGuiSliderFlags);
 	using PercentageSliderFn = bool (*)(const char*, float*, float, float, const char*);
 	using InputFloatFn = bool (*)(const char*, float*, float, float, const char*, ImGuiInputTextFlags);
+	using InputFloatNFn = bool (*)(const char*, float*, const char*, ImGuiInputTextFlags);
 	using InputIntFn = bool (*)(const char*, int*, int, int, ImGuiInputTextFlags);
+	using InputIntNFn = bool (*)(const char*, int*, ImGuiInputTextFlags);
+	using InputScalarFn = bool (*)(const char*, ImGuiDataType, void*, const void*, const void*, const char*, ImGuiInputTextFlags);
+	using InputScalarNFn = bool (*)(const char*, ImGuiDataType, void*, int, const void*, const void*, const char*, ImGuiInputTextFlags);
 	using ColorEdit3Fn = bool (*)(const char*, float*, ImGuiColorEditFlags);
 	using ColorEdit4Fn = bool (*)(const char*, float*, ImGuiColorEditFlags);
 	using BeginComboFn = bool (*)(const char*, const char*, ImGuiComboFlags);
+	using BeginGroupFn = void (*)();
+	using EndGroupFn = void (*)();
+	using IsItemHoveredFn = bool (*)(ImGuiHoveredFlags);
 
 	CheckboxFn g_checkbox = static_cast<CheckboxFn>(&ImGui::Checkbox);
+	ButtonFn g_button = static_cast<ButtonFn>(&ImGui::Button);
 	CheckboxFlagsIntFn g_checkboxFlagsInt = static_cast<CheckboxFlagsIntFn>(&ImGui::CheckboxFlags);
 	CheckboxFlagsUIntFn g_checkboxFlagsUInt = static_cast<CheckboxFlagsUIntFn>(&ImGui::CheckboxFlags);
 	RadioButtonIntFn g_radioButtonInt = static_cast<RadioButtonIntFn>(&ImGui::RadioButton);
@@ -37,22 +61,221 @@ namespace
 	ComboStringFn g_comboString = static_cast<ComboStringFn>(&ImGui::Combo);
 	ComboGetterFn g_comboGetter = static_cast<ComboGetterFn>(&ImGui::Combo);
 	DragFloatFn g_dragFloat = static_cast<DragFloatFn>(&ImGui::DragFloat);
+	DragFloatNFn g_dragFloat2 = &ImGui::DragFloat2;
+	DragFloatNFn g_dragFloat3 = &ImGui::DragFloat3;
+	DragFloatNFn g_dragFloat4 = &ImGui::DragFloat4;
 	DragIntFn g_dragInt = static_cast<DragIntFn>(&ImGui::DragInt);
+	DragIntNFn g_dragInt2 = &ImGui::DragInt2;
+	DragIntNFn g_dragInt3 = &ImGui::DragInt3;
+	DragIntNFn g_dragInt4 = &ImGui::DragInt4;
+	DragScalarFn g_dragScalar = &ImGui::DragScalar;
+	DragScalarNFn g_dragScalarN = &ImGui::DragScalarN;
 	SliderFloatFn g_sliderFloat = static_cast<SliderFloatFn>(&ImGui::SliderFloat);
+	SliderFloatNFn g_sliderFloat2 = &ImGui::SliderFloat2;
+	SliderFloatNFn g_sliderFloat3 = &ImGui::SliderFloat3;
+	SliderFloatNFn g_sliderFloat4 = &ImGui::SliderFloat4;
 	SliderIntFn g_sliderInt = static_cast<SliderIntFn>(&ImGui::SliderInt);
+	SliderIntNFn g_sliderInt2 = &ImGui::SliderInt2;
+	SliderIntNFn g_sliderInt3 = &ImGui::SliderInt3;
+	SliderIntNFn g_sliderInt4 = &ImGui::SliderInt4;
+	SliderScalarFn g_sliderScalar = &ImGui::SliderScalar;
+	SliderScalarNFn g_sliderScalarN = &ImGui::SliderScalarN;
 	SliderAngleFn g_sliderAngle = static_cast<SliderAngleFn>(&ImGui::SliderAngle);
 	PercentageSliderFn g_percentageSlider = &Util::PercentageSlider;
 	InputFloatFn g_inputFloat = static_cast<InputFloatFn>(&ImGui::InputFloat);
+	InputFloatNFn g_inputFloat2 = &ImGui::InputFloat2;
+	InputFloatNFn g_inputFloat3 = &ImGui::InputFloat3;
+	InputFloatNFn g_inputFloat4 = &ImGui::InputFloat4;
 	InputIntFn g_inputInt = static_cast<InputIntFn>(&ImGui::InputInt);
+	InputIntNFn g_inputInt2 = &ImGui::InputInt2;
+	InputIntNFn g_inputInt3 = &ImGui::InputInt3;
+	InputIntNFn g_inputInt4 = &ImGui::InputInt4;
+	InputScalarFn g_inputScalar = &ImGui::InputScalar;
+	InputScalarNFn g_inputScalarN = &ImGui::InputScalarN;
 	ColorEdit3Fn g_colorEdit3 = static_cast<ColorEdit3Fn>(&ImGui::ColorEdit3);
 	ColorEdit4Fn g_colorEdit4 = static_cast<ColorEdit4Fn>(&ImGui::ColorEdit4);
 	BeginComboFn g_beginCombo = static_cast<BeginComboFn>(&ImGui::BeginCombo);
+	BeginGroupFn g_beginGroup = &ImGui::BeginGroup;
+	EndGroupFn g_endGroup = &ImGui::EndGroup;
+	IsItemHoveredFn g_isItemHovered = &ImGui::IsItemHovered;
 
 	thread_local Feature* g_currentFeature = nullptr;
 	thread_local bool g_sceneSettingsActive = false;
+	thread_local bool g_allowSceneSettingTooltip = false;
+	thread_local unsigned int g_controlDetourDepth = 0;
+	struct ControlDetourScope
+	{
+		ControlDetourScope() { ++g_controlDetourDepth; }
+		~ControlDetourScope() { --g_controlDetourDepth; }
+	};
+	struct ControlledItem
+	{
+		ImGuiWindow* window = nullptr;
+		ImGuiID id = 0;
+		ImRect rect{};
+		bool valid = false;
+	};
+	thread_local ControlledItem g_sceneControlledItem;
+	thread_local std::vector<bool> g_sceneControlledGroupStack;
+	struct SceneControlFrame
+	{
+		ControlledItem item;
+		std::vector<bool> groups;
+	};
+	thread_local std::vector<SceneControlFrame> g_sceneControlFrames;
 	bool g_installed = false;
 
-	const SceneSettingsCatalog::SettingMetadata* FindControlSetting(const void* valueAddress)
+	void ClearControlledItem()
+	{
+		g_sceneControlledItem = {};
+	}
+
+	void CaptureControlledItem()
+	{
+		g_sceneControlledItem = {
+			ImGui::GetCurrentWindowRead(), ImGui::GetItemID(), GImGui->LastItemData.Rect, true
+		};
+	}
+
+	bool IsControlledItem()
+	{
+		if (!g_sceneControlledItem.valid || ImGui::GetCurrentWindowRead() != g_sceneControlledItem.window)
+			return false;
+		const auto& item = GImGui->LastItemData;
+		const auto& rect = g_sceneControlledItem.rect;
+		return item.ID == g_sceneControlledItem.id && item.Rect.Min.x == rect.Min.x &&
+		       item.Rect.Min.y == rect.Min.y && item.Rect.Max.x == rect.Max.x &&
+		       item.Rect.Max.y == rect.Max.y;
+	}
+
+	bool IsActiveSceneSetting(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		return SceneSettingsManager::IsSceneSettingAllowed(
+			       setting.featureShortName, setting.settingPath, setting.settingKey) &&
+		       SceneSettingsManager::GetSingleton()->IsActiveSceneSetting(
+			       setting.featureShortName, setting.settingPath, setting.settingKey);
+	}
+
+	std::string_view GetVisibleLabel(std::string_view label)
+	{
+		return label.substr(0, label.find("##"));
+	}
+
+	bool MatchesLocalizedLabel(std::string_view label, std::string_view displayName,
+		std::string_view displayNameKey)
+	{
+		if (displayNameKey.empty())
+			return GetVisibleLabel(label) == GetVisibleLabel(displayName);
+		std::string fallback(displayName);
+		const auto* translated = T(displayNameKey, fallback.c_str());
+		return translated && GetVisibleLabel(label) == GetVisibleLabel(translated);
+	}
+
+	bool IsSameLogicalControl(const SceneSettingsCatalog::SettingMetadata& lhs,
+		const SceneSettingsCatalog::SettingMetadata& rhs)
+	{
+		return lhs.featureShortName == rhs.featureShortName &&
+		       lhs.serializedPath == rhs.serializedPath &&
+		       lhs.serializedKey == rhs.serializedKey &&
+		       lhs.aggregateSemantic == rhs.aggregateSemantic &&
+		       lhs.aggregateStart == rhs.aggregateStart &&
+		       lhs.aggregateCount == rhs.aggregateCount;
+	}
+
+	bool MatchesSettingLabel(const SceneSettingsCatalog::SettingMetadata& setting,
+		std::string_view label, bool choiceLabelsOnly)
+	{
+		if (!choiceLabelsOnly) {
+			const auto displayName = setting.displayName.empty() ? setting.settingKey : setting.displayName;
+			if (MatchesLocalizedLabel(label, displayName, setting.displayNameKey))
+				return true;
+		}
+		for (std::size_t index = 0; index < setting.choiceCount; ++index) {
+			const auto& choice = setting.choices[index];
+			if (MatchesLocalizedLabel(label, choice.displayName, choice.displayNameKey))
+				return true;
+		}
+		return false;
+	}
+
+	const SceneSettingsCatalog::SettingMetadata* FindUniqueActiveSettingForLabel(
+		const char* label, bool choiceLabelsOnly)
+	{
+		if (!label || GetVisibleLabel(label).empty())
+			return nullptr;
+
+		const auto featureShortName = g_currentFeature->GetShortName();
+		const SceneSettingsCatalog::SettingMetadata* match = nullptr;
+		for (const auto& candidate : SceneSettingsCatalog::GetSettings()) {
+			if (candidate.featureShortName != featureShortName ||
+				!SceneSettingsCatalog::IsSceneControllable(candidate) ||
+				!MatchesSettingLabel(candidate, label, choiceLabelsOnly) ||
+				!IsActiveSceneSetting(candidate))
+				continue;
+			if (match && !IsSameLogicalControl(*match, candidate))
+				return nullptr;
+			match = &candidate;
+		}
+		return match;
+	}
+
+	template <class Aggregate>
+	const SceneSettingsCatalog::SettingMetadata* FindActiveAggregateSetting(const Aggregate& aggregate)
+	{
+		for (const auto& candidate : SceneSettingsCatalog::GetSettings()) {
+			if (candidate.featureShortName == aggregate.featureShortName &&
+				candidate.serializedPath == aggregate.serializedPath &&
+				candidate.serializedKey == aggregate.serializedKey &&
+				candidate.aggregateSemantic == aggregate.aggregateSemantic &&
+				candidate.aggregateStart == aggregate.aggregateStart &&
+				candidate.aggregateCount == aggregate.aggregateCount && IsActiveSceneSetting(candidate))
+				return &candidate;
+		}
+		return nullptr;
+	}
+
+	struct RegisteredVirtualControlMatch
+	{
+		const SceneSettingsCatalog::SettingMetadata* setting = nullptr;
+		bool metadataMatched = false;
+	};
+
+	RegisteredVirtualControlMatch FindRegisteredVirtualControlSetting(const char* label)
+	{
+		if (!label)
+			return {};
+		auto* window = ImGui::GetCurrentWindowRead();
+		if (!window || window->IDStack.Size < 2)
+			return {};
+
+		const auto featureShortName = g_currentFeature->GetShortName();
+		const auto parentSeed = window->IDStack[window->IDStack.Size - 2];
+		const auto pushedId = window->IDStack.back();
+		const auto itemId = ImHashStr(label, 0, pushedId);
+		const SceneSettingsCatalog::VirtualAggregateControlMetadata* match = nullptr;
+		for (const auto& control : SceneSettingsCatalog::GetVirtualAggregateControls()) {
+			if (control.featureShortName != featureShortName ||
+				ImHashStr(control.pushId.data(), control.pushId.size(), parentSeed) != pushedId ||
+				ImHashStr(control.itemLabel.data(), control.itemLabel.size(), pushedId) != itemId)
+				continue;
+			if (match)
+				return { nullptr, true };
+			match = &control;
+		}
+		return { match ? FindActiveAggregateSetting(*match) : nullptr, match != nullptr };
+	}
+
+	const SceneSettingsCatalog::SettingMetadata* FindVirtualControlSetting(
+		const char* label, bool choiceLabelsOnly)
+	{
+		const auto registered = FindRegisteredVirtualControlSetting(label);
+		if (registered.metadataMatched)
+			return registered.setting;
+		return FindUniqueActiveSettingForLabel(label, choiceLabelsOnly);
+	}
+
+	const SceneSettingsCatalog::SettingMetadata* FindControlSetting(
+		const char* label, const void* valueAddress, bool choiceLabelsOnly = false)
 	{
 		if (!g_sceneSettingsActive || !g_currentFeature)
 			return nullptr;
@@ -61,38 +284,88 @@ namespace
 		if (!settingAddress)
 			settingAddress = valueAddress;
 		auto* setting = SceneSettingsCatalog::FindSettingForControl(g_currentFeature, settingAddress);
-		if (!setting || !SceneSettingsManager::IsSceneSettingAllowed(
+		if (!setting)
+			return FindVirtualControlSetting(label, choiceLabelsOnly);
+		if (!SceneSettingsManager::IsSceneSettingAllowed(
 				setting->featureShortName, setting->settingPath, setting->settingKey))
 			return nullptr;
-
-		auto* sceneManager = SceneSettingsManager::GetSingleton();
-		if (!sceneManager->IsActiveSceneSetting(setting->featureShortName, setting->settingPath, setting->settingKey))
-			return nullptr;
-
-		return setting;
+		if (setting->aggregateSemantic == SceneSettingsCatalog::AggregateSemantic::None)
+			return IsActiveSceneSetting(*setting) ? setting : nullptr;
+		return FindActiveAggregateSetting(*setting);
 	}
 
 	void DrawSceneSettingTooltip()
 	{
-		if (auto tooltip = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"%s",
-				T("feature.scene_manager.controlled_tooltip",
-					"Controlled by active scene settings. Disable Scene Specific Settings for this feature to edit this setting."));
+		const ImGuiLastItemData lastItem = GImGui->LastItemData;
+		const bool previousAllow = g_allowSceneSettingTooltip;
+		g_allowSceneSettingTooltip = true;
+		{
+			if (auto tooltip = Util::HoverTooltipWrapper()) {
+				ImGui::Text(
+					"%s",
+					T("feature.scene_manager.controlled_tooltip",
+						"Disable Scene Specific Settings to edit this setting."));
+			}
 		}
+		g_allowSceneSettingTooltip = previousAllow;
+		GImGui->LastItemData = lastItem;
+	}
+
+	void FinishControlledItem()
+	{
+		CaptureControlledItem();
+		if (!g_sceneControlledGroupStack.empty()) {
+			g_sceneControlledGroupStack.back() = true;
+			return;
+		}
+		DrawSceneSettingTooltip();
 	}
 
 	template <class Draw>
-	bool DrawControl(const char*, const void* valueAddress, Draw draw)
+	bool DrawControl(const char* label, const void* valueAddress, Draw draw)
 	{
-		if (!FindControlSetting(valueAddress))
+		if (g_controlDetourDepth > 0)
+			return draw();
+		ClearControlledItem();
+		if (!FindControlSetting(label, valueAddress))
 			return draw();
 
 		ImGui::BeginDisabled();
-		draw();
+		{
+			ControlDetourScope detourScope;
+			draw();
+		}
 		ImGui::EndDisabled();
-		DrawSceneSettingTooltip();
+		FinishControlledItem();
 		return false;
+	}
+
+	void BeginGroupDetour()
+	{
+		g_beginGroup();
+		if (g_sceneSettingsActive)
+			g_sceneControlledGroupStack.push_back(false);
+	}
+
+	void EndGroupDetour()
+	{
+		g_endGroup();
+		if (!g_sceneSettingsActive || g_sceneControlledGroupStack.empty())
+			return;
+		const bool controlled = g_sceneControlledGroupStack.back();
+		g_sceneControlledGroupStack.pop_back();
+		if (!controlled) {
+			ClearControlledItem();
+			return;
+		}
+		FinishControlledItem();
+	}
+
+	bool IsItemHoveredDetour(ImGuiHoveredFlags flags)
+	{
+		if (!g_allowSceneSettingTooltip && g_sceneSettingsActive && IsControlledItem())
+			return false;
+		return g_isItemHovered(flags);
 	}
 
 	template <class Target>
@@ -104,6 +377,24 @@ namespace
 	bool CheckboxDetour(const char* label, bool* value)
 	{
 		return DrawControl(label, value, [&] { return g_checkbox(label, value); });
+	}
+
+	bool ButtonDetour(const char* label, const ImVec2& size)
+	{
+		if (g_controlDetourDepth > 0)
+			return g_button(label, size);
+		ClearControlledItem();
+		if (!FindControlSetting(label, nullptr, true))
+			return g_button(label, size);
+
+		ImGui::BeginDisabled();
+		{
+			ControlDetourScope detourScope;
+			g_button(label, size);
+		}
+		ImGui::EndDisabled();
+		FinishControlledItem();
+		return false;
 	}
 
 	bool CheckboxFlagsIntDetour(const char* label, int* flags, int flagsValue)
@@ -146,9 +437,53 @@ namespace
 		return DrawControl(label, value, [&] { return g_dragFloat(label, value, speed, min, max, format, flags); });
 	}
 
+	bool DragFloat2Detour(const char* label, float* value, float speed, float min, float max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_dragFloat2(label, value, speed, min, max, format, flags); });
+	}
+
+	bool DragFloat3Detour(const char* label, float* value, float speed, float min, float max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_dragFloat3(label, value, speed, min, max, format, flags); });
+	}
+
+	bool DragFloat4Detour(const char* label, float* value, float speed, float min, float max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_dragFloat4(label, value, speed, min, max, format, flags); });
+	}
+
 	bool DragIntDetour(const char* label, int* value, float speed, int min, int max, const char* format, ImGuiSliderFlags flags)
 	{
 		return DrawControl(label, value, [&] { return g_dragInt(label, value, speed, min, max, format, flags); });
+	}
+
+	bool DragInt2Detour(const char* label, int* value, float speed, int min, int max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_dragInt2(label, value, speed, min, max, format, flags); });
+	}
+
+	bool DragInt3Detour(const char* label, int* value, float speed, int min, int max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_dragInt3(label, value, speed, min, max, format, flags); });
+	}
+
+	bool DragInt4Detour(const char* label, int* value, float speed, int min, int max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_dragInt4(label, value, speed, min, max, format, flags); });
+	}
+
+	bool DragScalarDetour(const char* label, ImGuiDataType dataType, void* value, float speed,
+		const void* min, const void* max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value,
+			[&] { return g_dragScalar(label, dataType, value, speed, min, max, format, flags); });
+	}
+
+	bool DragScalarNDetour(const char* label, ImGuiDataType dataType, void* value, int components,
+		float speed, const void* min, const void* max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value,
+			[&] { return g_dragScalarN(label, dataType, value, components, speed, min, max, format, flags); });
 	}
 
 	bool SliderFloatDetour(const char* label, float* value, float min, float max, const char* format, ImGuiSliderFlags flags)
@@ -156,9 +491,53 @@ namespace
 		return DrawControl(label, value, [&] { return g_sliderFloat(label, value, min, max, format, flags); });
 	}
 
+	bool SliderFloat2Detour(const char* label, float* value, float min, float max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_sliderFloat2(label, value, min, max, format, flags); });
+	}
+
+	bool SliderFloat3Detour(const char* label, float* value, float min, float max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_sliderFloat3(label, value, min, max, format, flags); });
+	}
+
+	bool SliderFloat4Detour(const char* label, float* value, float min, float max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_sliderFloat4(label, value, min, max, format, flags); });
+	}
+
 	bool SliderIntDetour(const char* label, int* value, int min, int max, const char* format, ImGuiSliderFlags flags)
 	{
 		return DrawControl(label, value, [&] { return g_sliderInt(label, value, min, max, format, flags); });
+	}
+
+	bool SliderInt2Detour(const char* label, int* value, int min, int max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_sliderInt2(label, value, min, max, format, flags); });
+	}
+
+	bool SliderInt3Detour(const char* label, int* value, int min, int max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_sliderInt3(label, value, min, max, format, flags); });
+	}
+
+	bool SliderInt4Detour(const char* label, int* value, int min, int max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_sliderInt4(label, value, min, max, format, flags); });
+	}
+
+	bool SliderScalarDetour(const char* label, ImGuiDataType dataType, void* value,
+		const void* min, const void* max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value,
+			[&] { return g_sliderScalar(label, dataType, value, min, max, format, flags); });
+	}
+
+	bool SliderScalarNDetour(const char* label, ImGuiDataType dataType, void* value, int components,
+		const void* min, const void* max, const char* format, ImGuiSliderFlags flags)
+	{
+		return DrawControl(label, value,
+			[&] { return g_sliderScalarN(label, dataType, value, components, min, max, format, flags); });
 	}
 
 	bool SliderAngleDetour(const char* label, float* value, float minDegrees, float maxDegrees,
@@ -180,9 +559,53 @@ namespace
 		return DrawControl(label, value, [&] { return g_inputFloat(label, value, step, stepFast, format, flags); });
 	}
 
+	bool InputFloat2Detour(const char* label, float* value, const char* format, ImGuiInputTextFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_inputFloat2(label, value, format, flags); });
+	}
+
+	bool InputFloat3Detour(const char* label, float* value, const char* format, ImGuiInputTextFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_inputFloat3(label, value, format, flags); });
+	}
+
+	bool InputFloat4Detour(const char* label, float* value, const char* format, ImGuiInputTextFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_inputFloat4(label, value, format, flags); });
+	}
+
 	bool InputIntDetour(const char* label, int* value, int step, int stepFast, ImGuiInputTextFlags flags)
 	{
 		return DrawControl(label, value, [&] { return g_inputInt(label, value, step, stepFast, flags); });
+	}
+
+	bool InputInt2Detour(const char* label, int* value, ImGuiInputTextFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_inputInt2(label, value, flags); });
+	}
+
+	bool InputInt3Detour(const char* label, int* value, ImGuiInputTextFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_inputInt3(label, value, flags); });
+	}
+
+	bool InputInt4Detour(const char* label, int* value, ImGuiInputTextFlags flags)
+	{
+		return DrawControl(label, value, [&] { return g_inputInt4(label, value, flags); });
+	}
+
+	bool InputScalarDetour(const char* label, ImGuiDataType dataType, void* value,
+		const void* step, const void* stepFast, const char* format, ImGuiInputTextFlags flags)
+	{
+		return DrawControl(label, value,
+			[&] { return g_inputScalar(label, dataType, value, step, stepFast, format, flags); });
+	}
+
+	bool InputScalarNDetour(const char* label, ImGuiDataType dataType, void* value, int components,
+		const void* step, const void* stepFast, const char* format, ImGuiInputTextFlags flags)
+	{
+		return DrawControl(label, value,
+			[&] { return g_inputScalarN(label, dataType, value, components, step, stepFast, format, flags); });
 	}
 
 	bool ColorEdit3Detour(const char* label, float* color, ImGuiColorEditFlags flags)
@@ -197,15 +620,22 @@ namespace
 
 	bool BeginComboDetour(const char* label, const char* previewValue, ImGuiComboFlags flags)
 	{
-		if (!FindControlSetting(nullptr))
+		if (g_controlDetourDepth > 0)
+			return g_beginCombo(label, previewValue, flags);
+		ClearControlledItem();
+		if (!FindControlSetting(label, nullptr))
 			return g_beginCombo(label, previewValue, flags);
 
 		ImGui::BeginDisabled();
-		bool opened = g_beginCombo(label, previewValue, flags);
+		bool opened = false;
+		{
+			ControlDetourScope detourScope;
+			opened = g_beginCombo(label, previewValue, flags);
+		}
 		if (opened)
 			ImGui::EndCombo();
 		ImGui::EndDisabled();
-		DrawSceneSettingTooltip();
+		FinishControlledItem();
 		return false;
 	}
 }
@@ -216,14 +646,25 @@ namespace SceneSettingsUIHooks
 		previousFeature(g_currentFeature),
 		previousEnabled(g_sceneSettingsActive)
 	{
+		g_sceneControlFrames.push_back({ g_sceneControlledItem, std::move(g_sceneControlledGroupStack) });
+		g_sceneControlledGroupStack.clear();
 		g_currentFeature = enabled ? feature : nullptr;
 		g_sceneSettingsActive = enabled && feature != nullptr;
+		ClearControlledItem();
 	}
 
 	FeatureDrawGuard::~FeatureDrawGuard()
 	{
 		if (g_sceneSettingsActive && g_currentFeature)
 			SceneSettingsManager::GetSingleton()->CaptureExternalFeatureChanges(g_currentFeature);
+		if (!g_sceneControlFrames.empty()) {
+			g_sceneControlledItem = g_sceneControlFrames.back().item;
+			g_sceneControlledGroupStack = std::move(g_sceneControlFrames.back().groups);
+			g_sceneControlFrames.pop_back();
+		} else {
+			ClearControlledItem();
+			g_sceneControlledGroupStack.clear();
+		}
 		g_currentFeature = previousFeature;
 		g_sceneSettingsActive = previousEnabled;
 	}
@@ -248,6 +689,7 @@ namespace SceneSettingsUIHooks
 
 		bool attached =
 			Attach(g_checkbox, CheckboxDetour) &&
+			Attach(g_button, ButtonDetour) &&
 			Attach(g_checkboxFlagsInt, CheckboxFlagsIntDetour) &&
 			Attach(g_checkboxFlagsUInt, CheckboxFlagsUIntDetour) &&
 			Attach(g_radioButtonInt, RadioButtonIntDetour) &&
@@ -256,16 +698,43 @@ namespace SceneSettingsUIHooks
 			Attach(g_comboString, ComboStringDetour) &&
 			Attach(g_comboGetter, ComboGetterDetour) &&
 			Attach(g_dragFloat, DragFloatDetour) &&
+			Attach(g_dragFloat2, DragFloat2Detour) &&
+			Attach(g_dragFloat3, DragFloat3Detour) &&
+			Attach(g_dragFloat4, DragFloat4Detour) &&
 			Attach(g_dragInt, DragIntDetour) &&
+			Attach(g_dragInt2, DragInt2Detour) &&
+			Attach(g_dragInt3, DragInt3Detour) &&
+			Attach(g_dragInt4, DragInt4Detour) &&
+			Attach(g_dragScalar, DragScalarDetour) &&
+			Attach(g_dragScalarN, DragScalarNDetour) &&
 			Attach(g_sliderFloat, SliderFloatDetour) &&
+			Attach(g_sliderFloat2, SliderFloat2Detour) &&
+			Attach(g_sliderFloat3, SliderFloat3Detour) &&
+			Attach(g_sliderFloat4, SliderFloat4Detour) &&
 			Attach(g_sliderInt, SliderIntDetour) &&
+			Attach(g_sliderInt2, SliderInt2Detour) &&
+			Attach(g_sliderInt3, SliderInt3Detour) &&
+			Attach(g_sliderInt4, SliderInt4Detour) &&
+			Attach(g_sliderScalar, SliderScalarDetour) &&
+			Attach(g_sliderScalarN, SliderScalarNDetour) &&
 			Attach(g_sliderAngle, SliderAngleDetour) &&
 			Attach(g_percentageSlider, PercentageSliderDetour) &&
 			Attach(g_inputFloat, InputFloatDetour) &&
+			Attach(g_inputFloat2, InputFloat2Detour) &&
+			Attach(g_inputFloat3, InputFloat3Detour) &&
+			Attach(g_inputFloat4, InputFloat4Detour) &&
 			Attach(g_inputInt, InputIntDetour) &&
+			Attach(g_inputInt2, InputInt2Detour) &&
+			Attach(g_inputInt3, InputInt3Detour) &&
+			Attach(g_inputInt4, InputInt4Detour) &&
+			Attach(g_inputScalar, InputScalarDetour) &&
+			Attach(g_inputScalarN, InputScalarNDetour) &&
 			Attach(g_colorEdit3, ColorEdit3Detour) &&
 			Attach(g_colorEdit4, ColorEdit4Detour) &&
-			Attach(g_beginCombo, BeginComboDetour);
+			Attach(g_beginCombo, BeginComboDetour) &&
+			Attach(g_beginGroup, BeginGroupDetour) &&
+			Attach(g_endGroup, EndGroupDetour) &&
+			Attach(g_isItemHovered, IsItemHoveredDetour);
 
 		if (!attached) {
 			DetourTransactionAbort();

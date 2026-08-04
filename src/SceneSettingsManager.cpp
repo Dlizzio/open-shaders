@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -24,6 +25,15 @@
 
 namespace
 {
+	using SceneSettingControlType = SceneSettingsManager::SettingControlType;
+	using ManagerSettingDescriptor = SceneSettingsManager::SettingDescriptor;
+	struct CatalogSceneSettingUpdate
+	{
+		std::vector<std::string> settingPath;
+		std::string key;
+		json value;
+	};
+
 	SceneSettingsManager* sceneSettingsManagerSingleton = nullptr;
 }
 
@@ -53,6 +63,11 @@ namespace
 	constexpr const char* kMetadataDescriptionKey = "description";
 	constexpr std::string_view kSceneSettingDisplaySeparator = " / ";
 	constexpr std::string_view kImGuiIdSeparator = "##";
+
+	bool IsSceneSettingPrimitive(const json& value)
+	{
+		return value.is_boolean() || value.is_number_integer() || value.is_number_float() || value.is_string();
+	}
 
 	bool IsEntryListSceneType(SceneSettingsManager::SceneType type)
 	{
@@ -231,7 +246,7 @@ namespace
 
 	bool IsSceneSettingPathWrapper(std::string_view token)
 	{
-		return token == "settings" || token == "ppsettings";
+		return token == "settings";
 	}
 
 	std::string NormalizeSceneSettingAddressToken(std::string_view token)
@@ -325,8 +340,17 @@ namespace
 		while (start < path.size()) {
 			auto end = path.find('/', start);
 			auto part = path.substr(start, end == std::string_view::npos ? path.size() - start : end - start);
-			if (!part.empty())
-				parts.emplace_back(part);
+			if (!part.empty()) {
+				std::string decoded(part);
+				for (size_t pos = 0; (pos = decoded.find('~', pos)) != std::string::npos;) {
+					if (pos + 1 < decoded.size() && decoded[pos + 1] == '1')
+						decoded.replace(pos, 2, "/");
+					else if (pos + 1 < decoded.size() && decoded[pos + 1] == '0')
+						decoded.replace(pos, 2, "~");
+					++pos;
+				}
+				parts.push_back(std::move(decoded));
+			}
 			if (end == std::string_view::npos)
 				break;
 			start = end + 1;
@@ -340,19 +364,270 @@ namespace
 		for (const auto& part : path) {
 			if (!result.empty())
 				result += '/';
-			result += part;
+			for (const char ch : part) {
+				if (ch == '~')
+					result += "~0";
+				else if (ch == '/')
+					result += "~1";
+				else
+					result += ch;
+			}
 		}
 		return result;
+	}
+
+	bool IsStructuralDisplayPart(std::string_view part)
+	{
+		std::string normalized;
+		normalized.reserve(part.size());
+		for (const char ch : part)
+			if (std::isalnum(static_cast<unsigned char>(ch)))
+				normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+		return normalized == "settings" || normalized == "values" || normalized == "baseline";
+	}
+
+	std::string NormalizeDisplayPart(std::string part)
+	{
+		part = StripImGuiId(part);
+		if (!part.empty() && std::all_of(part.begin(), part.end(), [](const char ch) {
+				return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+			}))
+			part = Util::PrettifyIdentifier(part);
+		return part;
 	}
 
 	std::vector<std::string> GetCatalogDisplayPath(const SceneSettingsCatalog::SettingMetadata& setting)
 	{
 		auto parts = SplitCatalogPath(setting.displayPath.empty() ? setting.settingPath : setting.displayPath);
-		if (!setting.displayCategoryKey.empty() && !parts.empty())
-			parts.front() = T(setting.displayCategoryKey, parts.front().c_str());
-		for (auto& part : parts)
-			part = StripImGuiId(part);
+		const auto keys = SplitCatalogPath(setting.displayPathKeys);
+		for (size_t index = 0; index < parts.size(); ++index) {
+			if (index < keys.size() && keys[index] != "-")
+				parts[index] = T(keys[index], parts[index].c_str());
+			parts[index] = NormalizeDisplayPart(std::move(parts[index]));
+		}
+		std::erase_if(parts, [](const auto& part) { return part.empty() || IsStructuralDisplayPart(part); });
 		return parts;
+	}
+
+	std::vector<std::string> GetCatalogSelectorPath(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		auto parts = SplitCatalogPath(setting.selectorPath);
+		auto keys = SplitCatalogPath(setting.selectorPathKeys);
+		for (size_t i = 0; i < parts.size(); ++i) {
+			if (i < keys.size() && keys[i] != "-")
+				parts[i] = T(keys[i], parts[i].c_str());
+			parts[i] = StripImGuiId(parts[i]);
+		}
+		return parts;
+	}
+
+	bool EqualDisplayText(std::string_view lhs, std::string_view rhs)
+	{
+		return std::ranges::equal(lhs, rhs, [](const char a, const char b) {
+			return std::tolower(static_cast<unsigned char>(a)) ==
+			       std::tolower(static_cast<unsigned char>(b));
+		});
+	}
+
+	std::vector<std::string> GetCatalogContextPath(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		auto parts = GetCatalogDisplayPath(setting);
+		auto selectorDefaults = GetCatalogSelectorPath(setting);
+		auto rawParts = SplitCatalogPath(setting.displayPath.empty() ? setting.settingPath : setting.displayPath);
+		const auto rawKeys = SplitCatalogPath(setting.displayPathKeys);
+		const auto settingParts = SplitCatalogPath(setting.settingPath);
+		const bool hasSelector = !selectorDefaults.empty();
+		size_t rawOffset = 0;
+		for (auto& part : selectorDefaults)
+			part = NormalizeDisplayPart(std::move(part));
+		while (!parts.empty() && !selectorDefaults.empty() &&
+		       EqualDisplayText(parts.front(), selectorDefaults.front())) {
+			parts.erase(parts.begin());
+			selectorDefaults.erase(selectorDefaults.begin());
+			++rawOffset;
+		}
+		if (hasSelector) {
+			while (rawOffset < rawParts.size() && IsStructuralDisplayPart(rawParts[rawOffset]))
+				++rawOffset;
+			if (!parts.empty() && rawOffset < rawParts.size() && rawOffset < settingParts.size()) {
+				const bool translated = rawOffset < rawKeys.size() && rawKeys[rawOffset] != "-";
+				auto rawPart = NormalizeDisplayPart(rawParts[rawOffset]);
+				auto settingPart = NormalizeDisplayPart(settingParts[rawOffset]);
+				if (!translated && EqualDisplayText(parts.front(), rawPart) &&
+					EqualDisplayText(rawPart, settingPart))
+					parts.erase(parts.begin());
+			}
+		}
+		return parts;
+	}
+
+	std::string GetCatalogLeafDisplayName(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		if (setting.displayName.empty() && setting.displayNameKey.empty() &&
+			setting.editorSemantic == SceneSettingsCatalog::EditorSemantic::Choice)
+			return T("feature.scene_manager.selection", "Selection");
+
+		auto displayName = StripImGuiId(setting.displayName.empty() ? setting.settingKey : setting.displayName);
+		if (!setting.displayNameKey.empty())
+			displayName = StripImGuiId(T(setting.displayNameKey, displayName.c_str()));
+		return displayName;
+	}
+
+	double GetCatalogNumericDisplayScale(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		return std::isfinite(setting.displayScale) && setting.displayScale > 0.0 ?
+		           setting.displayScale :
+		           1.0;
+	}
+
+	bool ConvertCatalogNumericStoredToDisplay(const SceneSettingsCatalog::SettingMetadata& setting,
+		double storedValue, double& displayValue)
+	{
+		if (setting.editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric ||
+			!std::isfinite(storedValue))
+			return false;
+
+		double transformedValue = storedValue;
+		switch (setting.numericTransform) {
+		case SceneSettingsCatalog::NumericTransform::Identity:
+			break;
+		case SceneSettingsCatalog::NumericTransform::Log2:
+			if (storedValue <= 0.0)
+				return false;
+			transformedValue = std::log2(storedValue);
+			break;
+		default:
+			return false;
+		}
+
+		displayValue = transformedValue * GetCatalogNumericDisplayScale(setting);
+		return std::isfinite(displayValue);
+	}
+
+	bool ConvertCatalogNumericDisplayToStored(const SceneSettingsCatalog::SettingMetadata& setting,
+		double displayValue, double& storedValue)
+	{
+		if (setting.editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric ||
+			!std::isfinite(displayValue))
+			return false;
+
+		const double transformedValue = displayValue / GetCatalogNumericDisplayScale(setting);
+		if (!std::isfinite(transformedValue))
+			return false;
+		switch (setting.numericTransform) {
+		case SceneSettingsCatalog::NumericTransform::Identity:
+			storedValue = transformedValue;
+			break;
+		case SceneSettingsCatalog::NumericTransform::Log2:
+			storedValue = std::exp2(transformedValue);
+			break;
+		default:
+			return false;
+		}
+		return std::isfinite(storedValue) &&
+		       (setting.numericTransform != SceneSettingsCatalog::NumericTransform::Log2 || storedValue > 0.0);
+	}
+
+	const SceneSettingsCatalog::SettingMetadata* FindStoredAllComponent(
+		const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		for (const auto& candidate : SceneSettingsCatalog::GetSettings())
+			if (candidate.featureShortName == setting.featureShortName &&
+				candidate.serializedPath == setting.serializedPath &&
+				candidate.serializedKey == setting.serializedKey &&
+				candidate.aggregateSemantic == setting.aggregateSemantic &&
+				candidate.aggregateStart == setting.aggregateStart &&
+				candidate.aggregateCount == setting.aggregateCount && candidate.aggregateAll)
+				return &candidate;
+		return nullptr;
+	}
+
+	SceneSettingControlType GetCatalogControlType(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		using enum SceneSettingsCatalog::AggregateSemantic;
+		switch (setting.aggregateSemantic) {
+		case Color:
+			return FindStoredAllComponent(setting) ?
+			           SceneSettingControlType::Numeric :
+			           SceneSettingControlType::Color;
+		case Numeric:
+			return SceneSettingControlType::Numeric;
+		default:
+			return SceneSettingControlType::Scalar;
+		}
+	}
+
+	std::string GetSettingComponentName(SceneSettingControlType type, std::int8_t componentIndex)
+	{
+		if (componentIndex < 0 || componentIndex > 3)
+			return {};
+		if (type == SceneSettingControlType::Color) {
+			switch (componentIndex) {
+			case 0:
+				return T("feature.scene_manager.channel.red", "R");
+			case 1:
+				return T("feature.scene_manager.channel.green", "G");
+			case 2:
+				return T("feature.scene_manager.channel.blue", "B");
+			default:
+				return T("feature.scene_manager.channel.alpha", "A");
+			}
+		}
+		switch (componentIndex) {
+		case 0:
+			return T("feature.scene_manager.channel.x", "X");
+		case 1:
+			return T("feature.scene_manager.channel.y", "Y");
+		case 2:
+			return T("feature.scene_manager.channel.z", "Z");
+		default:
+			return T("feature.scene_manager.channel.w", "W");
+		}
+	}
+
+	std::string GetCatalogComponentDisplayName(
+		const SceneSettingsCatalog::SettingMetadata& setting, SceneSettingControlType controlType)
+	{
+		auto displayName = StripImGuiId(setting.componentDisplayName);
+		if (!setting.componentDisplayNameKey.empty())
+			displayName = StripImGuiId(T(setting.componentDisplayNameKey, displayName.c_str()));
+		if (!displayName.empty())
+			return displayName;
+		if (setting.aggregateAll)
+			return T("feature.scene_manager.channel.all", "All");
+
+		auto componentIndex = static_cast<std::int8_t>(setting.aggregateCount > 1 ?
+		                                                     setting.serializedComponent - setting.aggregateStart :
+		                                                     setting.serializedComponent);
+		const auto* storedAll = FindStoredAllComponent(setting);
+		if (storedAll && storedAll->serializedComponent < setting.serializedComponent)
+			--componentIndex;
+		const auto componentType = setting.aggregateSemantic == SceneSettingsCatalog::AggregateSemantic::Color ?
+		                               SceneSettingControlType::Color :
+		                               controlType;
+		return GetSettingComponentName(componentType, componentIndex);
+	}
+
+	SceneSettingsManager::SettingControlInfo MakeSettingControlInfo(
+		const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		SceneSettingsManager::SettingControlInfo info;
+		info.controlType = GetCatalogControlType(setting);
+		info.settingPath = info.controlType == SceneSettingControlType::Scalar ?
+		                       SplitCatalogPath(setting.settingPath) :
+		                       SplitCatalogPath(setting.serializedPath);
+		info.settingKey = std::string(info.controlType == SceneSettingControlType::Scalar ?
+		                                  setting.settingKey : setting.serializedKey);
+		info.displayName = GetCatalogLeafDisplayName(setting);
+		info.componentDisplayName = GetCatalogComponentDisplayName(setting, info.controlType);
+		info.displayPath = GetCatalogContextPath(setting);
+		info.componentIndex = setting.serializedComponent;
+		info.aggregateAll = setting.aggregateAll;
+		if (info.controlType != SceneSettingControlType::Scalar) {
+			info.componentStart = setting.aggregateStart;
+			info.componentCount = setting.aggregateCount;
+		}
+		return info;
 	}
 
 	bool IsCatalogValueCompatible(const SceneSettingsCatalog::SettingMetadata& setting, const json& value)
@@ -436,6 +711,67 @@ namespace
 		return node->is_object() ? node : nullptr;
 	}
 
+	json* GetObjectAtPath(json& data, const std::vector<std::string>& path)
+	{
+		return const_cast<json*>(GetObjectAtPath(std::as_const(data), path));
+	}
+
+	bool ParseCatalogArrayIndex(std::string_view value, size_t& index)
+	{
+		const auto result = std::from_chars(value.data(), value.data() + value.size(), index);
+		return result.ec == std::errc{} && result.ptr == value.data() + value.size();
+	}
+
+	template <class Json>
+	Json* GetCatalogNodeAtPath(Json& data, const std::vector<std::string>& path)
+	{
+		auto* node = &data;
+		for (const auto& segment : path) {
+			if (node->is_object()) {
+				auto it = node->find(segment);
+				if (it == node->end())
+					return nullptr;
+				node = &*it;
+				continue;
+			}
+
+			size_t index = 0;
+			if (!node->is_array() || !ParseCatalogArrayIndex(segment, index) || index >= node->size())
+				return nullptr;
+			node = &(*node)[index];
+		}
+		return node;
+	}
+
+	template <class Json>
+	Json* GetCatalogSerializedValue(Json& data, const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		auto* parent = GetCatalogNodeAtPath(data, SplitCatalogPath(setting.serializedPath));
+		if (!parent)
+			return nullptr;
+
+		Json* value = nullptr;
+		if (parent->is_object()) {
+			auto valueIt = parent->find(setting.serializedKey);
+			if (valueIt == parent->end())
+				return nullptr;
+			value = &*valueIt;
+		} else {
+			size_t index = 0;
+			if (!parent->is_array() || !ParseCatalogArrayIndex(setting.serializedKey, index) ||
+				index >= parent->size())
+				return nullptr;
+			value = &(*parent)[index];
+		}
+
+		if (setting.serializedComponent < 0)
+			return value;
+		const auto component = static_cast<size_t>(setting.serializedComponent);
+		if (!value->is_array() || component >= value->size())
+			return nullptr;
+		return &(*value)[component];
+	}
+
 	void CollectOverwriteEntries(const json& data, const std::vector<std::string>& settingPath,
 		const std::function<void(const std::vector<std::string>&, const std::string&, const json&)>& callback)
 	{
@@ -445,7 +781,7 @@ namespace
 		for (const auto& [key, value] : data.items()) {
 			if (IsSceneMetadataKey(key))
 				continue;
-			if (Feature::IsSceneSettingPrimitive(value)) {
+			if (IsSceneSettingPrimitive(value)) {
 				callback(settingPath, key, value);
 
 				continue;
@@ -497,6 +833,59 @@ namespace
 			!SceneSettingsCatalog::HasFlag(setting->flags, SceneSettingsCatalog::SettingFlag::Transitionable))
 			return nullptr;
 		return setting;
+	}
+
+	bool GetCatalogSettingValue(
+		Feature& feature, const SceneSettingsCatalog::SettingMetadata& setting, json& value)
+	{
+		json featureSettings;
+		feature.SaveSettings(featureSettings);
+		if (!featureSettings.is_object())
+			return false;
+		const auto* serializedValue = GetCatalogSerializedValue(featureSettings, setting);
+		if (!serializedValue || !IsSceneSettingPrimitive(*serializedValue))
+			return false;
+		value = *serializedValue;
+		return true;
+	}
+
+	bool ApplyCatalogSceneSettings(Feature& feature, const std::vector<CatalogSceneSettingUpdate>& updates)
+	{
+		if (updates.empty())
+			return true;
+
+		json originalSettings;
+		feature.SaveSettings(originalSettings);
+		if (!originalSettings.is_object())
+			return false;
+
+		auto candidateSettings = originalSettings;
+		for (const auto& update : updates) {
+			auto* setting = FindAllowedCatalogSetting(
+				feature.GetShortName(), update.settingPath, update.key);
+			auto* currentValue = setting ? GetCatalogSerializedValue(candidateSettings, *setting) : nullptr;
+			if (!currentValue || !IsSceneSettingPrimitive(*currentValue) ||
+				!IsSceneSettingPrimitive(update.value) ||
+				!IsCompatibleSceneSettingValue(*currentValue, update.value))
+				return false;
+			*currentValue = update.value;
+		}
+
+		try {
+			feature.LoadSettings(candidateSettings);
+			return true;
+		} catch (const std::exception& e) {
+			logger::warn("[SceneSettings] Failed to apply settings for {}: {}", feature.GetShortName(), e.what());
+		} catch (...) {
+			logger::warn("[SceneSettings] Failed to apply settings for {}", feature.GetShortName());
+		}
+
+		try {
+			feature.LoadSettings(originalSettings);
+		} catch (...) {
+			logger::error("[SceneSettings] Failed to restore {} after an apply error", feature.GetShortName());
+		}
+		return false;
 	}
 
 	bool CatalogHasSceneSettings(std::string_view featureShortName, bool transitionableOnly)
@@ -726,64 +1115,146 @@ std::string SceneSettingsManager::GetFeatureDisplayName(const std::string& featu
 	return feature ? feature->GetDisplayName() : featureShortName;
 }
 
-std::vector<SceneSettingDescriptor> SceneSettingsManager::GetFeatureSceneSettings(const std::string& featureShortName)
+namespace
 {
-	auto* feature = Feature::FindFeatureByShortName(featureShortName);
-	if (!feature)
-		return {};
-
-	SceneLayerGuard guard(*GetSingleton());
-	json featureSettings;
-	feature->SaveSettings(featureSettings);
-	if (!featureSettings.is_object())
-		return {};
-
-	std::vector<SceneSettingDescriptor> descriptors;
-	for (const auto& setting : SceneSettingsCatalog::GetSettings()) {
-		if (setting.featureShortName != featureShortName || !IsCatalogSettingAllowedByPolicy(setting))
-			continue;
-
-		auto settingPath = SplitCatalogPath(setting.settingPath);
-		if (setting.settingKey.empty())
-			continue;
-
-		const auto* settingsObject = GetObjectAtPath(featureSettings, settingPath);
-		if (!settingsObject)
-			continue;
-		auto valueIt = settingsObject->find(std::string(setting.settingKey));
-		if (valueIt == settingsObject->end() || !Feature::IsSceneSettingPrimitive(*valueIt) ||
-			!IsCatalogValueCompatible(setting, *valueIt))
-			continue;
-
-		std::string displayName = StripImGuiId(setting.displayName.empty() ? setting.settingKey : setting.displayName);
-		if (!setting.displayNameKey.empty())
-			displayName = StripImGuiId(T(setting.displayNameKey, displayName.c_str()));
-		descriptors.push_back({
-			.settingPath = std::move(settingPath),
-			.key = std::string(setting.settingKey),
-			.displayName = std::move(displayName),
-			.displayPath = GetCatalogDisplayPath(setting),
-			.value = *valueIt,
-		});
+	std::string GetDescriptorLabel(const SceneSettingsManager::SettingControlInfo& info,
+		std::string_view component = {})
+	{
+		std::string leaf = info.displayName;
+		if (!component.empty())
+			leaf += std::format(" ({})", component);
+		if (info.displayPath.empty())
+			return leaf;
+		return std::format("{}: {}", JoinDisplayParts(info.displayPath, {}), leaf);
 	}
 
-	std::sort(descriptors.begin(), descriptors.end(), [](const auto& lhs, const auto& rhs) {
-		return std::tie(lhs.displayPath, lhs.settingPath, lhs.displayName, lhs.key) <
-		       std::tie(rhs.displayPath, rhs.settingPath, rhs.displayName, rhs.key);
-	});
+	ManagerSettingDescriptor MakeScalarDescriptor(
+		const SceneSettingsCatalog::SettingMetadata& setting, const json& value)
+	{
+		auto info = MakeSettingControlInfo(setting);
+		const auto physicalPath = SplitCatalogPath(setting.settingPath);
+		const auto physicalKey = std::string(setting.settingKey);
+		const auto component = info.controlType == SceneSettingControlType::Scalar ?
+		                           std::string() : info.componentDisplayName;
+		return {
+			.settingPath = physicalPath,
+			.key = physicalKey,
+			.displayName = GetDescriptorLabel(info, component),
+			.displayPath = GetCatalogSelectorPath(setting),
+			.value = value,
+			.controlType = SceneSettingControlType::Scalar,
+			.members = { { physicalPath, physicalKey, info.componentDisplayName, value,
+				setting.serializedComponent, info.aggregateAll } },
+		};
+	}
 
-	return descriptors;
+	using DescriptorGroupKey = std::tuple<std::string, std::string, std::int8_t, std::uint8_t, SceneSettingControlType>;
+
+	std::vector<ManagerSettingDescriptor> CollectFeatureSceneSettings(
+		const std::string& featureShortName, bool transitionableOnly)
+	{
+		auto* feature = Feature::FindFeatureByShortName(featureShortName);
+		if (!feature)
+			return {};
+
+		SceneSettingsManager::SceneLayerGuard guard(*SceneSettingsManager::GetSingleton());
+		json featureSettings;
+		feature->SaveSettings(featureSettings);
+		if (!featureSettings.is_object())
+			return {};
+
+		std::vector<ManagerSettingDescriptor> descriptors;
+		std::map<DescriptorGroupKey, ManagerSettingDescriptor> groups;
+		for (const auto& setting : SceneSettingsCatalog::GetSettings()) {
+			if (setting.featureShortName != featureShortName || !IsCatalogSettingAllowedByPolicy(setting))
+				continue;
+			if (transitionableOnly &&
+				!SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::Transitionable))
+				continue;
+
+			auto settingPath = SplitCatalogPath(setting.settingPath);
+			if (setting.settingKey.empty())
+				continue;
+
+			const auto* value = GetCatalogSerializedValue(featureSettings, setting);
+			if (!value || !IsSceneSettingPrimitive(*value) ||
+				!IsCatalogValueCompatible(setting, *value) ||
+				(transitionableOnly && !IsNumericValue(*value)))
+				continue;
+
+			auto info = MakeSettingControlInfo(setting);
+			if (info.controlType == SceneSettingControlType::Scalar || info.componentCount < 2) {
+				descriptors.push_back(MakeScalarDescriptor(setting, *value));
+				continue;
+			}
+
+			DescriptorGroupKey key{
+				std::string(setting.serializedPath), std::string(setting.serializedKey),
+				info.componentStart, info.componentCount, info.controlType
+			};
+			auto [groupIt, inserted] = groups.try_emplace(key);
+			auto& descriptor = groupIt->second;
+			if (inserted) {
+				descriptor.settingPath = settingPath;
+				descriptor.key = std::string(setting.settingKey);
+				descriptor.displayName = GetDescriptorLabel(info);
+				descriptor.displayPath = GetCatalogSelectorPath(setting);
+				descriptor.value = *value;
+				descriptor.controlType = info.controlType;
+			}
+			descriptor.members.push_back({
+				std::move(settingPath), std::string(setting.settingKey), info.componentDisplayName,
+				*value, setting.serializedComponent, info.aggregateAll
+			});
+		}
+
+		for (auto& [key, descriptor] : groups) {
+			const auto expectedCount = std::get<3>(key);
+			const auto expectedStart = std::get<2>(key);
+			std::sort(descriptor.members.begin(), descriptor.members.end(), [](const auto& lhs, const auto& rhs) {
+				return lhs.componentIndex < rhs.componentIndex;
+			});
+			bool complete = descriptor.members.size() == expectedCount;
+			for (size_t index = 0; complete && index < descriptor.members.size(); ++index)
+				complete = descriptor.members[index].componentIndex == expectedStart + index;
+			if (complete) {
+				descriptors.push_back(std::move(descriptor));
+				continue;
+			}
+			for (const auto& member : descriptor.members) {
+				auto* setting = FindAllowedCatalogSetting(
+					featureShortName, member.settingPath, member.key, transitionableOnly);
+				if (setting)
+					descriptors.push_back(MakeScalarDescriptor(*setting, member.value));
+			}
+		}
+
+		std::sort(descriptors.begin(), descriptors.end(), [](const auto& lhs, const auto& rhs) {
+			return std::tie(lhs.displayPath, lhs.displayName, lhs.settingPath, lhs.key) <
+			       std::tie(rhs.displayPath, rhs.displayName, rhs.settingPath, rhs.key);
+		});
+		return descriptors;
+	}
 }
 
-std::vector<SceneSettingDescriptor> SceneSettingsManager::GetTransitionableSceneSettings(const std::string& featureShortName)
+std::vector<SceneSettingsManager::SettingDescriptor> SceneSettingsManager::GetFeatureSceneSettings(const std::string& featureShortName)
 {
-	auto descriptors = GetFeatureSceneSettings(featureShortName);
-	std::erase_if(descriptors, [&](const auto& descriptor) {
-		return !FindAllowedCatalogSetting(
-				   featureShortName, descriptor.settingPath, descriptor.key, true) ||
-		       !IsNumericValue(descriptor.value);
-	});
-	return descriptors;
+	return CollectFeatureSceneSettings(featureShortName, false);
+}
+
+std::vector<SceneSettingsManager::SettingDescriptor> SceneSettingsManager::GetTransitionableSceneSettings(const std::string& featureShortName)
+{
+	return CollectFeatureSceneSettings(featureShortName, true);
+}
+
+bool SceneSettingsManager::GetSettingControlInfo(const SettingEntry& entry, SettingControlInfo& info)
+{
+	auto* setting = FindAllowedCatalogSetting(
+		entry.featureShortName, entry.settingPath, entry.settingKey);
+	if (!setting)
+		return false;
+	info = MakeSettingControlInfo(*setting);
+	return true;
 }
 
 std::string SceneSettingsManager::GetSettingDisplayName(const std::string& settingKey)
@@ -796,10 +1267,11 @@ static std::string GetSceneSettingDisplayName(const std::string& featureShortNam
 {
 	auto* setting = FindAllowedCatalogSetting(featureShortName, settingPath, settingKey);
 	if (setting) {
-		auto displayName = StripImGuiId(setting->displayName.empty() ? setting->settingKey : setting->displayName);
-		if (!setting->displayNameKey.empty())
-			displayName = StripImGuiId(T(setting->displayNameKey, displayName.c_str()));
-		return JoinDisplayParts(GetCatalogDisplayPath(*setting), displayName);
+		auto info = MakeSettingControlInfo(*setting);
+		auto displayName = info.displayName;
+		if (info.controlType != SceneSettingControlType::Scalar && !info.componentDisplayName.empty())
+			displayName += std::format(" ({})", info.componentDisplayName);
+		return JoinDisplayParts(info.displayPath, displayName);
 	}
 	return SceneSettingsManager::GetSettingDisplayName(settingKey);
 }
@@ -807,7 +1279,8 @@ static std::string GetSceneSettingDisplayName(const std::string& featureShortNam
 json SceneSettingsManager::GetFeatureSettingValue(const std::string& featureShortName,
 	const std::vector<std::string>& settingPath, const std::string& settingKey)
 {
-	if (!FindAllowedCatalogSetting(featureShortName, settingPath, settingKey))
+	auto* setting = FindAllowedCatalogSetting(featureShortName, settingPath, settingKey);
+	if (!setting)
 		return {};
 	auto* feature = Feature::FindFeatureByShortName(featureShortName);
 	if (!feature)
@@ -815,7 +1288,7 @@ json SceneSettingsManager::GetFeatureSettingValue(const std::string& featureShor
 
 	SceneLayerGuard guard(*GetSingleton());
 	json value;
-	if (feature->GetSceneSettingValue(settingPath, settingKey, value) && Feature::IsSceneSettingPrimitive(value))
+	if (GetCatalogSettingValue(*feature, *setting, value))
 		return value;
 	return {};
 }
@@ -865,10 +1338,25 @@ double SceneSettingsManager::GetNumericDisplayScale(const SettingEntry& entry)
 {
 	auto* setting = FindAllowedCatalogSetting(
 		entry.featureShortName, entry.settingPath, entry.settingKey);
-	if (!setting || setting->editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric ||
-		!std::isfinite(setting->displayScale) || setting->displayScale <= 0.0)
+	if (!setting || setting->editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric)
 		return 1.0;
-	return setting->displayScale;
+	return GetCatalogNumericDisplayScale(*setting);
+}
+
+bool SceneSettingsManager::GetNumericDisplayValue(
+	const SettingEntry& entry, double storedValue, double& displayValue)
+{
+	auto* setting = FindAllowedCatalogSetting(
+		entry.featureShortName, entry.settingPath, entry.settingKey);
+	return setting && ConvertCatalogNumericStoredToDisplay(*setting, storedValue, displayValue);
+}
+
+bool SceneSettingsManager::GetNumericStoredValue(
+	const SettingEntry& entry, double displayValue, double& storedValue)
+{
+	auto* setting = FindAllowedCatalogSetting(
+		entry.featureShortName, entry.settingPath, entry.settingKey);
+	return setting && ConvertCatalogNumericDisplayToStored(*setting, displayValue, storedValue);
 }
 
 size_t SceneSettingsManager::GetSettingChoiceCount(const SettingEntry& entry)
@@ -899,12 +1387,11 @@ bool SceneSettingsManager::GetSettingChoice(
 using FeatureSettingsCache = std::map<std::string, json>;
 
 static bool GetFeatureSettingValueForValidation(Feature& feature, const std::string& featureShortName,
-	const std::vector<std::string>& settingPath, const std::string& settingKey,
+	const SceneSettingsCatalog::SettingMetadata& setting,
 	FeatureSettingsCache* featureSettingsCache, json& featureValue)
 {
 	if (!featureSettingsCache)
-		return feature.GetSceneSettingValue(settingPath, settingKey, featureValue) &&
-		       Feature::IsSceneSettingPrimitive(featureValue);
+		return GetCatalogSettingValue(feature, setting, featureValue);
 
 	auto [snapshotIt, inserted] = featureSettingsCache->try_emplace(featureShortName);
 	if (inserted) {
@@ -922,13 +1409,10 @@ static bool GetFeatureSettingValueForValidation(Feature& feature, const std::str
 	if (!snapshotIt->second.is_object())
 		return false;
 
-	const auto* settingsObject = GetObjectAtPath(snapshotIt->second, settingPath);
-	if (!settingsObject)
+	const auto* value = GetCatalogSerializedValue(snapshotIt->second, setting);
+	if (!value || !IsSceneSettingPrimitive(*value))
 		return false;
-	auto valueIt = settingsObject->find(settingKey);
-	if (valueIt == settingsObject->end() || !Feature::IsSceneSettingPrimitive(*valueIt))
-		return false;
-	featureValue = *valueIt;
+	featureValue = *value;
 	return true;
 }
 
@@ -941,6 +1425,13 @@ static bool IsSceneSettingValueAllowed(const json& featureValue,
 
 	if (value.is_number() && !std::isfinite(value.get<double>()))
 		return false;
+	if (setting.editorSemantic == SceneSettingsCatalog::EditorSemantic::Numeric) {
+		double ignoredDisplayValue = 0.0;
+		if (!featureValue.is_number() || !value.is_number() ||
+			!ConvertCatalogNumericStoredToDisplay(setting, featureValue.get<double>(), ignoredDisplayValue) ||
+			!ConvertCatalogNumericStoredToDisplay(setting, value.get<double>(), ignoredDisplayValue))
+			return false;
+	}
 
 	if (SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::BooleanControl)) {
 		if (setting.valueType == SceneSettingsCatalog::ValueType::Integer &&
@@ -959,16 +1450,10 @@ static bool IsSceneSettingValueAllowed(const json& featureValue,
 			return false;
 	}
 
-	if (setting.hasNumericBounds && value.is_number()) {
-		const auto numericValue = value.get<double>();
-		if (numericValue < setting.minimumValue || numericValue > setting.maximumValue)
-			return false;
-	}
-
 	if (requireNumeric && (!SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::Transitionable) ||
 		                      !IsNumericValue(featureValue) || !IsNumericValue(value) || !std::isfinite(value.get<float>())))
 		return false;
-	if (!requireNumeric && !Feature::IsSceneSettingPrimitive(value))
+	if (!requireNumeric && !IsSceneSettingPrimitive(value))
 		return false;
 
 	return IsCompatibleSceneSettingValue(featureValue, value);
@@ -999,12 +1484,40 @@ static bool ValidateSceneSettingEntry(std::string_view context, const std::strin
 	}
 
 	json featureValue;
-	if (!GetFeatureSettingValueForValidation(*feature, featureShortName, settingPath, settingKey,
+	if (!GetFeatureSettingValueForValidation(*feature, featureShortName, *setting,
 			featureSettingsCache, featureValue) ||
 		!IsSceneSettingValueAllowed(featureValue, *setting, value, requireNumeric)) {
 		logger::warn("[SceneSettings] {} entry {} is not a supported scene-manager setting",
 			context, GetSettingLogName(featureShortName, settingPath, settingKey));
 		return false;
+	}
+	return true;
+}
+
+static bool ApplyEntryValueUpdates(std::string_view context,
+	std::vector<SceneSettingsManager::SettingEntry>& entries,
+	std::span<const SceneSettingsManager::EntryValueUpdate> updates,
+	bool requireNumeric, bool& userEntriesChanged)
+{
+	if (updates.empty())
+		return false;
+
+	std::set<size_t> updatedIndices;
+	FeatureSettingsCache featureSettingsCache;
+	for (const auto& update : updates) {
+		if (update.index >= entries.size() || !updatedIndices.insert(update.index).second)
+			return false;
+		const auto& entry = entries[update.index];
+		if (!ValidateSceneSettingEntry(context, entry.featureShortName, entry.settingPath,
+				entry.settingKey, update.value, requireNumeric, &featureSettingsCache))
+			return false;
+	}
+
+	userEntriesChanged = false;
+	for (const auto& update : updates) {
+		auto& entry = entries[update.index];
+		entry.value = update.value;
+		userEntriesChanged |= entry.source == SceneSettingsManager::EntrySource::User;
 	}
 	return true;
 }
@@ -1467,35 +1980,23 @@ void SceneSettingsManager::ExportWeatherUserSettingsToOverwrites(RE::FormID weat
 
 void SceneSettingsManager::UpdateEntryValue(SceneType type, size_t index, const json& newValue, bool deferSave)
 {
+	const EntryValueUpdate update{ index, newValue };
+	UpdateEntryValues(type, std::span{ &update, 1 }, deferSave);
+}
+
+void SceneSettingsManager::UpdateEntryValues(
+	SceneType type, std::span<const EntryValueUpdate> updates, bool deferSave)
+{
 	if (!IsEntryListSceneType(type))
 		return;
 	auto& vec = GetEntriesMut(type);
-	if (index >= vec.size())
-		return;
-	const auto& entry = vec[index];
 	const bool requireNumeric = type == SceneType::TimeOfDay;
-	if (!ValidateSceneSettingEntry(
-			GetSceneTypeName(type), entry.featureShortName, entry.settingPath, entry.settingKey, newValue, requireNumeric))
+	bool userEntriesChanged = false;
+	if (!ApplyEntryValueUpdates(
+			GetSceneTypeName(type), vec, updates, requireNumeric, userEntriesChanged))
 		return;
 
-	if (requireNumeric) {
-		if (!IsNumericValue(newValue)) {
-			logger::warn("[SceneSettings] UpdateEntryValue: rejecting non-float TOD value for {}",
-				GetSettingLogName(vec[index].featureShortName, vec[index].settingPath, vec[index].settingKey));
-			return;
-		}
-		float floatVal = newValue.get<float>();
-		if (!std::isfinite(floatVal)) {
-			logger::warn("[SceneSettings] UpdateEntryValue: rejecting non-finite TOD value ({}) for {}",
-				floatVal, GetSettingLogName(vec[index].featureShortName, vec[index].settingPath, vec[index].settingKey));
-			return;
-		}
-		vec[index].value = newValue;
-	} else {
-		vec[index].value = newValue;
-	}
-
-	if (vec[index].source == EntrySource::User) {
+	if (userEntriesChanged) {
 		MarkEntryListUserSettingsModified(type);
 		if (deferSave)
 			MarkDeferredSceneChanges();
@@ -1638,14 +2139,15 @@ void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature)
 	for (const auto& [address, appliedValue] : appliedSettings) {
 		if (address.featureShortName != featureShortName)
 			continue;
-		const auto* settingsObject = GetObjectAtPath(featureSettings, address.settingPath);
-		if (!settingsObject)
+		auto* setting = FindAllowedCatalogSetting(
+			address.featureShortName, address.settingPath, address.settingKey);
+		if (!setting)
 			continue;
-		auto valueIt = settingsObject->find(address.settingKey);
-		if (valueIt == settingsObject->end() || !Feature::IsSceneSettingPrimitive(*valueIt) ||
-			!IsCompatibleSceneSettingValue(appliedValue, *valueIt) || appliedValue == *valueIt)
+		const auto* value = GetCatalogSerializedValue(featureSettings, *setting);
+		if (!value || !IsSceneSettingPrimitive(*value) ||
+			!IsCompatibleSceneSettingValue(appliedValue, *value) || appliedValue == *value)
 			continue;
-		changedSettings.emplace_back(address, *valueIt);
+		changedSettings.emplace_back(address, *value);
 	}
 
 	if (changedSettings.empty())
@@ -1935,11 +2437,11 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 			continue;
 		}
 
-		std::vector<SceneSettingUpdate> updates;
+		std::vector<CatalogSceneSettingUpdate> updates;
 		updates.reserve(pending.size());
 		for (const auto& update : pending)
 			updates.push_back({ update.address.settingPath, update.address.settingKey, update.value });
-		if (!feature->ApplySceneSettings(updates)) {
+		if (!ApplyCatalogSceneSettings(*feature, updates)) {
 			auto& failure = applyFailures[featureShortName];
 			if (failure.signature != signature) {
 				failure.signature = signature;
@@ -1971,7 +2473,7 @@ void SceneSettingsManager::RestoreAppliedSettings()
 	struct PendingRestore
 	{
 		SettingAddress address;
-		SceneSettingUpdate update;
+		CatalogSceneSettingUpdate update;
 	};
 
 	std::map<std::string, std::vector<PendingRestore>> updatesByFeature;
@@ -1995,11 +2497,11 @@ void SceneSettingsManager::RestoreAppliedSettings()
 			continue;
 		}
 
-		std::vector<SceneSettingUpdate> updates;
+		std::vector<CatalogSceneSettingUpdate> updates;
 		updates.reserve(pending.size());
 		for (const auto& item : pending)
 			updates.push_back(item.update);
-		if (!feature->ApplySceneSettings(updates)) {
+		if (!ApplyCatalogSceneSettings(*feature, updates)) {
 			if (restoreFailureWarnings.insert(featureShortName).second)
 				logger::warn("[SceneSettings] Failed to restore base settings for {}", featureShortName);
 			restoreRetryAfter[featureShortName] = now + kApplyRetryDelay;
@@ -2190,15 +2692,16 @@ std::optional<float> SceneSettingsManager::ResolveWeatherFloat(const SettingAddr
 
 json SceneSettingsManager::GetBaselineValue(const SettingAddress& address)
 {
-	if (!FindAllowedCatalogSetting(address.featureShortName, address.settingPath, address.settingKey))
+	auto* setting = FindAllowedCatalogSetting(
+		address.featureShortName, address.settingPath, address.settingKey);
+	if (!setting)
 		return {};
 	if (auto it = baselineSettings.find(address); it != baselineSettings.end())
 		return it->second;
 
 	auto* feature = Feature::FindFeatureByShortName(address.featureShortName);
 	json value;
-	if (!feature || !feature->GetSceneSettingValue(address.settingPath, address.settingKey, value) ||
-		!Feature::IsSceneSettingPrimitive(value))
+	if (!feature || !GetCatalogSettingValue(*feature, *setting, value))
 		return {};
 	baselineSettings[address] = value;
 	return value;
@@ -3106,18 +3609,24 @@ void SceneSettingsManager::TogglePauseWeatherEntry(RE::FormID weatherId, size_t 
 
 void SceneSettingsManager::UpdateWeatherEntryValue(RE::FormID weatherId, size_t index, const json& newValue, bool deferSave)
 {
+	const EntryValueUpdate update{ index, newValue };
+	UpdateWeatherEntryValues(weatherId, std::span{ &update, 1 }, deferSave);
+}
+
+void SceneSettingsManager::UpdateWeatherEntryValues(
+	RE::FormID weatherId, std::span<const EntryValueUpdate> updates, bool deferSave)
+{
 	if (!TryEnsureWeatherDataLoaded())
 		return;
 
 	auto it = weatherSceneConfigs.find(weatherId);
-	if (it == weatherSceneConfigs.end() || index >= it->second.entries.size())
+	if (it == weatherSceneConfigs.end())
 		return;
-	const auto& entry = it->second.entries[index];
-	if (!ValidateSceneSettingEntry(
-			"Weather", entry.featureShortName, entry.settingPath, entry.settingKey, newValue, true))
+	bool userEntriesChanged = false;
+	if (!ApplyEntryValueUpdates(
+			"Weather", it->second.entries, updates, true, userEntriesChanged))
 		return;
-	it->second.entries[index].value = newValue;
-	if (it->second.entries[index].source == EntrySource::User) {
+	if (userEntriesChanged) {
 		PrepareWeatherUserSettingsMutation(weatherId, false);
 		if (deferSave)
 			MarkDeferredSceneChanges();
@@ -3287,7 +3796,7 @@ std::optional<json> SceneSettingsManager::ResolveLocationLowerValue(LocationTarg
 	std::string_view formKey, const SettingAddress& address, EntrySource selectedSource)
 {
 	auto baseline = GetBaselineValue(address);
-	if (!Feature::IsSceneSettingPrimitive(baseline))
+	if (!IsSceneSettingPrimitive(baseline))
 		return std::nullopt;
 
 	ResolvedSettingMap lowerLayers;
@@ -3321,7 +3830,7 @@ std::optional<json> SceneSettingsManager::ResolveLocationLowerValue(LocationTarg
 		return std::nullopt;
 
 	if (auto valueIt = lowerLayers.find(address); valueIt != lowerLayers.end() &&
-		Feature::IsSceneSettingPrimitive(valueIt->second))
+		IsSceneSettingPrimitive(valueIt->second))
 		return valueIt->second;
 	return baseline;
 }
@@ -3454,15 +3963,21 @@ void SceneSettingsManager::TogglePauseLocationEntry(LocationTargetType type, con
 void SceneSettingsManager::UpdateLocationEntryValue(LocationTargetType type, const std::string& formKey,
 	size_t index, const json& newValue, bool deferSave)
 {
+	const EntryValueUpdate update{ index, newValue };
+	UpdateLocationEntryValues(type, formKey, std::span{ &update, 1 }, deferSave);
+}
+
+void SceneSettingsManager::UpdateLocationEntryValues(LocationTargetType type, const std::string& formKey,
+	std::span<const EntryValueUpdate> updates, bool deferSave)
+{
 	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	if (it == locationSceneConfigs.end() || index >= it->second.entries.size())
+	if (it == locationSceneConfigs.end())
 		return;
-	const auto& entry = it->second.entries[index];
-	if (!ValidateSceneSettingEntry(
-			"Location", entry.featureShortName, entry.settingPath, entry.settingKey, newValue, false))
+	bool userEntriesChanged = false;
+	if (!ApplyEntryValueUpdates(
+			"Location", it->second.entries, updates, false, userEntriesChanged))
 		return;
-	it->second.entries[index].value = newValue;
-	if (it->second.entries[index].source == EntrySource::User) {
+	if (userEntriesChanged) {
 		PrepareLocationUserSettingsMutation(type, formKey, false);
 		if (deferSave)
 			MarkDeferredSceneChanges();

@@ -1717,6 +1717,8 @@ namespace Util
 		float windowRounding;
 		float windowBackgroundAlpha;
 		float contentAlpha;
+		bool centerOnSource = false;
+		bool keepOpenOnSourcePress = false;
 	};
 
 	class FlyoutScope

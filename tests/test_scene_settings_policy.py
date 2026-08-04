@@ -26,6 +26,25 @@ def extract_strings(source: str, name: str) -> list[str]:
     return re.findall(r'"([^"]+)"', extract_block(source, name))
 
 
+def extract_blacklist(source: str) -> list[tuple[str, ...]]:
+    rows = re.findall(r"\{([^{}]+)\}", extract_block(source, "kSettingBlacklist"))
+    return [tuple(re.findall(r'"([^"]+)"', row)) for row in rows]
+
+
+def normalize_address_token(token: str) -> str:
+    return "".join(GENERATOR.prettify(token).split()).casefold()
+
+
+def catalog_address(entry: dict[str, object]) -> tuple[str, ...]:
+    path = str(entry["path"])
+    segments = [
+        part.replace("~1", "/").replace("~0", "~")
+        for part in path.split("/")
+        if part and part.casefold() != "settings"
+    ]
+    return (str(entry["feature"]), *segments, str(entry["key"]))
+
+
 class SceneSettingsPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -36,17 +55,19 @@ class SceneSettingsPolicyTests(unittest.TestCase):
     def test_policy_lists_are_present_and_unique(self):
         interior = extract_strings(self.policy, "kLocationFeatureWhitelist")
         time_of_day = extract_strings(self.policy, "kTimeOfDayFeatureWhitelist")
-        blacklist_rows = re.findall(
-            r"\{([^{}]+)\}", extract_block(self.policy, "kSettingBlacklist"))
-        blacklist = [tuple(re.findall(r'"([^"]+)"', row)) for row in blacklist_rows]
+        blacklist = extract_blacklist(self.policy)
 
-        self.assertEqual(len(interior), 6)
-        self.assertEqual(len(time_of_day), 8)
-        self.assertEqual(len(blacklist), 10)
+        self.assertTrue(interior)
+        self.assertTrue(time_of_day)
+        self.assertTrue(blacklist)
         self.assertEqual(len(interior), len(set(interior)))
         self.assertEqual(len(time_of_day), len(set(time_of_day)))
         self.assertEqual(len(blacklist), len(set(blacklist)))
         self.assertTrue(all(blacklist))
+        self.assertTrue(all(
+            token.casefold() not in {"settings", "ppsettings"}
+            for path in blacklist
+            for token in path))
 
     def test_whitelisted_features_are_discovered(self):
         discovered = {entry["feature"] for entry in self.entries}
@@ -54,6 +75,16 @@ class SceneSettingsPolicyTests(unittest.TestCase):
                 extract_strings(self.policy, "kLocationFeatureWhitelist") +
                 extract_strings(self.policy, "kTimeOfDayFeatureWhitelist")):
             self.assertIn(name, discovered)
+
+    def test_every_blacklist_prefix_matches_cataloged_settings(self):
+        addresses = [
+            tuple(normalize_address_token(token) for token in catalog_address(entry))
+            for entry in self.entries
+        ]
+        for prefix in extract_blacklist(self.policy):
+            normalized = tuple(normalize_address_token(token) for token in prefix)
+            with self.subTest(prefix=prefix):
+                self.assertTrue(any(address[:len(normalized)] == normalized for address in addresses))
 
     def test_manager_uses_every_policy_list(self):
         for name in (

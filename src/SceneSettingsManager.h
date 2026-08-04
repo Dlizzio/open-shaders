@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -130,6 +131,13 @@ public:
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count;  // Which period this entry belongs to (TimeOfDay only)
 	};
 
+	/// One indexed value in an atomic scene-setting update.
+	struct EntryValueUpdate
+	{
+		size_t index;
+		json value;
+	};
+
 	// --- Generic Entry Management (scene-type agnostic) ---
 
 	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
@@ -142,6 +150,8 @@ public:
 	void RemoveSetting(SceneType type, size_t index);
 	void TogglePauseEntry(SceneType type, size_t index);
 	void UpdateEntryValue(SceneType type, size_t index, const json& newValue, bool deferSave = false);
+	/// Validate and update a group of entries before applying any of them.
+	void UpdateEntryValues(SceneType type, std::span<const EntryValueUpdate> updates, bool deferSave = false);
 	void CommitSceneSettingChanges();
 
 	/// Revert an entry's value to its originalValue (captured at creation).
@@ -247,11 +257,60 @@ public:
 	/// Get the localized display name for a feature.
 	static std::string GetFeatureDisplayName(const std::string& featureShortName);
 
+	/// Logical Scene Manager editor represented by one or more persisted values.
+	enum class SettingControlType : std::uint8_t
+	{
+		Scalar,
+		Numeric,
+		Color,
+	};
+
+	/// One persisted primitive belonging to a logical Scene Manager control.
+	struct SettingDescriptorMember
+	{
+		std::vector<std::string> settingPath;
+		std::string key;
+		std::string componentDisplayName;
+		json value;
+		std::int8_t componentIndex = -1;
+		bool aggregateAll = false;
+	};
+
+	/// Catalog-backed setting presented in the add-setting dialog.
+	struct SettingDescriptor
+	{
+		std::vector<std::string> settingPath;
+		std::string key;
+		std::string displayName;
+		std::vector<std::string> displayPath;
+		json value;
+		SettingControlType controlType = SettingControlType::Scalar;
+		std::vector<SettingDescriptorMember> members;
+	};
+
 	/// Get scene-safe setting descriptors for a feature.
-	static std::vector<SceneSettingDescriptor> GetFeatureSceneSettings(const std::string& featureShortName);
+	static std::vector<SettingDescriptor> GetFeatureSceneSettings(const std::string& featureShortName);
 
 	/// Get scene-safe float setting descriptors for time/weather blending.
-	static std::vector<SceneSettingDescriptor> GetTransitionableSceneSettings(const std::string& featureShortName);
+	static std::vector<SettingDescriptor> GetTransitionableSceneSettings(const std::string& featureShortName);
+
+	/// Logical-control metadata for one stored scene-setting entry.
+	struct SettingControlInfo
+	{
+		std::vector<std::string> settingPath;
+		std::string settingKey;
+		std::string displayName;
+		std::string componentDisplayName;
+		std::vector<std::string> displayPath;
+		SettingControlType controlType = SettingControlType::Scalar;
+		std::int8_t componentIndex = -1;
+		std::int8_t componentStart = -1;
+		std::uint8_t componentCount = 0;
+		bool aggregateAll = false;
+	};
+
+	/// Get the logical ImGui control represented by a scalar scene setting.
+	static bool GetSettingControlInfo(const SettingEntry& entry, SettingControlInfo& info);
 
 	/// Get a UI-friendly display label for a setting key.
 	static std::string GetSettingDisplayName(const std::string& settingKey);
@@ -274,6 +333,10 @@ public:
 	static bool IsInvertedDisplaySetting(const SettingEntry& entry);
 	static bool GetNumericBounds(const SettingEntry& entry, double& minimum, double& maximum);
 	static double GetNumericDisplayScale(const SettingEntry& entry);
+	/// Convert a raw stored numeric setting value to its Scene Manager display value.
+	static bool GetNumericDisplayValue(const SettingEntry& entry, double storedValue, double& displayValue);
+	/// Convert a Scene Manager display value to its raw stored numeric setting value.
+	static bool GetNumericStoredValue(const SettingEntry& entry, double displayValue, double& storedValue);
 	static size_t GetSettingChoiceCount(const SettingEntry& entry);
 	static bool GetSettingChoice(const SettingEntry& entry, size_t index, std::int64_t& value, std::string& displayName);
 
@@ -296,6 +359,9 @@ public:
 	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
 	void TogglePauseWeatherEntry(RE::FormID weatherId, size_t index);
 	void UpdateWeatherEntryValue(RE::FormID weatherId, size_t index, const json& newValue, bool deferSave = false);
+	/// Validate and update weather entries as one mutation.
+	void UpdateWeatherEntryValues(
+		RE::FormID weatherId, std::span<const EntryValueUpdate> updates, bool deferSave = false);
 	void RevertWeatherEntryToDefault(RE::FormID weatherId, size_t index);
 	bool HasWeatherEntryForPeriod(RE::FormID weatherId, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
@@ -344,6 +410,9 @@ public:
 	void TogglePauseLocationEntry(LocationTargetType type, const std::string& formKey, size_t index);
 	void UpdateLocationEntryValue(LocationTargetType type, const std::string& formKey, size_t index,
 		const json& newValue, bool deferSave = false);
+	/// Validate and update location entries as one mutation.
+	void UpdateLocationEntryValues(LocationTargetType type, const std::string& formKey,
+		std::span<const EntryValueUpdate> updates, bool deferSave = false);
 	void RevertLocationEntryToDefault(LocationTargetType type, const std::string& formKey, size_t index);
 	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,

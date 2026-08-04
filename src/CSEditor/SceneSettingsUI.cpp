@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <string_view>
 #include <tuple>
@@ -37,8 +38,10 @@ namespace SceneSettingsUI
 	constexpr float kSceneFlyoutPaddingX = 6.0f;
 	constexpr float kSceneFlyoutPaddingY = 2.0f;
 	constexpr float kSceneFlyoutBackgroundAlpha = 0.95f;
+	constexpr float kChannelSelectorWidthEm = 4.0f;
 	constexpr const char* kEllipsis = "...";
 	constexpr std::string_view kDisplaySeparator = " / ";
+	static int s_addDialogFrame = -1;
 	using SettingEntry = SceneSettingsManager::SettingEntry;
 
 	static size_t PreviousUtf8CodepointBoundary(std::string_view text, size_t offset)
@@ -86,7 +89,9 @@ namespace SceneSettingsUI
 			{ kSceneFlyoutPaddingX * scale, kSceneFlyoutPaddingY * scale },
 			kSceneFlyoutRounding * scale,
 			kSceneFlyoutBackgroundAlpha,
-			1.0f
+			1.0f,
+			true,
+			true
 		};
 	}
 
@@ -208,7 +213,20 @@ namespace SceneSettingsUI
 		if (displayParts.size() > 1)
 			parentPath.assign(std::next(displayParts.begin()), displayParts.end());
 
-		return { entry.featureShortName, entry.settingPath, entry.settingKey, settingName, categoryName, parentPath };
+		return { entry.featureShortName, entry.settingPath, entry.settingKey, settingName, categoryName, parentPath, -1 };
+	}
+
+	static SettingId MakeControlSettingId(const SettingEntry& entry,
+		const SceneSettingsManager::SettingControlInfo& info, const std::string& rootCategoryName)
+	{
+		std::string categoryName = info.displayPath.empty() ? rootCategoryName : info.displayPath.front();
+		std::vector<std::string> parentPath;
+		if (info.displayPath.size() > 1)
+			parentPath.assign(std::next(info.displayPath.begin()), info.displayPath.end());
+		return {
+			entry.featureShortName, info.settingPath, info.settingKey, info.displayName,
+			std::move(categoryName), std::move(parentPath), info.componentStart
+		};
 	}
 
 	SourceGroup BuildSourceGroup(const std::vector<SceneSettingsManager::SettingEntry>& entries,
@@ -223,6 +241,74 @@ namespace SceneSettingsUI
 			return it->second;
 		};
 
+		using AggregateKey = std::tuple<
+			std::string, std::vector<std::string>, std::string, std::int8_t, std::uint8_t,
+			SceneSettingControlType, EntrySource, int>;
+		struct AggregateCandidate
+		{
+			SceneSettingsManager::SettingControlInfo info;
+			std::map<std::int8_t, std::vector<size_t>> components;
+			bool valid = true;
+		};
+		std::map<AggregateKey, AggregateCandidate> candidates;
+		for (size_t idx = 0; idx < entries.size(); ++idx) {
+			const auto& entry = entries[idx];
+			if (filterBySource && entry.source != sourceFilter)
+				continue;
+			if (transitionOnly && !IsTransitionEntry(entry))
+				continue;
+			int period = static_cast<int>(entry.period);
+			if (period < 0)
+				continue;
+			if (period >= kPeriodCount)
+				period = kPeriodlessEntrySlot;
+			SceneSettingsManager::SettingControlInfo info;
+			if (!SceneSettingsManager::GetSettingControlInfo(entry, info) ||
+				info.controlType == SceneSettingControlType::Scalar || info.componentCount < 2)
+				continue;
+			auto [candidateIt, inserted] = candidates.try_emplace(AggregateKey{
+				entry.featureShortName, info.settingPath, info.settingKey,
+				info.componentStart, info.componentCount, info.controlType, entry.source, period
+			});
+			auto& candidate = candidateIt->second;
+			if (inserted) {
+				candidate.info = info;
+			} else if (candidate.info.displayName != info.displayName ||
+				candidate.info.displayPath != info.displayPath) {
+				candidate.valid = false;
+			}
+			candidate.components[info.componentIndex].push_back(idx);
+		}
+
+		std::map<size_t, SettingId> aggregateSettings;
+		for (const auto& [candidateKey, candidate] : candidates) {
+			(void)candidateKey;
+			bool complete = candidate.valid && candidate.components.size() == candidate.info.componentCount;
+			for (size_t component = 0; complete && component < candidate.info.componentCount; ++component)
+				complete = candidate.components.contains(
+					static_cast<std::int8_t>(candidate.info.componentStart + component));
+			std::optional<bool> paused;
+			for (const auto& [componentIndex, indices] : candidate.components) {
+				(void)componentIndex;
+				for (const auto index : indices) {
+					if (!paused)
+						paused = entries[index].paused;
+					else if (*paused != entries[index].paused)
+						complete = false;
+				}
+			}
+			if (!complete)
+				continue;
+			const auto firstIndex = candidate.components.begin()->second.front();
+			const auto setting = MakeControlSettingId(
+				entries[firstIndex], candidate.info, getFeatureDisplayName(entries[firstIndex].featureShortName));
+			for (const auto& [componentIndex, indices] : candidate.components) {
+				(void)componentIndex;
+				for (const auto index : indices)
+					aggregateSettings.emplace(index, setting);
+			}
+		}
+
 		for (size_t idx = 0; idx < entries.size(); ++idx) {
 			const auto& e = entries[idx];
 			if (filterBySource && e.source != sourceFilter)
@@ -234,13 +320,18 @@ namespace SceneSettingsUI
 				continue;
 			if (p >= kPeriodCount)
 				p = kPeriodlessEntrySlot;
-			SettingId setting = MakeSettingId(e, getFeatureDisplayName(e.featureShortName));
+			auto aggregate = aggregateSettings.find(idx);
+			SettingId setting = aggregate != aggregateSettings.end() ?
+			                    aggregate->second :
+			                    MakeSettingId(e, getFeatureDisplayName(e.featureShortName));
 			auto [it, inserted] = group.map.try_emplace(setting);
 			if (inserted) {
 				it->second.fill(SIZE_MAX);
 				group.order.push_back(setting);
 			}
-			it->second[p] = idx;
+			if (it->second[p] == SIZE_MAX)
+				it->second[p] = idx;
+			group.members[setting][p].push_back(idx);
 		}
 		std::sort(group.order.begin(), group.order.end());
 		return group;
@@ -357,12 +448,15 @@ namespace SceneSettingsUI
 		if (!result.deleted)
 			return;
 
-		if (popups && isOverwrite)
+		if (popups && isOverwrite) {
 			RequestOverwriteRowDelete(*popups, entries, indices);
-		else
+			if (flyout)
+				Util::RequestCloseFlyout(*flyout);
+		} else {
 			RemoveIndicesReversed(indices, cb.remove);
-		if (flyout)
-			Util::RequestCloseFlyout(*flyout);
+			if (flyout)
+				Util::CloseFlyout(*flyout);
+		}
 	}
 
 	// --- Feature name resolution by scene type ---
@@ -397,11 +491,45 @@ namespace SceneSettingsUI
 		}
 	}
 
+	static int GetStoredAllMemberIndex(const SceneSettingDescriptor& descriptor)
+	{
+		for (size_t index = 0; index < descriptor.members.size(); ++index)
+			if (descriptor.members[index].aggregateAll)
+				return static_cast<int>(index);
+		return -1;
+	}
+
 	static void CacheSettings(AddSettingState& state, std::vector<SceneSettingDescriptor> settings)
 	{
 		state.cachedSettings = std::move(settings);
 		state.selectedSettings.assign(state.cachedSettings.size(), false);
+		state.selectedMembers.assign(state.cachedSettings.size(), -1);
+		for (size_t index = 0; index < state.cachedSettings.size(); ++index) {
+			const auto storedAll = GetStoredAllMemberIndex(state.cachedSettings[index]);
+			if (storedAll >= 0)
+				state.selectedMembers[index] = storedAll;
+		}
 		RebuildSettingTree(state);
+	}
+
+	static std::string GetDescriptorMemberName(const SceneSettingDescriptor& descriptor, size_t memberIndex)
+	{
+		if (memberIndex >= descriptor.members.size())
+			return {};
+		const auto& name = descriptor.members[memberIndex].componentDisplayName;
+		return name.empty() ? std::to_string(memberIndex + 1) : name;
+	}
+
+	template <class Callback>
+	static void ForEachSelectedDescriptorMember(
+		const SceneSettingDescriptor& descriptor, int selectedMember, Callback&& callback)
+	{
+		if (selectedMember >= 0 && selectedMember < static_cast<int>(descriptor.members.size())) {
+			callback(descriptor.members[selectedMember]);
+			return;
+		}
+		for (const auto& member : descriptor.members)
+			callback(member);
 	}
 
 	static bool IsValidChildIndex(const AddSettingNode& node, int index)
@@ -540,6 +668,7 @@ namespace SceneSettingsUI
 
 	// Core add-setting dialog: renders UI and delegates data ops to callbacks.
 	static void DrawAddDialogCore(AddSettingState& state, Period period, bool addToAllPeriods,
+		bool selectAggregateMember,
 		std::function<std::vector<SceneSettingDescriptor>(const std::string&)> settingsFn,
 		std::function<bool(const std::string&, const std::vector<std::string>&, const std::string&, Period)> isAddedFn,
 		std::function<bool(const std::string&, const std::vector<std::string>&, const std::string&, const json&, Period)> addFn,
@@ -547,6 +676,7 @@ namespace SceneSettingsUI
 	{
 		if (!state.dialogOpen)
 			return;
+		s_addDialogFrame = ImGui::GetFrameCount();
 
 		ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
 		ImGui::SetNextWindowSize(ImVec2(C::Em(C::SCENE_ADD_DIALOG_WIDTH_EM), 0));
@@ -558,6 +688,8 @@ namespace SceneSettingsUI
 			ImGui::End();
 			return;
 		}
+		if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+			ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
 
 		auto displayName = (state.selectedFeatureIdx >= 0 &&
 							   state.selectedFeatureIdx < static_cast<int>(state.cachedFeatureNames.size())) ?
@@ -599,12 +731,17 @@ namespace SceneSettingsUI
 			if (ImGui::BeginChild("##SettingList", ImVec2(-FLT_MIN, C::Em(C::SCENE_ADD_LIST_HEIGHT_EM)), ImGuiChildFlags_Borders)) {
 				ForEachSettingIndex(*visibleNode, [&](size_t i) {
 					const auto& descriptor = state.cachedSettings[i];
-					auto& key = descriptor.key;
-					bool alreadyAdded = IsAddedForTargetPeriods(featureName, descriptor.settingPath, key, period, addToAllPeriods, isAddedFn);
+					const int selectedMember = selectAggregateMember ? state.selectedMembers[i] : -1;
+					bool alreadyAdded = true;
+					ForEachSelectedDescriptorMember(descriptor, selectedMember, [&](const auto& member) {
+						alreadyAdded &= IsAddedForTargetPeriods(featureName, member.settingPath, member.key,
+							period, addToAllPeriods, isAddedFn);
+					});
 
 					auto prettyKey = GetDescriptorDisplayName(descriptor);
 					ImGui::PushID(static_cast<int>(i));
 					if (alreadyAdded) {
+						state.selectedSettings[i] = false;
 						auto _ = Util::DisableGuard(true);
 						bool checked = true;
 						ImGui::Checkbox(prettyKey.c_str(), &checked);
@@ -612,6 +749,33 @@ namespace SceneSettingsUI
 						bool sel = state.selectedSettings[i];
 						if (ImGui::Checkbox(prettyKey.c_str(), &sel))
 							state.selectedSettings[i] = sel;
+					}
+					if (selectAggregateMember && descriptor.controlType != SceneSettingControlType::Scalar &&
+						!descriptor.members.empty()) {
+						const bool hasStoredAll = GetStoredAllMemberIndex(descriptor) >= 0;
+						ImGui::SameLine();
+						ImGui::SetNextItemWidth(C::Em(kChannelSelectorWidthEm));
+						const auto preview = state.selectedMembers[i] < 0 ?
+						                         std::string(T("feature.scene_manager.channel.all", "All")) :
+						                         GetDescriptorMemberName(descriptor, state.selectedMembers[i]);
+						if (ImGui::BeginCombo("##Channel", preview.c_str())) {
+							const bool allSelected = state.selectedMembers[i] < 0;
+							if (!hasStoredAll) {
+								if (ImGui::Selectable(T("feature.scene_manager.channel.all", "All"), allSelected))
+									state.selectedMembers[i] = -1;
+								if (allSelected)
+									ImGui::SetItemDefaultFocus();
+							}
+							for (size_t member = 0; member < descriptor.members.size(); ++member) {
+								auto memberName = GetDescriptorMemberName(descriptor, member);
+								const bool selected = state.selectedMembers[i] == static_cast<int>(member);
+								if (ImGui::Selectable(memberName.c_str(), selected))
+									state.selectedMembers[i] = static_cast<int>(member);
+								if (selected)
+									ImGui::SetItemDefaultFocus();
+							}
+							ImGui::EndCombo();
+						}
 					}
 					ImGui::PopID();
 				});
@@ -635,18 +799,20 @@ namespace SceneSettingsUI
 						if (!state.selectedSettings[i])
 							continue;
 						const auto& descriptor = state.cachedSettings[i];
-						auto& key = descriptor.key;
-						auto currentValue = SceneSettingsManager::GetFeatureSettingValue(featureName, descriptor.settingPath, key);
-						if (currentValue.is_null())
-							currentValue = descriptor.value;
-						if (addToAllPeriods) {
-							for (int p = 0; p < kPeriodCount; ++p)
-								if (!isAddedFn(featureName, descriptor.settingPath, key, static_cast<Period>(p)))
-									added |= addFn(featureName, descriptor.settingPath, key, currentValue, static_cast<Period>(p));
-						} else {
-							if (!isAddedFn(featureName, descriptor.settingPath, key, period))
-								added |= addFn(featureName, descriptor.settingPath, key, currentValue, period);
-						}
+						const int selectedMember = selectAggregateMember ? state.selectedMembers[i] : -1;
+						ForEachSelectedDescriptorMember(descriptor, selectedMember, [&](const auto& member) {
+							auto currentValue = SceneSettingsManager::GetFeatureSettingValue(
+								featureName, member.settingPath, member.key);
+							if (currentValue.is_null())
+								currentValue = member.value;
+							if (addToAllPeriods) {
+								for (int p = 0; p < kPeriodCount; ++p)
+									if (!isAddedFn(featureName, member.settingPath, member.key, static_cast<Period>(p)))
+										added |= addFn(featureName, member.settingPath, member.key, currentValue, static_cast<Period>(p));
+							} else if (!isAddedFn(featureName, member.settingPath, member.key, period)) {
+								added |= addFn(featureName, member.settingPath, member.key, currentValue, period);
+							}
+						});
 					}
 					if (added)
 						commitFn();
@@ -662,6 +828,7 @@ namespace SceneSettingsUI
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		DrawAddDialogCore(state, period, addToAllPeriods,
+			type == SceneType::TimeOfDay,
 			[type](const std::string& feat) { return (type == SceneType::TimeOfDay) ? SceneSettingsManager::GetTransitionableSceneSettings(feat) : SceneSettingsManager::GetFeatureSceneSettings(feat); },
 			[type](const std::string& feat, const std::vector<std::string>& path, const std::string& key, Period p) { return IsAlreadyAdded(type, feat, path, key, p); },
 			[=](const std::string& feat, const std::vector<std::string>& path, const std::string& key, const json& val, Period p) { return manager->AddSetting(type, feat, path, key, val, p, true); },
@@ -672,6 +839,7 @@ namespace SceneSettingsUI
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		DrawAddDialogCore(state, period, addToAllPeriods,
+			true,
 			[](const std::string& feat) { return SceneSettingsManager::GetTransitionableSceneSettings(feat); },
 			[=](const std::string& feat, const std::vector<std::string>& path, const std::string& key, Period p) { return manager->HasWeatherEntryForPeriod(weatherId, feat, path, key, p, EntrySource::User); },
 			[=](const std::string& feat, const std::vector<std::string>& path, const std::string& key, const json&, Period p) { return manager->AddWeatherSetting(weatherId, feat, path, key, p, true); },
@@ -814,24 +982,31 @@ namespace SceneSettingsUI
 			{
 				double minimum = 0.0;
 				double maximum = 0.0;
-				if (!SceneSettingsManager::GetNumericBounds(entry, minimum, maximum)) {
-					ImGui::TextDisabled("%s", T("feature.scene_manager.unsupported_type", "(unsupported type)"));
-					break;
-				}
-				float val = value.is_number() ? value.get<float>() : 0.0f;
+				bool hasBounds = SceneSettingsManager::GetNumericBounds(entry, minimum, maximum);
+				double minimumDisplayValue = 0.0;
+				double maximumDisplayValue = 0.0;
+				hasBounds = hasBounds &&
+				            SceneSettingsManager::GetNumericDisplayValue(entry, minimum, minimumDisplayValue) &&
+				            SceneSettingsManager::GetNumericDisplayValue(entry, maximum, maximumDisplayValue) &&
+				            minimumDisplayValue <= maximumDisplayValue;
+				double displayValue = 0.0;
+				if (!value.is_number() ||
+					!SceneSettingsManager::GetNumericDisplayValue(entry, value.get<double>(), displayValue))
+					displayValue = hasBounds ? minimumDisplayValue : 0.0;
+				float val = static_cast<float>(displayValue);
 				if (!std::isfinite(val))
-					val = static_cast<float>(minimum);
+					val = hasBounds ? static_cast<float>(minimumDisplayValue) : 0.0f;
 				const double displayScale = SceneSettingsManager::GetNumericDisplayScale(entry);
-				val = static_cast<float>(static_cast<double>(val) * displayScale);
-				const float minimumValue = static_cast<float>(minimum * displayScale);
-				const float maximumValue = static_cast<float>(maximum * displayScale);
+				const float minimumValue = hasBounds ? static_cast<float>(minimumDisplayValue) : 0.0f;
+				const float maximumValue = hasBounds ? static_cast<float>(maximumDisplayValue) : 0.0f;
 				const float dragSpeed = static_cast<float>(kSceneFloatDragSpeed * displayScale);
 				ImGui::SetNextItemWidth(inputWidth);
 				if (ImGui::DragFloat("##val", &val, dragSpeed, minimumValue, maximumValue,
-						displayScale == 1.0 ? "%.3f" : "%.1f",
-						ImGuiSliderFlags_AlwaysClamp) && !readOnly)
-					if (std::isfinite(val))
-						updateFn(json(std::clamp(static_cast<double>(val) / displayScale, minimum, maximum)));
+						displayScale == 1.0 ? "%.3f" : "%.1f") && !readOnly) {
+					double storedValue = 0.0;
+					if (SceneSettingsManager::GetNumericStoredValue(entry, val, storedValue))
+						updateFn(json(storedValue));
+				}
 				if (!readOnly && ImGui::IsItemDeactivatedAfterEdit())
 					commitFn();
 			}
@@ -840,16 +1015,14 @@ namespace SceneSettingsUI
 			{
 				double minimum = 0.0;
 				double maximum = 0.0;
-				if (!SceneSettingsManager::GetNumericBounds(entry, minimum, maximum)) {
-					ImGui::TextDisabled("%s", T("feature.scene_manager.unsupported_type", "(unsupported type)"));
-					break;
-				}
+				const bool hasBounds = SceneSettingsManager::GetNumericBounds(entry, minimum, maximum);
 				std::int64_t val = value.get<std::int64_t>();
 				const auto minimumValue = static_cast<std::int64_t>(minimum);
 				const auto maximumValue = static_cast<std::int64_t>(maximum);
 				ImGui::SetNextItemWidth(inputWidth);
 				if (ImGui::DragScalar("##val", ImGuiDataType_S64, &val, kSceneIntDragSpeed,
-						&minimumValue, &maximumValue, "%lld", ImGuiSliderFlags_AlwaysClamp) && !readOnly)
+						hasBounds ? &minimumValue : nullptr,
+						hasBounds ? &maximumValue : nullptr, "%lld") && !readOnly)
 					updateFn(json(val));
 				if (!readOnly && ImGui::IsItemDeactivatedAfterEdit())
 					commitFn();
@@ -876,6 +1049,167 @@ namespace SceneSettingsUI
 		}
 	}
 
+	template <class Update, class Commit>
+	static bool DrawAggregateValueEditorCore(const std::vector<SettingEntry>& entries,
+		const std::vector<size_t>& indices, float inputWidth, bool readOnly, Update&& update, Commit&& commit)
+	{
+		if (indices.size() < 2)
+			return false;
+
+		struct Component
+		{
+			SceneSettingsManager::SettingControlInfo info;
+			std::vector<size_t> entryIndices;
+		};
+		std::map<std::int8_t, Component> components;
+		std::optional<bool> paused;
+		for (const auto index : indices) {
+			if (index >= entries.size() || !entries[index].value.is_number())
+				return false;
+			SceneSettingsManager::SettingControlInfo info;
+			if (!SceneSettingsManager::GetSettingControlInfo(entries[index], info) ||
+				info.controlType == SceneSettingControlType::Scalar)
+				return false;
+			if (!paused)
+				paused = entries[index].paused;
+			else if (*paused != entries[index].paused)
+				return false;
+			auto [componentIt, inserted] = components.try_emplace(info.componentIndex);
+			if (inserted)
+				componentIt->second.info = std::move(info);
+			else {
+				const auto& existing = componentIt->second.info;
+				if (info.controlType != existing.controlType || info.settingPath != existing.settingPath ||
+					info.settingKey != existing.settingKey || info.componentStart != existing.componentStart ||
+					info.componentCount != existing.componentCount)
+					return false;
+			}
+			if (std::find(componentIt->second.entryIndices.begin(), componentIt->second.entryIndices.end(), index) ==
+				componentIt->second.entryIndices.end())
+				componentIt->second.entryIndices.push_back(index);
+		}
+		if (components.size() < 2 || components.size() > 4)
+			return false;
+
+		const auto& first = components.begin()->second.info;
+		if (components.size() != first.componentCount)
+			return false;
+		if (first.controlType == SceneSettingControlType::Color &&
+			components.size() != 3 && components.size() != 4)
+			return false;
+		std::array<const Component*, 4> orderedComponents{};
+		for (size_t component = 0; component < components.size(); ++component) {
+			auto componentIt = components.find(static_cast<std::int8_t>(first.componentStart + component));
+			if (componentIt == components.end())
+				return false;
+			const auto& info = componentIt->second.info;
+			if (info.controlType != first.controlType || info.settingPath != first.settingPath ||
+				info.settingKey != first.settingKey || info.componentStart != first.componentStart ||
+				info.componentCount != first.componentCount ||
+				info.componentIndex != first.componentStart + component)
+				return false;
+			orderedComponents[component] = &componentIt->second;
+		}
+
+		std::array<float, 4> values{};
+		for (size_t component = 0; component < components.size(); ++component)
+			values[component] = entries[orderedComponents[component]->entryIndices.back()].value.get<float>();
+
+		if (readOnly)
+			ImGui::BeginDisabled();
+		ImGui::BeginGroup();
+		ImGui::SetNextItemWidth(inputWidth);
+		bool changed = false;
+		bool editDeactivated = false;
+		if (first.controlType == SceneSettingControlType::Color) {
+			constexpr auto flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR;
+			changed = components.size() == 3 ?
+			              ImGui::ColorEdit3("##val", values.data(), flags) :
+			              ImGui::ColorEdit4("##val", values.data(), flags);
+			editDeactivated = ImGui::IsItemDeactivatedAfterEdit();
+		} else {
+			std::array<double, 4> minimums{};
+			std::array<double, 4> maximums{};
+			std::array<double, 4> displayScales{};
+			std::array<bool, 4> hasBounds{};
+			for (size_t component = 0; component < components.size(); ++component) {
+				const auto entryIndex = orderedComponents[component]->entryIndices.back();
+				const auto& entry = entries[entryIndex];
+				hasBounds[component] = SceneSettingsManager::GetNumericBounds(
+					entry, minimums[component], maximums[component]);
+				displayScales[component] = SceneSettingsManager::GetNumericDisplayScale(entry);
+				double minimumDisplayValue = 0.0;
+				double maximumDisplayValue = 0.0;
+				hasBounds[component] = hasBounds[component] &&
+				                       SceneSettingsManager::GetNumericDisplayValue(
+						                       entry, minimums[component], minimumDisplayValue) &&
+				                       SceneSettingsManager::GetNumericDisplayValue(
+						                       entry, maximums[component], maximumDisplayValue) &&
+				                       minimumDisplayValue <= maximumDisplayValue;
+				minimums[component] = minimumDisplayValue;
+				maximums[component] = maximumDisplayValue;
+				double displayValue = 0.0;
+				if (!SceneSettingsManager::GetNumericDisplayValue(entry, values[component], displayValue))
+					displayValue = hasBounds[component] ? minimumDisplayValue : 0.0;
+				values[component] = static_cast<float>(displayValue);
+			}
+			const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+			const float componentWidth = std::max(
+				(inputWidth - spacing * static_cast<float>(components.size() - 1)) /
+					static_cast<float>(components.size()),
+				1.0f);
+			for (size_t component = 0; component < components.size(); ++component) {
+				const auto displayScale = displayScales[component];
+				const float minimumValue = hasBounds[component] ?
+				                               static_cast<float>(minimums[component]) : 0.0f;
+				const float maximumValue = hasBounds[component] ?
+				                               static_cast<float>(maximums[component]) : 0.0f;
+				const float speed = static_cast<float>(kSceneFloatDragSpeed * displayScale);
+				const char* valueFormat = displayScale == 1.0 ? "%.3f" : "%.1f";
+				if (component > 0)
+					ImGui::SameLine(0.0f, spacing);
+				ImGui::PushID(static_cast<int>(component));
+				ImGui::SetNextItemWidth(componentWidth);
+				std::string componentName;
+				for (const char ch : orderedComponents[component]->info.componentDisplayName) {
+					componentName.push_back(ch);
+					if (ch == '%')
+						componentName.push_back('%');
+				}
+				const auto format = std::format("{} {}", valueFormat, componentName);
+				changed |= ImGui::DragFloat(
+					"##val", &values[component], speed, minimumValue, maximumValue, format.c_str());
+				editDeactivated |= ImGui::IsItemDeactivatedAfterEdit();
+				ImGui::PopID();
+			}
+		}
+		ImGui::EndGroup();
+
+		if (changed && !readOnly) {
+			std::vector<SceneSettingsManager::EntryValueUpdate> updates;
+			updates.reserve(indices.size());
+			for (size_t component = 0; component < components.size(); ++component) {
+				const auto& componentEntries = orderedComponents[component]->entryIndices;
+				const auto& entry = entries[componentEntries.back()];
+				double storedValue = values[component];
+				const bool validValue = first.controlType == SceneSettingControlType::Color ?
+				                            std::isfinite(storedValue) :
+				                            SceneSettingsManager::GetNumericStoredValue(
+					                            entry, values[component], storedValue);
+				if (validValue)
+					for (const auto entryIndex : orderedComponents[component]->entryIndices)
+						updates.push_back({ entryIndex, json(storedValue) });
+			}
+			if (updates.size() == indices.size())
+				update(updates);
+		}
+		if (!readOnly && editDeactivated)
+			commit();
+		if (readOnly)
+			ImGui::EndDisabled();
+		return true;
+	}
+
 	void DrawValueEditor(SceneType type, size_t index, float inputWidth, bool readOnly)
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
@@ -883,6 +1217,20 @@ namespace SceneSettingsUI
 		DrawValueEditorCore(entry, inputWidth, readOnly,
 			[=](const json& v) { manager->UpdateEntryValue(type, index, v, true); },
 			[=]() { manager->SaveAllUserSettings(); });
+	}
+
+	static void DrawValueEditor(
+		SceneType type, const std::vector<size_t>& indices, float inputWidth, bool readOnly)
+	{
+		if (indices.empty())
+			return;
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto& entries = manager->GetEntries(type);
+		if (DrawAggregateValueEditorCore(entries, indices, inputWidth, readOnly,
+				[=](const auto& updates) { manager->UpdateEntryValues(type, updates, true); },
+				[=] { manager->CommitSceneSettingChanges(); }))
+			return;
+		DrawValueEditor(type, indices.back(), inputWidth, readOnly);
 	}
 
 	void DrawWeatherValueEditor(RE::FormID weatherId, size_t index, float inputWidth, bool readOnly)
@@ -899,9 +1247,20 @@ namespace SceneSettingsUI
 		if (indices.empty())
 			return;
 		auto* manager = SceneSettingsManager::GetSingleton();
-		const auto& entry = manager->GetWeatherConfig(weatherId).entries[indices[0]];
+		const auto& entries = manager->GetWeatherConfig(weatherId).entries;
+		if (DrawAggregateValueEditorCore(entries, indices, inputWidth, readOnly,
+				[=](const auto& updates) { manager->UpdateWeatherEntryValues(weatherId, updates, true); },
+				[=] { manager->SaveAllUserSettings(); }))
+			return;
+		const auto& entry = entries[indices.back()];
 		DrawValueEditorCore(entry, inputWidth, readOnly,
-			[=](const json& v) { for (auto idx : indices) manager->UpdateWeatherEntryValue(weatherId, idx, v, true); },
+			[=](const json& value) {
+				std::vector<SceneSettingsManager::EntryValueUpdate> updates;
+				updates.reserve(indices.size());
+				for (const auto index : indices)
+					updates.push_back({ index, value });
+				manager->UpdateWeatherEntryValues(weatherId, updates, true);
+			},
 			[=]() { manager->SaveAllUserSettings(); });
 	}
 
@@ -1075,6 +1434,12 @@ namespace SceneSettingsUI
 		bool isOverwrite = source == EntrySource::Overwrite;
 		bool multiColumn = numValueColumns > 1;
 		bool inlineActions = HasInlineActionColumn(numValueColumns);
+		const bool suppressFlyouts = s_addDialogFrame == ImGui::GetFrameCount();
+		if (suppressFlyouts) {
+			Util::CloseFlyout(flyout.cell);
+			Util::CloseFlyout(flyout.row);
+			Util::CloseFlyout(flyout.col);
+		}
 		constexpr int kSettingColumn = 0;
 		constexpr int kFirstValueColumn = 1;
 		const int actionsColumn = kFirstValueColumn + numValueColumns;
@@ -1103,11 +1468,15 @@ namespace SceneSettingsUI
 		// Pre-collect per-column indices for header controls (multi-column only)
 		std::array<std::vector<size_t>, kPeriodCount> perColumn{};
 		if (multiColumn) {
-			for (const auto& item : group.map) {
-				const auto& perKey = item.second;
-				for (int p = 0; p < numValueColumns; ++p)
-					if (perKey[p] != SIZE_MAX)
+			for (const auto& [setting, perKey] : group.map) {
+				const auto members = group.members.find(setting);
+				for (int p = 0; p < numValueColumns; ++p) {
+					if (members != group.members.end() && !members->second[p].empty())
+						perColumn[p].insert(
+							perColumn[p].end(), members->second[p].begin(), members->second[p].end());
+					else if (perKey[p] != SIZE_MAX)
 						perColumn[p].push_back(perKey[p]);
+				}
 			}
 		}
 
@@ -1145,7 +1514,7 @@ namespace SceneSettingsUI
 				ImVec2 cellMax(cellMin.x + colW, ImGui::GetItemRectMax().y);
 
 				const auto& indices = perColumn[i];
-				if (!indices.empty()) {
+				if (!indices.empty() && !suppressFlyouts) {
 					ImGui::PushID(i);
 					const auto flyoutSource = SubmitFlyoutSource("##colFlyout", cellMin, cellMax);
 					{
@@ -1190,15 +1559,28 @@ namespace SceneSettingsUI
 			if (keyIt == group.map.end())
 				continue;
 			const auto& perKey = keyIt->second;
+			auto membersIt = group.members.find(sid);
+			std::vector<size_t> addPeriodSourceIndices;
+			if (membersIt != group.members.end()) {
+				for (const auto& periodMembers : membersIt->second) {
+					if (!periodMembers.empty()) {
+						addPeriodSourceIndices = periodMembers;
+						break;
+					}
+				}
+			}
 
 			// Collect valid indices for this row
 			// In single-column mode, collect from ALL period slots (entries may span multiple periods)
 			std::vector<size_t> rowIndices;
-			rowIndices.reserve(kPeriodCount);
+			rowIndices.reserve(kPeriodCount * 4);
 			int scanCols = multiColumn ? numValueColumns : kPeriodCount;
-			for (int p = 0; p < scanCols; ++p)
-				if (perKey[p] != SIZE_MAX)
+			for (int p = 0; p < scanCols; ++p) {
+				if (membersIt != group.members.end() && !membersIt->second[p].empty())
+					rowIndices.insert(rowIndices.end(), membersIt->second[p].begin(), membersIt->second[p].end());
+				else if (perKey[p] != SIZE_MAX)
 					rowIndices.push_back(perKey[p]);
+			}
 
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(kSettingColumn);
@@ -1207,6 +1589,7 @@ namespace SceneSettingsUI
 			const float labelRowStartY = ImGui::GetCursorPosY();
 
 			ImGui::PushID(sid.key.c_str());
+			ImGui::PushID(static_cast<int>(sid.componentStart));
 			for (const auto& part : sid.path)
 				ImGui::PushID(part.c_str());
 			ImGui::PushID(sid.feature.c_str());
@@ -1220,7 +1603,7 @@ namespace SceneSettingsUI
 			const float labelContentH = ImGui::GetCursorPosY() - labelRowStartY;
 
 			// Row-level flyout (only for multi-column to avoid duplicate controls)
-			if (multiColumn) {
+			if (multiColumn && !suppressFlyouts) {
 				// Hover area covers full row for detection
 				ImVec2 hoverMin = cellStart;
 				float rowH = std::max(ImGui::GetTextLineHeightWithSpacing(), ImGui::GetItemRectMax().y - cellStart.y);
@@ -1246,8 +1629,13 @@ namespace SceneSettingsUI
 				for (int p = 0; p < numValueColumns; ++p) {
 					ImGui::TableSetColumnIndex(kFirstValueColumn + p);
 					size_t entryIndex = perKey[p];
+					std::vector<size_t> cellIndices;
+					if (membersIt != group.members.end() && !membersIt->second[p].empty())
+						cellIndices = membersIt->second[p];
+					else if (entryIndex != SIZE_MAX)
+						cellIndices.push_back(entryIndex);
 
-					if (entryIndex == SIZE_MAX) {
+					if (cellIndices.empty()) {
 						if (source == EntrySource::User && deferredCallbacks.onAddPeriod) {
 							ImGui::PushID(p);
 							const float btnSz = C::Em(C::SCENE_ADD_PERIOD_BTN_EM);
@@ -1257,8 +1645,16 @@ namespace SceneSettingsUI
 								ImGui::GetCursorPosX() + std::max(0.f, (cellW - btnSz) * 0.5f),
 								ImGui::GetCursorPosY() + std::max(0.f, (visualH - btnSz) * 0.5f)));
 							ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 0.f));
-							if (ImGui::Button("+", ImVec2(btnSz, btnSz)))
-								deferredCallbacks.onAddPeriod(sid.feature, sid.path, sid.key, p);
+							if (ImGui::Button("+", ImVec2(btnSz, btnSz))) {
+								for (const auto sourceIndex : addPeriodSourceIndices) {
+									if (sourceIndex >= entries.size())
+										continue;
+									const auto& sourceEntry = entries[sourceIndex];
+									deferredCallbacks.onAddPeriod(
+										sourceEntry.featureShortName, sourceEntry.settingPath,
+										sourceEntry.settingKey, p);
+								}
+							}
 							ImGui::PopStyleVar();
 							ImGui::PopID();
 						} else {
@@ -1267,52 +1663,71 @@ namespace SceneSettingsUI
 						continue;
 					}
 
+					entryIndex = cellIndices.front();
 					const auto& entry = entries[entryIndex];
 					ImGui::PushID(static_cast<int>(entryIndex));
+					const bool allPaused = AreAllPaused(cellIndices, entries);
 
-					if (entry.paused)
+					if (allPaused)
 						ImGui::BeginDisabled();
 
-					bool isOverridden = IsOverridden(overrideSet, entry);
+					const bool isOverridden = std::any_of(
+						cellIndices.begin(), cellIndices.end(),
+						[&](const size_t index) { return IsOverridden(overrideSet, entries[index]); });
 					if (isOverridden) {
 						const auto& ec = theme.StatusPalette.Error;
 						ImGui::PushStyleColor(ImGuiCol_Text, ec);
 						ImGui::PushStyleColor(ImGuiCol_CheckMark, ec);
 					}
 
-					deferredCallbacks.drawEditor(entryIndex, ImGui::GetContentRegionAvail().x, entry.source == EntrySource::Overwrite);
+					if (cellIndices.size() > 1 && deferredCallbacks.drawEditorMulti)
+						deferredCallbacks.drawEditorMulti(
+							cellIndices, ImGui::GetContentRegionAvail().x, entry.source == EntrySource::Overwrite);
+					else
+						deferredCallbacks.drawEditor(
+							entryIndex, ImGui::GetContentRegionAvail().x, entry.source == EntrySource::Overwrite);
 
 					if (isOverridden)
 						ImGui::PopStyleColor(2);
 
-					if (entry.paused)
+					if (allPaused)
 						ImGui::EndDisabled();
 
 					// Cell flyout
 					const bool sourcePressed = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-					const ImGuiID cellId = ImGui::GetItemID();
-					{
+					const ImGuiID cellId = ImGui::GetID("##cellFlyout");
+					if (!suppressFlyouts) {
 						Util::FlyoutScope flyoutScope(
 							flyout.cell, cellId, sourcePressed, GetSceneFlyoutStyle());
 						if (flyoutScope) {
-							auto result = DrawFlyoutControls(entry.paused, false, isOverwrite);
+							auto result = DrawFlyoutControls(allPaused, cellIndices.size() > 1, isOverwrite);
 
-							if (result.toggled)
-								deferredCallbacks.togglePause(entryIndex);
+							if (result.toggled) {
+								for (const auto index : cellIndices)
+									if (entries[index].paused == allPaused)
+										deferredCallbacks.togglePause(index);
+							}
 							if (result.reverted)
-								deferredCallbacks.revert(entryIndex);
+								for (const auto index : cellIndices)
+									deferredCallbacks.revert(index);
 							if (result.deleted) {
 								if (popups && entry.source == EntrySource::Overwrite) {
-									popups->pendingDeleteIndex = entryIndex;
-									popups->deleteSingleOverwrite.message = std::vformat(
-										T("feature.scene_manager.confirm.delete_overwrite_entry",
-											"Delete overwrite entry from '{0}'?\nThe file will be removed if no settings remain."),
-										std::make_format_args(entry.sourceFilename));
-									popups->deleteSingleOverwrite.Request();
+									if (cellIndices.size() > 1) {
+										RequestOverwriteRowDelete(*popups, entries, cellIndices);
+									} else {
+										popups->pendingDeleteIndex = entryIndex;
+										popups->deleteSingleOverwrite.message = std::vformat(
+											T("feature.scene_manager.confirm.delete_overwrite_entry",
+												"Delete overwrite entry from '{0}'?\nThe file will be removed if no settings remain."),
+											std::make_format_args(entry.sourceFilename));
+										popups->deleteSingleOverwrite.Request();
+									}
+									Util::RequestCloseFlyout(flyout.cell);
 								} else {
-									deferredCallbacks.remove(entryIndex);
+									for (const auto index : cellIndices)
+										deferredCallbacks.remove(index);
+									Util::CloseFlyout(flyout.cell);
 								}
-								Util::RequestCloseFlyout(flyout.cell);
 							}
 						}
 					}
@@ -1378,6 +1793,7 @@ namespace SceneSettingsUI
 			ImGui::PopID();
 			for (size_t i = 0; i < sid.path.size(); ++i)
 				ImGui::PopID();
+			ImGui::PopID();
 			ImGui::PopID();
 		}
 
@@ -1610,7 +2026,9 @@ namespace SceneSettingsUI
 
 		TableCallbacks cb{
 			[](size_t idx, float w, bool ro) { DrawValueEditor(SceneType::InteriorOnly, idx, w, ro); },
-			nullptr,
+			[](const std::vector<size_t>& indices, float w, bool ro) {
+				DrawValueEditor(SceneType::InteriorOnly, indices, w, ro);
+			},
 			[](size_t idx) { SceneSettingsManager::GetSingleton()->TogglePauseEntry(SceneType::InteriorOnly, idx); },
 			[](size_t idx) { SceneSettingsManager::GetSingleton()->RevertEntryToDefault(SceneType::InteriorOnly, idx); },
 			[](size_t idx) { SceneSettingsManager::GetSingleton()->RemoveSetting(SceneType::InteriorOnly, idx); }
@@ -1707,7 +2125,9 @@ namespace SceneSettingsUI
 
 		TableCallbacks cb{
 			[](size_t idx, float w, bool ro) { DrawValueEditor(SceneType::TimeOfDay, idx, w, ro); },
-			nullptr,
+			[](const std::vector<size_t>& indices, float w, bool ro) {
+				DrawValueEditor(SceneType::TimeOfDay, indices, w, ro);
+			},
 			[](size_t idx) { SceneSettingsManager::GetSingleton()->TogglePauseEntry(SceneType::TimeOfDay, idx); },
 			[](size_t idx) { SceneSettingsManager::GetSingleton()->RevertEntryToDefault(SceneType::TimeOfDay, idx); },
 			[](size_t idx) { SceneSettingsManager::GetSingleton()->RemoveSetting(SceneType::TimeOfDay, idx); },
@@ -1811,6 +2231,7 @@ namespace SceneSettingsUI
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		DrawAddDialogCore(state, Period::Count, false,
+			false,
 			[](const std::string& feature) { return SceneSettingsManager::GetFeatureSceneSettings(feature); },
 			[=](const std::string& feature, const std::vector<std::string>& path, const std::string& key, Period) {
 				return manager->HasLocationEntry(target.type, target.formKey, feature, path, key, EntrySource::User);
@@ -1830,6 +2251,22 @@ namespace SceneSettingsUI
 		DrawValueEditorCore(entry, inputWidth, readOnly,
 			[=](const json& value) { manager->UpdateLocationEntryValue(target.type, target.formKey, index, value, true); },
 			[=] { manager->CommitSceneSettingChanges(); });
+	}
+
+	static void DrawLocationValueEditor(const LocationTarget& target,
+		const std::vector<size_t>& indices, float inputWidth, bool readOnly)
+	{
+		if (indices.empty())
+			return;
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto& entries = manager->GetLocationConfig(target.type, target.formKey).entries;
+		if (DrawAggregateValueEditorCore(entries, indices, inputWidth, readOnly,
+				[=](const auto& updates) {
+					manager->UpdateLocationEntryValues(target.type, target.formKey, updates, true);
+				},
+				[=] { manager->CommitSceneSettingChanges(); }))
+			return;
+		DrawLocationValueEditor(target, indices.back(), inputWidth, readOnly);
 	}
 
 	static void DrawLocationPopups(const LocationTarget& target, PopupState& popups)
@@ -1967,7 +2404,9 @@ namespace SceneSettingsUI
 
 		TableCallbacks callbacks{
 			[target](size_t index, float width, bool readOnly) { DrawLocationValueEditor(target, index, width, readOnly); },
-			nullptr,
+			[target](const std::vector<size_t>& indices, float width, bool readOnly) {
+				DrawLocationValueEditor(target, indices, width, readOnly);
+			},
 			[target](size_t index) { SceneSettingsManager::GetSingleton()->TogglePauseLocationEntry(target.type, target.formKey, index); },
 			[target](size_t index) { SceneSettingsManager::GetSingleton()->RevertLocationEntryToDefault(target.type, target.formKey, index); },
 			[target](size_t index) { SceneSettingsManager::GetSingleton()->RemoveLocationSetting(target.type, target.formKey, index); }
@@ -2071,13 +2510,13 @@ namespace SceneSettingsUI
 			manager->DeleteAllWeatherUserSettings(weatherId);
 	}
 
-	static TableCallbacks MakeWeatherCallbacks(RE::FormID weatherId, bool flat)
+	static TableCallbacks MakeWeatherCallbacks(RE::FormID weatherId)
 	{
 		return {
 			[weatherId](size_t idx, float w, bool ro) { DrawWeatherValueEditor(weatherId, idx, w, ro); },
-			flat ? std::function<void(const std::vector<size_t>&, float, bool)>(
-					   [weatherId](const std::vector<size_t>& indices, float w, bool ro) { DrawWeatherValueEditor(weatherId, indices, w, ro); }) :
-			       nullptr,
+			[weatherId](const std::vector<size_t>& indices, float w, bool ro) {
+				DrawWeatherValueEditor(weatherId, indices, w, ro);
+			},
 			[weatherId](size_t idx) { SceneSettingsManager::GetSingleton()->TogglePauseWeatherEntry(weatherId, idx); },
 			[weatherId](size_t idx) { SceneSettingsManager::GetSingleton()->RevertWeatherEntryToDefault(weatherId, idx); },
 			[weatherId](size_t idx) { SceneSettingsManager::GetSingleton()->RemoveWeatherSetting(weatherId, idx); },
@@ -2093,7 +2532,7 @@ namespace SceneSettingsUI
 		bool showTod = numValueColumns > 1;
 		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto& entries = manager->GetWeatherConfig(weatherId).entries;
-		auto cb = MakeWeatherCallbacks(weatherId, numValueColumns == 1);
+		auto cb = MakeWeatherCallbacks(weatherId);
 
 		std::vector<size_t> overwriteIndices, userIndices;
 		SplitBySource(entries, overwriteIndices, userIndices, true);

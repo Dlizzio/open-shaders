@@ -14,6 +14,8 @@ namespace SceneSettingsUI
 	using SceneType = SceneSettingsManager::SceneType;
 	using EntrySource = SceneSettingsManager::EntrySource;
 	using Period = SceneSettingsManager::TimeOfDayPeriod;
+	using SceneSettingControlType = SceneSettingsManager::SettingControlType;
+	using SceneSettingDescriptor = SceneSettingsManager::SettingDescriptor;
 	static constexpr int kPeriodCount = SceneSettingsManager::kPeriodCount;
 
 	/// Unique setting identifier for TOD table ordering.
@@ -25,7 +27,8 @@ namespace SceneSettingsUI
 		std::string displayName;
 		std::string categoryName;
 		std::vector<std::string> parentPath;
-		bool operator<(const SettingId& o) const { return std::tie(feature, path, key) < std::tie(o.feature, o.path, o.key); }
+		std::int8_t componentStart = -1;
+		bool operator<(const SettingId& o) const { return std::tie(feature, path, key, componentStart) < std::tie(o.feature, o.path, o.key, o.componentStart); }
 	};
 
 	/// Period-indexed entry map built from a set of entries.
@@ -33,6 +36,7 @@ namespace SceneSettingsUI
 	{
 		std::vector<SettingId> order;
 		std::map<SettingId, std::array<size_t, kPeriodCount>> map;
+		std::map<SettingId, std::array<std::vector<size_t>, kPeriodCount>> members;
 	};
 
 	/// Build a SourceGroup from entries, optionally filtered to a single source.
@@ -63,6 +67,7 @@ namespace SceneSettingsUI
 		std::vector<int> selectedSubFeaturePath;
 		AddSettingNode settingTree;
 		std::vector<bool> selectedSettings;  // Checkbox state per setting key
+		std::vector<int> selectedMembers;  // -1 selects every member of a logical control
 
 		void Reset()
 		{
@@ -73,6 +78,7 @@ namespace SceneSettingsUI
 			selectedSubFeaturePath.clear();
 			settingTree = {};
 			selectedSettings.clear();
+			selectedMembers.clear();
 		}
 	};
 
@@ -117,7 +123,7 @@ namespace SceneSettingsUI
 	struct TableCallbacks
 	{
 		std::function<void(size_t idx, float width, bool readOnly)> drawEditor;
-		std::function<void(const std::vector<size_t>& indices, float width, bool readOnly)> drawEditorMulti;  // optional: for collapsed single-column mode
+		std::function<void(const std::vector<size_t>& indices, float width, bool readOnly)> drawEditorMulti;
 		std::function<void(size_t idx)> togglePause;
 		std::function<void(size_t idx)> revert;
 		std::function<void(size_t idx)> remove;
