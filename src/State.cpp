@@ -24,7 +24,6 @@
 #include "Features/VR.h"
 #include "Features/VRStereoOptimizations.h"
 #include "Features/VolumetricShadows.h"
-#include "Features/WeatherPicker.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
