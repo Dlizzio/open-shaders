@@ -91,6 +91,8 @@ class NumericControlFlow:
     minimum_expression: str
     maximum_expression: str
     semantic: str
+    presentation: str
+    supports_unified_edit: bool
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,7 @@ class ControlBinding:
     component_labels: tuple[LocalizedText, ...] = ()
     aggregate_all: bool = False
     virtual_control: tuple[str, str] | None = None
+    supports_unified_edit: bool = False
 
 
 @dataclass(frozen=True)
@@ -167,24 +170,32 @@ class ControlIndex:
             address: tuple[str, ...],
             suffix_owners: tuple[str, ...] = ()):
         addresses = (address, tuple("*" if part.isdigit() else part for part in address))
-        candidates = []
-        for candidate in dict.fromkeys(addresses):
-            candidates.extend(
-                (mapping[(owner, candidate)], 0)
-                for owner in owners
-                if (owner, candidate) in mapping)
-        if candidates:
-            return candidates[0] if all(item[0] == candidates[0][0] for item in candidates[1:]) else None
+
+        def resolve_candidates(candidate_owners, candidate_addresses, offset):
+            candidates = [
+                (mapping[(owner, candidate)], offset)
+                for candidate in dict.fromkeys(candidate_addresses)
+                for owner in candidate_owners
+                if (owner, candidate) in mapping
+            ]
+            if not candidates:
+                return False, None
+            resolved = (candidates[0]
+                        if all(item[0] == candidates[0][0] for item in candidates[1:])
+                        else None)
+            return True, resolved
+
+        for owner in owners:
+            found, resolved = resolve_candidates((owner,), addresses, 0)
+            if found:
+                return resolved
 
         for offset in range(1, len(address)):
-            candidates = [
-                (mapping[(owner, candidate[offset:])], offset)
-                for candidate in dict.fromkeys(addresses)
-                for owner in suffix_owners
-                if (owner, candidate[offset:]) in mapping
-            ]
-            if candidates:
-                return candidates[0] if all(item[0] == candidates[0][0] for item in candidates[1:]) else None
+            sliced_addresses = tuple(candidate[offset:] for candidate in addresses)
+            found, resolved = resolve_candidates(
+                suffix_owners, sliced_addresses, offset)
+            if found:
+                return resolved
         return None
 
     def match(
@@ -252,6 +263,9 @@ DIRECT_UI_CONTROL_RE = re.compile(
     r"Drag(?:Float[234]?|Int[234]?|ScalarN?)|"
     r"Slider(?:Float[234]?|Int[234]?|ScalarN?|Angle)|"
     r"Input(?:Float[234]?|Int[234]?|ScalarN?)|ColorEdit[34]|PercentageSlider)\s*\(")
+
+SHIFT_UNIFIED_CONTROL_RE = re.compile(
+    r"\bUtil::ShiftSlider\s*<\s*([234])\s*>\s*\(")
 
 
 
@@ -1101,7 +1115,8 @@ def substitute_helper_parameters(
 def get_control_numeric_metadata(control_kind: str, args: list[str],
                                  constants: dict[str, float]) -> tuple[float, float, float] | None:
     bounds: tuple[str, str] | None = None
-    if control_kind.startswith("Slider") and control_kind != "SliderScalarN" and len(args) >= 4:
+    if (control_kind.startswith(("Slider", "ShiftSlider")) and
+            control_kind != "SliderScalarN" and len(args) >= 4):
         if control_kind.startswith("SliderScalar") and len(args) >= 5:
             bounds = (args[3], args[4])
         else:
@@ -1205,7 +1220,11 @@ def control_component_count(control_kind: str) -> int:
     numeric = re.fullmatch(r"(?:Slider|Drag|Input)(?:Float|Int)([234])", control_kind)
     if numeric:
         return int(numeric.group(1))
-    projected = re.fullmatch(r"Projected(?:Numeric|Color)([234])", control_kind)
+    unified = re.fullmatch(r"ShiftSliderFloat([234])", control_kind)
+    if unified:
+        return int(unified.group(1))
+    projected = re.fullmatch(
+        r"Projected(?:Numeric|ColorEditor|Color)([234])", control_kind)
     return int(projected.group(1)) if projected else 1
 
 
@@ -1213,6 +1232,46 @@ def control_group_semantic(control_kind: str) -> str:
     if control_kind.startswith(("ColorEdit", "ProjectedColor")):
         return "Color"
     return "Numeric" if control_component_count(control_kind) > 1 else "None"
+
+
+def control_aggregate_presentation(control_kind: str) -> str:
+    if control_kind.startswith(("ColorEdit", "ProjectedColorEditor")):
+        return "ColorPicker"
+    return "Components"
+
+
+def control_supports_unified_edit(control_kind: str) -> bool:
+    return control_kind.startswith("ShiftSliderFloat")
+
+
+def resolve_unified_edit_mode(
+        binding: ControlBinding | None,
+        virtual_controls: tuple[tuple[str, str], ...]) -> str:
+    if virtual_controls:
+        return "Always"
+    if binding and binding.supports_unified_edit:
+        return "Shift"
+    return "None"
+
+
+def resolve_editor_semantic(
+        binding: ControlBinding | None,
+        value_type: str,
+        force_hidden: bool = False) -> str:
+    if force_hidden or binding is None:
+        return "None"
+    if binding.choices and value_type == "Integer":
+        return "Choice"
+    if ((binding.control_kind == "Checkbox" or
+         binding.control_kind.endswith("Checkbox")) and
+            value_type in {"Boolean", "Integer"}):
+        return "Toggle"
+    if (binding.control_kind.startswith((
+            "Slider", "ShiftSlider", "Drag", "Input", "ColorEdit", "Projected")) or
+            binding.control_kind == "PercentageSlider"):
+        if value_type in {"Float", "Integer"}:
+            return "Numeric"
+    return "Generic"
 
 
 
@@ -1484,10 +1543,29 @@ def _summarize_numeric_control_flow(
         color_marked = indexed and re.search(
             rf"\bSetNextItemColorMarker\s*\([^;]*\[\s*{re.escape(indexed.group(1))}\s*\]",
             masked)
-        semantic = "Color" if control.group(1).startswith("ColorEdit") or color_marked else "Numeric"
+        is_color_editor = control.group(1).startswith("ColorEdit")
+        semantic = "Color" if is_color_editor or color_marked else "Numeric"
         controls.add(NumericControlFlow(
             storage[0], storage[1], storage[2], args[0].strip(),
-            bounds[0].strip(), bounds[1].strip(), semantic))
+            bounds[0].strip(), bounds[1].strip(), semantic,
+            "ColorPicker" if is_color_editor else "Components", False))
+
+    for control in SHIFT_UNIFIED_CONTROL_RE.finditer(masked):
+        close = find_matching_paren(body, control.end() - 1)
+        if close < 0:
+            continue
+        args = split_args(body[control.end():close])
+        if len(args) < 4:
+            continue
+        component_count = int(control.group(1))
+        storage = _parameter_storage_flow(
+            args[1], parameters, body, control.start(),
+            component_count, constants)
+        if not storage:
+            continue
+        controls.add(NumericControlFlow(
+            storage[0], storage[1], storage[2], args[0].strip(),
+            args[2].strip(), args[3].strip(), "Numeric", "Components", True))
 
     for _, called_name, args in _source_function_calls(body, definitions):
         called = _resolve_source_function(definitions, called_name, len(args))
@@ -1512,7 +1590,7 @@ def _summarize_numeric_control_flow(
                 substitute_helper_parameters(flow.item_label, arguments),
                 substitute_helper_parameters(flow.minimum_expression, arguments),
                 substitute_helper_parameters(flow.maximum_expression, arguments),
-                flow.semantic))
+                flow.semantic, flow.presentation, flow.supports_unified_edit))
 
     cache[identity] = tuple(sorted(controls, key=lambda value: (
         value.storage_parameter, value.storage_offset, value.component_count,
@@ -1691,22 +1769,28 @@ def _infer_indirect_numeric_bindings(
                                 mask_cpp_source(body[:position]))
                             if derived and item_label and item_label.startswith("##"):
                                 layouts.add((slice_start, flow.component_count, -1, item_label,
-                                             flow.semantic, minimum, maximum))
+                                             flow.semantic, flow.presentation,
+                                             flow.supports_unified_edit,
+                                             minimum, maximum))
                         elif scalar[1] + 1 == slice_start:
                             layouts.add((scalar[1], flow.component_count + 1, scalar[1], "",
-                                         flow.semantic, minimum, maximum))
+                                         flow.semantic, flow.presentation,
+                                         flow.supports_unified_edit,
+                                         minimum, maximum))
 
                 if len(layouts) > 1:
                     raise ValueError(f"ambiguous indirect numeric layout {name}")
                 if not layouts:
                     continue
                 (aggregate_start, aggregate_count, aggregate_all, virtual_label,
-                 semantic, minimum, maximum) = next(iter(layouts))
+                 semantic, presentation, supports_unified_edit,
+                 minimum, maximum) = next(iter(layouts))
                 binding_candidates.setdefault(name, set()).add((
                     record_type, record_parameter, pointer_field, aggregate_start,
-                    aggregate_count, semantic, aggregate_all, next(iter(push_fields)),
-                    next(iter(label_fields)), minimum, maximum, virtual_label,
-                    vector_components))
+                    aggregate_count, semantic, presentation, aggregate_all,
+                    next(iter(push_fields)), next(iter(label_fields)), minimum,
+                    maximum, virtual_label, vector_components,
+                    supports_unified_edit))
 
     bindings = {}
     for name, candidates in binding_candidates.items():
@@ -1778,6 +1862,7 @@ def collect_indirect_numeric_projections(paths: list[Path]):
     collected_components = {}
     collected_aggregate_all = {}
     collected_virtual_controls = {}
+    collected_unified_edit = {}
 
     texts = {path: read_text(path) for path in paths}
     source_functions = collect_source_functions(paths)
@@ -1829,8 +1914,9 @@ def collect_indirect_numeric_projections(paths: list[Path]):
             provider_name = provider_call.group(1)
             binding = wrapper_summary[2]
             (record_type, _, pointer_field, aggregate_start, aggregate_count,
-             aggregate_semantic, aggregate_all, push_id_field, display_label_field,
-             minimum_field, maximum_field, virtual_item_label, components) = binding
+             aggregate_semantic, aggregate_presentation, aggregate_all,
+             push_id_field, display_label_field, minimum_field, maximum_field,
+             virtual_item_label, components, supports_unified_edit) = binding
             provider_type, rows = providers[provider_name]
             if provider_type != record_type:
                 continue
@@ -1859,12 +1945,17 @@ def collect_indirect_numeric_projections(paths: list[Path]):
                     raise ValueError(f"unresolved indirect control row in {provider_name}")
 
                 field = target.group(1)
-                control_kind = f"Projected{aggregate_semantic}{aggregate_count}"
+                control_kind = (
+                    f"ProjectedColorEditor{aggregate_count}"
+                    if aggregate_presentation == "ColorPicker" else
+                    f"Projected{aggregate_semantic}{aggregate_count}")
                 label_metadata = (
                     label.split("##", 1)[0], category_label, label_key, category_key,
                     control_kind, minimum, maximum, 1.0)
                 label_identity = (owner, (field, components[aggregate_start]))
                 collected_labels.setdefault(label_identity, set()).add(label_metadata)
+                if supports_unified_edit:
+                    collected_unified_edit.setdefault(label_identity, set()).add(True)
                 if aggregate_all >= 0:
                     component_identity = (owner, (field, components[aggregate_all]))
                     collected_aggregate_all.setdefault(component_identity, set()).add(True)
@@ -1891,6 +1982,7 @@ def collect_indirect_numeric_projections(paths: list[Path]):
         finalize(collected_components, "indirect numeric component"),
         finalize(collected_aggregate_all, "indirect aggregate component"),
         finalize(collected_virtual_controls, "virtual aggregate control"),
+        finalize(collected_unified_edit, "unified aggregate control"),
     )
 
 
@@ -2848,6 +2940,21 @@ def _project_standard_controls(
                     invocation.start(),
                     split_args(function.body[invocation.end():close])))
         call_sites[function] = by_name
+    draw_control_functions = {
+        function for function in functions
+        if function.name == "DrawSettings" and function.owner
+    }
+    for _ in range(len(unique_functions)):
+        discovered = {
+            callee
+            for caller in draw_control_functions
+            for helper_name in call_sites[caller]
+            if (callee := unique_functions.get(helper_name)) and
+            callee.owner == caller.owner
+        }
+        if discovered <= draw_control_functions:
+            break
+        draw_control_functions.update(discovered)
     metadata_candidates = {}
     choice_candidates = {}
 
@@ -2900,7 +3007,8 @@ def _project_standard_controls(
         minimum, maximum, scale = numeric or (None, None, 1.0)
         return ControlBinding(
             owner, setting_path, label, category, kind,
-            minimum, maximum, scale, "Identity", tuple(choices))
+            minimum, maximum, scale, "Identity", tuple(choices),
+            supports_unified_edit=control_supports_unified_edit(kind))
 
     templates: dict[str, list[ControlTemplate]] = {}
     for function in functions:
@@ -2934,7 +3042,7 @@ def _project_standard_controls(
             choices = resolve_choices(function, control.start(), kind, args)
             setting_path = (
                 extract_control_setting_path(kind, args, local_aliases)
-                if function.name == "DrawSettings" and function.owner else None)
+                if function in draw_control_functions else None)
             if setting_path:
                 identity = function.owner, setting_path
                 add_metadata(identity, make_binding(
@@ -2992,6 +3100,47 @@ def _project_standard_controls(
                     parameter_origin[0], parameter_origin[1],
                     args[0] if args else "", LocalizedText(category_text, category_key),
                     kind, tuple(args), choices))
+
+    for function in functions:
+        parameter_tuples = tuple(
+            (parameter.type_name, parameter.name, parameter.default)
+            for parameter in function.parameters)
+        local_aliases = collect_local_setting_aliases(function.body)
+        for control in SHIFT_UNIFIED_CONTROL_RE.finditer(function.masked_body):
+            kind = f"ShiftSliderFloat{control.group(1)}"
+            close = find_matching_paren(function.body, control.end() - 1)
+            args = split_args(function.body[control.end():close]) if close >= 0 else []
+            storage_index = control_storage_argument_index(kind)
+            if len(args) <= storage_index:
+                continue
+
+            setting_path = (
+                extract_control_setting_path(kind, args, local_aliases)
+                if function in draw_control_functions else None)
+            if setting_path:
+                identity = function.owner, setting_path
+                add_metadata(identity, make_binding(
+                    function, control.start(), *identity, kind, args), 3)
+
+            parameter_origin = find_parameter_origin(
+                args[storage_index], parameter_tuples)
+            if parameter_origin and parameter_origin[1]:
+                owner = resolve_type_alias(
+                    function.parameters[parameter_origin[0]].type_name,
+                    aliases_by_path[function.source])
+                label = _localized_text(args[0], function.prefix) if args else None
+                if label and owner and owner not in PRIMITIVE_TYPES and owner not in VECTOR_COMPONENTS:
+                    identity = owner, parameter_origin[1]
+                    add_metadata(identity, make_binding(
+                        function, control.start(), *identity, kind, args), 2)
+
+            if parameter_origin:
+                category_text, category_key = _control_category(
+                    function.body, control.start(), function.prefix)
+                templates.setdefault(function.name, []).append(ControlTemplate(
+                    parameter_origin[0], parameter_origin[1],
+                    args[0] if args else "", LocalizedText(category_text, category_key),
+                    kind, tuple(args)))
 
     projected_helpers = collect_projected_numeric_helpers(paths)
     for function in functions:
@@ -3206,7 +3355,7 @@ def _project_standard_controls(
                 binding.control_kind, binding.minimum, binding.maximum,
                 binding.display_scale, binding.numeric_transform, choices,
                 binding.component_labels, binding.aggregate_all,
-                binding.virtual_control)
+                binding.virtual_control, binding.supports_unified_edit)
         else:
             bindings[identity] = ControlBinding(
                 identity[0], identity[1], None, LocalizedText(), "Combo",
@@ -3228,49 +3377,61 @@ def _collect_reversible_numeric_bindings(
         if len(candidates) != 1:
             continue
         function = candidates[0]
-        controls = list(DIRECT_UI_CONTROL_RE.finditer(function.masked_body))
-        if len(controls) != 1:
-            continue
-        control = controls[0]
-        control_kind = control.group(1)
-        if not control_kind.startswith(("Slider", "Drag", "Input")):
-            continue
-        close = find_matching_paren(function.body, control.end() - 1)
-        args = split_args(function.body[control.end():close]) if close >= 0 else []
-        storage_index = control_storage_argument_index(control_kind)
-        if len(args) <= storage_index:
-            continue
-        local = re.fullmatch(r"\s*&?\s*([A-Za-z_]\w*)(?:\s*\[\s*0\s*\])?\s*", args[storage_index])
-        if not local:
-            continue
+        numeric_controls = []
+        direct_controls = list(DIRECT_UI_CONTROL_RE.finditer(function.masked_body))
+        if len(direct_controls) == 1:
+            direct = direct_controls[0]
+            if direct.group(1).startswith(("Slider", "Drag", "Input")):
+                numeric_controls.append((direct, direct.group(1), 1, False))
+        numeric_controls.extend(
+            (control, f"ShiftSliderFloat{control.group(1)}",
+             int(control.group(1)), True)
+            for control in SHIFT_UNIFIED_CONTROL_RE.finditer(function.masked_body))
 
-        proven = []
-        for parameter_index, parameter in enumerate(function.parameters):
-            if PRIMITIVE_TYPES.get(parameter.type_name) not in {"Float", "Integer"}:
+        function_summaries = set()
+        for control, control_kind, component_count, supports_unified_edit in numeric_controls:
+            close = find_matching_paren(function.body, control.end() - 1)
+            args = split_args(function.body[control.end():close]) if close >= 0 else []
+            storage_index = control_storage_argument_index(control_kind)
+            if len(args) <= storage_index:
                 continue
-            for forward, (inverse, transform) in inverse_pairs.items():
-                reads = re.findall(
-                    rf"\b{re.escape(local.group(1))}\s*\[\s*([A-Za-z_]\w*)\s*\]\s*=\s*"
-                    rf"{forward}\s*\(\s*{re.escape(parameter.name)}\s*\[\s*\1\s*\]\s*\)\s*;",
-                    function.masked_body[:control.start()])
-                writes = re.findall(
-                    rf"\b{re.escape(parameter.name)}\s*\[\s*([A-Za-z_]\w*)\s*\]\s*=\s*"
-                    rf"{inverse}\s*\(\s*{re.escape(local.group(1))}\s*\[\s*\1\s*\]\s*\)\s*;",
-                    function.masked_body[close + 1:])
-                if len(reads) == len(writes) == 1 and reads[0] == writes[0]:
-                    proven.append((parameter_index, transform))
-        if len(proven) != 1:
-            continue
-        label = _localized_text(args[0], function.prefix) if args else None
-        if not label:
-            continue
-        numeric = get_control_numeric_metadata(
-            control_kind, args, constants_by_path.get(function.source, {}))
-        minimum, maximum, display_scale = numeric or (None, None, 1.0)
-        if proven[0][1] == "Log2" and minimum is not None and maximum is not None:
-            minimum, maximum = 2.0 ** minimum, 2.0 ** maximum
-        summaries[name] = (proven[0][0], label, control_kind,
-                           minimum, maximum, display_scale, proven[0][1])
+            local = re.fullmatch(
+                r"\s*&?\s*([A-Za-z_]\w*)(?:\s*\[\s*0\s*\])?\s*",
+                args[storage_index])
+            if not local:
+                continue
+
+            proven = []
+            for parameter_index, parameter in enumerate(function.parameters):
+                if PRIMITIVE_TYPES.get(parameter.type_name) not in {"Float", "Integer"}:
+                    continue
+                for forward, (inverse, transform) in inverse_pairs.items():
+                    reads = re.findall(
+                        rf"\b{re.escape(local.group(1))}\s*\[\s*([A-Za-z_]\w*)\s*\]\s*=\s*"
+                        rf"{forward}\s*\(\s*{re.escape(parameter.name)}\s*\[\s*\1\s*\]\s*\)\s*;",
+                        function.masked_body[:control.start()])
+                    writes = re.findall(
+                        rf"\b{re.escape(parameter.name)}\s*\[\s*([A-Za-z_]\w*)\s*\]\s*=\s*"
+                        rf"{inverse}\s*\(\s*{re.escape(local.group(1))}\s*\[\s*\1\s*\]\s*\)\s*;",
+                        function.masked_body[close + 1:])
+                    if len(reads) == len(writes) == 1 and reads[0] == writes[0]:
+                        proven.append((parameter_index, transform))
+            if len(proven) != 1:
+                continue
+            label = _localized_text(args[0], function.prefix) if args else None
+            if not label:
+                continue
+            numeric = get_control_numeric_metadata(
+                control_kind, args, constants_by_path.get(function.source, {}))
+            minimum, maximum, display_scale = numeric or (None, None, 1.0)
+            if proven[0][1] == "Log2" and minimum is not None and maximum is not None:
+                minimum, maximum = 2.0 ** minimum, 2.0 ** maximum
+            function_summaries.add((
+                component_count, proven[0][0], label, control_kind,
+                minimum, maximum, display_scale, proven[0][1],
+                supports_unified_edit))
+        if function_summaries:
+            summaries[name] = tuple(function_summaries)
 
     collected = {}
     conflicts = set()
@@ -3278,12 +3439,23 @@ def _collect_reversible_numeric_bindings(
         if function.name != "DrawSettings" or not function.owner:
             continue
         aliases = collect_local_setting_aliases(function.body)
-        for helper_name, summary in summaries.items():
+        for helper_name, helper_summaries in summaries.items():
             for invocation in re.finditer(
-                    rf"\b{re.escape(helper_name)}\s*\(", function.masked_body):
+                    rf"\b{re.escape(helper_name)}(?:\s*<\s*([234])\s*>)?\s*\(",
+                    function.masked_body):
                 close = find_matching_paren(function.body, invocation.end() - 1)
                 args = split_args(function.body[invocation.end():close]) if close >= 0 else []
-                parameter_index, label, control_kind, minimum, maximum, display_scale, transform = summary
+                requested_count = int(invocation.group(1)) if invocation.group(1) else None
+                matching = [
+                    summary for summary in helper_summaries
+                    if requested_count is None or summary[0] == requested_count
+                ]
+                if requested_count is None and len(matching) > 1:
+                    matching = [summary for summary in matching if summary[0] == 1]
+                if len(matching) != 1:
+                    continue
+                (_, parameter_index, label, control_kind, minimum, maximum,
+                 display_scale, transform, supports_unified_edit) = matching[0]
                 if parameter_index >= len(args):
                     continue
                 path = extract_control_setting_path(
@@ -3296,7 +3468,8 @@ def _collect_reversible_numeric_bindings(
                 binding = ControlBinding(
                     function.owner, path, label,
                     LocalizedText(category, category_key), control_kind,
-                    minimum, maximum, display_scale, transform)
+                    minimum, maximum, display_scale, transform,
+                    supports_unified_edit=supports_unified_edit)
                 previous = collected.get(identity)
                 if identity in conflicts:
                     continue
@@ -3325,8 +3498,8 @@ def collect_control_index(
                 target.pop(identity)
                 conflicts.add(identity)
 
-    indirect_labels, indirect_components, aggregate_all, virtual_controls = (
-        collect_indirect_numeric_projections(paths))
+    (indirect_labels, indirect_components, aggregate_all, virtual_controls,
+     unified_edit) = collect_indirect_numeric_projections(paths)
     indirect_bindings = {}
     for identity, metadata in indirect_labels.items():
         kind = metadata[4]
@@ -3346,7 +3519,8 @@ def collect_control_index(
             metadata[5], metadata[6], metadata[7],
             component_labels=component_labels,
             aggregate_all=bool(aggregate_all.get(identity)),
-            virtual_control=virtual_controls.get((identity[0], base_path)))
+            virtual_control=virtual_controls.get((identity[0], base_path)),
+            supports_unified_edit=bool(unified_edit.get(identity)))
     merge_unique(bindings, indirect_bindings)
 
     functions = collect_source_functions(paths)
@@ -3563,24 +3737,11 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             (binding.virtual_control,) if binding and binding.virtual_control else ())
         virtual_controls = tuple(dict.fromkeys((
             *virtual_controls, *discovered_virtual_controls)))
-        is_toggle_control = (
-            control_kind == "Checkbox" or control_kind.endswith("Checkbox"))
-        is_numeric_control = (
-            control_kind.startswith(("Slider", "Drag", "Input", "ColorEdit", "Projected")) or
-            control_kind == "PercentageSlider")
-        if force_hidden:
-            editor_semantic = "None"
-        elif choices and value_type == "Integer":
-            editor_semantic = "Choice"
-        elif binding and is_toggle_control and value_type in {"Boolean", "Integer"}:
-            editor_semantic = "Toggle"
-        elif binding and is_numeric_control and value_type in {"Float", "Integer"}:
-            editor_semantic = "Numeric"
-        else:
-            editor_semantic = "None"
+        editor_semantic = resolve_editor_semantic(
+            binding, value_type, force_hidden)
 
         flags = ["SceneSettingsCatalog::SettingFlag::Persisted"]
-        if value_type == "Float" and editor_semantic == "Numeric":
+        if value_type == "Float" and editor_semantic in {"Numeric", "Generic"}:
             flags.append("SceneSettingsCatalog::SettingFlag::Transitionable")
         if editor_semantic == "Toggle":
             flags.append("SceneSettingsCatalog::SettingFlag::BooleanControl")
@@ -3657,6 +3818,9 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             "componentDisplayNameKey": component_label_key,
             "aggregateAll": aggregate_all,
             "aggregateSemantic": aggregate_semantic,
+            "aggregatePresentation": control_aggregate_presentation(control_kind),
+            "unifiedEditMode": resolve_unified_edit_mode(
+                binding, virtual_controls),
             "aggregateStart": aggregate_start,
             "aggregateCount": aggregate_count,
             "type": value_type,
@@ -3718,7 +3882,6 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                     vector_components, component_index, metadata_suffix_owners)
                 for component_index in range(len(vector_components))
             ]
-            has_vector_binding = any(metadata[0] is not None for metadata in vector_metadata)
             for component_index, component in enumerate(vector_components):
                 binding_match, aggregate_start, aggregate_count, aggregate_semantic = (
                     vector_metadata[component_index])
@@ -3746,7 +3909,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                         binding and binding.aggregate_all and component_index == aggregate_start),
                     virtual_controls=(binding.virtual_control,)
                     if grouped and binding and binding.virtual_control else (),
-                    force_hidden=has_vector_binding and binding is None,
+                    force_hidden=binding is None,
                     aggregate_semantic=aggregate_semantic,
                     aggregate_start=aggregate_start,
                     aggregate_count=aggregate_count)
@@ -3771,7 +3934,6 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                         array_components, element_index, metadata_suffix_owners)
                     for element_index in range(element_count)
                 ] if element_value_type else []
-                has_array_binding = any(metadata[0] is not None for metadata in array_metadata)
                 for element_index in range(element_count):
                     element_access = f"{field_access}[{element_index}]"
                     if element_value_type:
@@ -3790,7 +3952,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                             metadata_owners=metadata_owners,
                             metadata_suffix_owners=metadata_suffix_owners,
                             binding_override=binding,
-                            force_hidden=has_array_binding and binding is None,
+                            force_hidden=binding is None,
                             aggregate_semantic=aggregate_semantic,
                             aggregate_start=aggregate_start,
                             aggregate_count=aggregate_count)
@@ -3801,7 +3963,6 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                             element_components, component_index, metadata_suffix_owners)
                         for component_index in range(len(element_components))
                     ]
-                    has_element_binding = any(metadata[0] is not None for metadata in element_metadata)
                     for component_index, component in enumerate(element_components):
                         binding_match, aggregate_start, aggregate_count, aggregate_semantic = (
                             element_metadata[component_index])
@@ -3820,7 +3981,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                             metadata_owners=metadata_owners,
                             metadata_suffix_owners=metadata_suffix_owners,
                             binding_override=binding,
-                            force_hidden=has_element_binding and binding is None,
+                            force_hidden=binding is None,
                             aggregate_semantic=aggregate_semantic,
                             aggregate_start=aggregate_start,
                             aggregate_count=aggregate_count)
@@ -3933,6 +4094,11 @@ def write_catalog(entries: list[dict[str, object]], out_dir: Path):
     source = out_dir / "SceneSettingsCatalog.generated.cpp"
     adapters = out_dir / "FeatureSceneSettingsAdapters.generated.cpp"
 
+    entries = sorted(
+        entries,
+        key=lambda entry: (entry["feature"], entry["path"], entry["key"]),
+    )
+
     header.write_text("""#pragma once
 
 #include <cstddef>
@@ -3955,6 +4121,7 @@ namespace SceneSettingsCatalog
 \tenum class EditorSemantic : std::uint8_t
 \t{
 \t\tNone,
+\t\tGeneric,
 \t\tToggle,
 \t\tNumeric,
 \t\tChoice,
@@ -3966,6 +4133,19 @@ namespace SceneSettingsCatalog
 \t\tNone,
 \t\tNumeric,
 \t\tColor,
+\t};
+
+\tenum class AggregatePresentation : std::uint8_t
+\t{
+\t\tComponents,
+\t\tColorPicker,
+\t};
+
+\tenum class UnifiedEditMode : std::uint8_t
+\t{
+\t\tNone,
+\t\tAlways,
+\t\tShift,
 \t};
 
 \tenum class NumericTransform : std::uint8_t
@@ -4020,6 +4200,8 @@ namespace SceneSettingsCatalog
 \t\tstd::string_view componentDisplayNameKey;
 \t\tbool aggregateAll;
 \t\tAggregateSemantic aggregateSemantic;
+\t\tAggregatePresentation aggregatePresentation;
+\t\tUnifiedEditMode unifiedEditMode;
 \t\tstd::int8_t aggregateStart;
 \t\tstd::uint8_t aggregateCount;
 \t\tValueType valueType;
@@ -4087,6 +4269,8 @@ namespace SceneSettingsCatalog
             f'"{cpp_escape(e.get("componentDisplayNameKey", ""))}", '
             f'{str(e.get("aggregateAll", False)).lower()}, '
             f'SceneSettingsCatalog::AggregateSemantic::{e["aggregateSemantic"]}, '
+            f'SceneSettingsCatalog::AggregatePresentation::{e.get("aggregatePresentation", "Components")}, '
+            f'SceneSettingsCatalog::UnifiedEditMode::{e.get("unifiedEditMode", "None")}, '
             f'{e["aggregateStart"]}, {e["aggregateCount"]}, '
             f'SceneSettingsCatalog::ValueType::{e["type"]}, {e["flags"]}, '
             f'SceneSettingsCatalog::EditorSemantic::{e["editorSemantic"]}, '
@@ -4161,6 +4345,7 @@ namespace SceneSettingsCatalog
     joined_feature_blocks = "\n".join(feature_blocks)
     source.write_text(f"""#include "SceneSettingsCatalog.generated.h"
 
+#include <algorithm>
 #include <array>
 
 namespace
@@ -4188,14 +4373,25 @@ namespace SceneSettingsCatalog
 
 \tconst SettingMetadata* FindSetting(std::string_view featureShortName, std::string_view settingPath, std::string_view settingKey)
 \t{{
-\t\tfor (const auto& setting : kSceneSettings) {{
-\t\t\tif (setting.featureShortName == featureShortName &&
-\t\t\t\tsetting.settingPath == settingPath &&
-\t\t\t\tsetting.settingKey == settingKey) {{
-\t\t\t\treturn &setting;
-\t\t\t}}
-\t\t}}
-\t\treturn nullptr;
+\t\tconst std::array identity{{ featureShortName, settingPath, settingKey }};
+\t\tconst auto found = std::lower_bound(
+\t\t\tkSceneSettings.begin(), kSceneSettings.end(), identity,
+\t\t\t[](const SettingMetadata& setting, const auto& target) {{
+\t\t\t\tif (setting.featureShortName != target[0])
+\t\t\t\t\treturn setting.featureShortName < target[0];
+\t\t\t\tif (setting.settingPath != target[1])
+\t\t\t\t\treturn setting.settingPath < target[1];
+\t\t\t\treturn setting.settingKey < target[2];
+\t\t\t}});
+\t\tif (found == kSceneSettings.end())
+\t\t\treturn nullptr;
+
+\t\tconst auto& setting = *found;
+\t\tif (setting.featureShortName != featureShortName ||
+\t\t\tsetting.settingPath != settingPath ||
+\t\t\tsetting.settingKey != settingKey)
+\t\t\treturn nullptr;
+\t\treturn &setting;
 \t}}
 
 }}

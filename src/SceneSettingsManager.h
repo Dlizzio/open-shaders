@@ -141,6 +141,8 @@ public:
 	// --- Generic Entry Management (scene-type agnostic) ---
 
 	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
+	/// Monotonic revision for entry structure and pause state used by presentation caches.
+	std::uint64_t GetEntryPresentationRevision() const { return entryPresentationRevision; }
 	bool HasEntryFromSource(SceneType type, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, EntrySource source) const;
 	/// Add a setting.  For TimeOfDay entries, specify the target period.
@@ -265,6 +267,21 @@ public:
 		Color,
 	};
 
+	/// Visual treatment used for a logical aggregate setting.
+	enum class AggregatePresentation : std::uint8_t
+	{
+		Components,
+		ColorPicker,
+	};
+
+	/// Interaction used to edit all components of a logical aggregate.
+	enum class UnifiedEditMode : std::uint8_t
+	{
+		None,
+		Always,
+		Shift,
+	};
+
 	/// One persisted primitive belonging to a logical Scene Manager control.
 	struct SettingDescriptorMember
 	{
@@ -285,6 +302,8 @@ public:
 		std::vector<std::string> displayPath;
 		json value;
 		SettingControlType controlType = SettingControlType::Scalar;
+		AggregatePresentation aggregatePresentation = AggregatePresentation::Components;
+		UnifiedEditMode unifiedEditMode = UnifiedEditMode::None;
 		std::vector<SettingDescriptorMember> members;
 	};
 
@@ -307,6 +326,8 @@ public:
 		std::int8_t componentStart = -1;
 		std::uint8_t componentCount = 0;
 		bool aggregateAll = false;
+		AggregatePresentation aggregatePresentation = AggregatePresentation::Components;
+		UnifiedEditMode unifiedEditMode = UnifiedEditMode::None;
 	};
 
 	/// Get the logical ImGui control represented by a scalar scene setting.
@@ -436,6 +457,7 @@ private:
 	// --- Per scene-type storage ---
 	std::map<SceneType, std::vector<SettingEntry>> entries;
 	std::map<SceneType, std::vector<json>> unresolvedUserEntries;
+	std::uint64_t entryPresentationRevision = 0;
 	json preservedUserSettingsRoot = json::object();
 	bool userSettingsDocumentLoaded = false;
 	bool userSettingsDocumentWritable = true;
@@ -562,6 +584,7 @@ private:
 
 	// --- Helpers ---
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
+	void BumpEntryPresentationRevision();
 	bool IsEntryActive(const SettingEntry& entry) const;
 	bool HasDuplicateEntry(SceneType type, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey,

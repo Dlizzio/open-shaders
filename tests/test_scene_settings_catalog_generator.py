@@ -161,6 +161,28 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
              binding.display_scale),
             ("SliderFloat", 0.0, 1.0, 1.0))
 
+    def test_feature_owned_ui_helpers_discover_direct_controls(self):
+        source = """
+        #define I18N_KEY_PREFIX "feature.example."
+        void Example::DrawSettings()
+        {
+            DrawPanel();
+        }
+        void Example::DrawPanel()
+        {
+            ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.enabled);
+        }
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Example.cpp"
+            path.write_text(source, encoding="utf-8")
+            index = GENERATOR.collect_control_index([path])
+
+        binding = index.bindings[("Example", ("enabled",))]
+        self.assertEqual(binding.control_kind, "Checkbox")
+        self.assertEqual(binding.label, GENERATOR.LocalizedText(
+            "Enabled", "feature.example.enabled"))
+
     def test_diagnostic_text_does_not_replace_control_label(self):
         source = """
         #define I18N_KEY_PREFIX "feature.example."
@@ -249,6 +271,17 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             (2, 2, "Numeric"),
             (2, 2, "Numeric"),
         ])
+
+    def test_aggregate_presentation_is_independent_from_color_semantics(self):
+        self.assertEqual(
+            GENERATOR.control_group_semantic("ProjectedColor3"), "Color")
+        self.assertEqual(
+            GENERATOR.control_aggregate_presentation("ProjectedColor3"),
+            "Components")
+        for control_kind in ("ColorEdit3", "ProjectedColorEditor4"):
+            self.assertEqual(
+                GENERATOR.control_aggregate_presentation(control_kind),
+                "ColorPicker")
 
     def test_projected_numeric_helper_projects_local_component_labels(self):
         helper_source = """
@@ -460,7 +493,8 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             feature_path = Path(directory) / "Example.cpp"
             helper_path.write_text(helper_source, encoding="utf-8")
             feature_path.write_text(feature_source, encoding="utf-8")
-            labels, components, aggregate_all, virtual_controls = (
+            (labels, components, aggregate_all, virtual_controls,
+             unified_edit) = (
                 GENERATOR.collect_indirect_numeric_projections(
                     [feature_path, helper_path]))
             opaque_projection = GENERATOR.collect_indirect_numeric_projections(
@@ -475,9 +509,14 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             ("DerivedId", "##All"))
 
         self.assertEqual(labels[("Example", ("stored", "x"))][4], "ProjectedColor4")
+        self.assertEqual(
+            GENERATOR.control_aggregate_presentation(
+                labels[("Example", ("stored", "x"))][4]),
+            "Components")
         self.assertTrue(aggregate_all[("Example", ("stored", "x"))])
         self.assertNotIn(("Example", ("stored",)), virtual_controls)
-        self.assertEqual(opaque_projection, ({}, {}, {}, {}))
+        self.assertEqual(unified_edit, {})
+        self.assertEqual(opaque_projection, ({}, {}, {}, {}, {}))
 
     def test_indirect_numeric_projection_supports_each_vector_arity(self):
         template = r'''
@@ -507,14 +546,50 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             with self.subTest(arity=arity), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "Sample.cpp"
                 path.write_text(template.replace("@N@", str(arity)), encoding="utf-8")
-                labels, components, aggregate_all, virtual_controls = (
+                (labels, components, aggregate_all, virtual_controls,
+                 unified_edit) = (
                     GENERATOR.collect_indirect_numeric_projections([path]))
             self.assertEqual(labels[("Sample", ("value", "x"))][4],
                              f"ProjectedNumeric{arity}")
             self.assertEqual(components, {})
             self.assertEqual(aggregate_all, {})
+            self.assertEqual(unified_edit, {})
             self.assertEqual(virtual_controls[("Sample", ("value",))],
                              ("Token", "##Combined"))
+
+    def test_indirect_shift_slider_projection_preserves_unified_edit(self):
+        source = r'''
+        struct Values { float3 value; };
+        struct Row { const char* token; const char* text;
+            float3 Values::* member; float low; float high; };
+        std::array<Row, 1> ProvideRows() { return {
+            Row{ "Token", "Value", &Values::value, -2.f, 4.f } }; }
+        void EditSlice(const Row& row, float& combined, float* slice) {
+            ImGui::PushID(row.token);
+            ImGui::SliderFloat("##Combined", &combined, row.low, row.high);
+            Util::ShiftSlider<3>("##Slice", slice, row.low, row.high);
+            ImGui::TextUnformatted(row.text);
+        }
+        void DrawValue(Values& state, const Row& row) {
+            auto& bound = state.*row.member;
+            float combined = Fold(bound);
+            EditSlice(row, combined, &bound.x);
+        }
+        template <size_t N>
+        void DrawRows(Values& state, const std::array<Row, N>& rows) {
+            for (const auto& row : rows) DrawValue(state, row);
+        }
+        void Sample::DrawSettings() { DrawRows(settings, ProvideRows()); }
+        '''
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Sample.cpp"
+            path.write_text(source, encoding="utf-8")
+            (labels, _, _, _, unified_edit) = (
+                GENERATOR.collect_indirect_numeric_projections([path]))
+
+        identity = ("Sample", ("value", "x"))
+        self.assertEqual(labels[identity][4], "ProjectedNumeric3")
+        self.assertTrue(unified_edit[identity])
 
     def test_indirect_numeric_projection_rejects_conflicting_rows(self):
         source = r'''
@@ -720,6 +795,52 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             ("Feature", "LeafRecord"),
             ("profiles", "0", "profile", "amount"),
             ("ContainerSettings", "LeafRecord")).binding, nested)
+
+    def test_feature_owner_precedes_generic_settings_fallback(self):
+        feature = make_control_binding(
+            "Example", ("amount",), "Feature Amount", "SliderFloat")
+        nested = make_control_binding(
+            "PanelSettings", ("amount",), "Nested Amount", "InputFloat")
+        generic = make_control_binding(
+            "Settings", ("amount",), "Generic Amount", "DragFloat")
+        index = make_control_index(feature, nested, generic)
+
+        self.assertEqual(
+            index.match(
+                ("Example", "PanelSettings", "Settings"),
+                ("amount",)).binding,
+            feature)
+        self.assertEqual(
+            index.match(("Other", "PanelSettings", "Settings"),
+                        ("amount",)).binding,
+            nested)
+        self.assertEqual(
+            index.match(("Other", "Settings"), ("amount",)).binding,
+            generic)
+
+    def test_shift_slider_projects_unified_edit_metadata_through_helper(self):
+        source = """
+        #define I18N_KEY_PREFIX "feature.example."
+        using PanelSettings = Example::PanelSettings;
+        bool EditVector(const char* label, float* values)
+        {
+            return Util::ShiftSlider<3>(label, values, -2.f, 4.f);
+        }
+        void DrawPanel(PanelSettings& panel)
+        {
+            EditVector(T(TKEY("vector"), "Vector"), &panel.vector.x);
+        }
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Example.cpp"
+            path.write_text(source, encoding="utf-8")
+            index = GENERATOR.collect_control_index([path])
+
+        binding = index.bindings[("PanelSettings", ("vector", "x"))]
+        self.assertEqual(binding.control_kind, "ShiftSliderFloat3")
+        self.assertEqual((binding.minimum, binding.maximum), (-2.0, 4.0))
+        self.assertTrue(GENERATOR.control_supports_unified_edit(
+            binding.control_kind))
 
     def test_member_selector_choices_label_returned_member_contexts(self):
         source = r'''
@@ -1113,6 +1234,51 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(exposure["displayNameKey"],
                          "feature.post_processing.color_grading.exposure")
 
+    def test_transformed_shift_slider_helper_preserves_unified_edit(self):
+        source = """
+        #define I18N_KEY_PREFIX "feature.example."
+        bool EditExposure(float* values)
+        {
+            float displayed[3];
+            for (int index = 0; index < 3; ++index)
+                displayed[index] = log2(values[index]);
+            const bool changed = Util::ShiftSlider<3>(
+                T(TKEY("exposure"), "Exposure"), displayed, -4.f, 4.f);
+            for (int index = 0; index < 3; ++index)
+                values[index] = exp2(displayed[index]);
+            return changed;
+        }
+        void Example::DrawSettings()
+        {
+            EditExposure(&settings.exposure.x);
+        }
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Example.cpp"
+            path.write_text(source, encoding="utf-8")
+            index = GENERATOR.collect_control_index([path])
+
+        binding = index.bindings[("Example", ("exposure", "x"))]
+        self.assertEqual(binding.control_kind, "ShiftSliderFloat3")
+        self.assertEqual(binding.numeric_transform, "Log2")
+        self.assertEqual((binding.minimum, binding.maximum), (0.0625, 16.0))
+        self.assertTrue(binding.supports_unified_edit)
+        self.assertEqual(
+            GENERATOR.resolve_unified_edit_mode(binding, ()), "Shift")
+        self.assertEqual(
+            GENERATOR.resolve_unified_edit_mode(
+                binding, (("Exposure", "##All"),)),
+            "Always")
+
+    def test_virtual_all_controls_use_always_unified_edit(self):
+        virtual_entries = [
+            entry for entry in self.entries if entry["virtualControls"]
+        ]
+        self.assertTrue(virtual_entries)
+        self.assertTrue(all(
+            entry["unifiedEditMode"] == "Always"
+            for entry in virtual_entries))
+
     def test_choice_without_one_control_label_stays_unlabeled(self):
         selection = self.entries_by_id[
             ("CSUtility", "bloomEnhancement", "SelectedPreset")]
@@ -1193,13 +1359,24 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             ("components", "enabled", "enabled",
              ("Enabled", "feature.sample.enabled"))])
 
-    def test_directly_persisted_fields_without_ui_are_hidden(self):
-        for key in ("EnableStereoSync", "UseStereoReproject"):
-            entry = self.entries_by_id[("ScreenSpaceShadows", "", key)]
-            self.assertEqual(entry["type"], "Boolean")
-            self.assertEqual(entry["editorSemantic"], "None")
-            self.assertIn("Hidden", entry["flags"])
-            self.assertNotIn("SceneControllable", entry["flags"])
+    def test_discovered_unconverted_control_uses_generic_fallback(self):
+        binding = make_control_binding(
+            "Example", ("flags",), "Flags", "CheckboxFlags")
+        self.assertEqual(
+            GENERATOR.resolve_editor_semantic(binding, "Integer"), "Generic")
+        self.assertEqual(
+            GENERATOR.resolve_editor_semantic(None, "Integer"), "None")
+        self.assertEqual(
+            GENERATOR.resolve_editor_semantic(binding, "Integer", True), "None")
+
+    def test_unmatched_aggregate_components_stay_hidden(self):
+        unmatched = [
+            entry for entry in self.entries
+            if entry["serializedComponent"] >= 0 and
+            entry["editorSemantic"] == "None"
+        ]
+        self.assertTrue(unmatched)
+        self.assertTrue(all("Hidden" in entry["flags"] for entry in unmatched))
 
     def test_generated_metadata_contains_display_scale(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1212,9 +1389,39 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertIn("std::string_view displayPathKeys;", header)
         self.assertIn("std::string_view componentDisplayName;", header)
         self.assertIn("bool aggregateAll;", header)
+        self.assertIn("enum class AggregatePresentation", header)
+        self.assertIn("AggregatePresentation aggregatePresentation;", header)
+        self.assertIn("enum class UnifiedEditMode", header)
+        self.assertIn("UnifiedEditMode unifiedEditMode;", header)
+        self.assertNotIn("bool supportsUnifiedEdit;", header)
+        self.assertIn("Generic,", header)
         self.assertIn("struct VirtualAggregateControlMetadata", header)
         self.assertIn("GetVirtualAggregateControls", header)
         self.assertIn(repr(180.0 / math.pi), source)
+
+    def test_generated_find_setting_uses_sorted_catalog(self):
+        entries = sorted(
+            self.entries[:3],
+            key=lambda entry: (entry["feature"], entry["path"], entry["key"]),
+            reverse=True,
+        )
+        expected = sorted(
+            entries,
+            key=lambda entry: (entry["feature"], entry["path"], entry["key"]),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            GENERATOR.write_catalog(entries, output)
+            source = (output / "SceneSettingsCatalog.generated.cpp").read_text(
+                encoding="utf-8")
+        positions = [source.index(
+            f'"{entry["feature"]}", "{entry["featureName"]}", '
+            f'"{entry["path"]}", "{entry["key"]}"')
+            for entry in expected]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("std::lower_bound(", source)
+        self.assertNotIn("kSceneSettingLookupIndices", source)
+        self.assertNotIn("for (const auto& setting : kSceneSettings)", source)
 
     def test_feature_adapters_are_separate_from_catalog_policy(self):
         component_entry = {

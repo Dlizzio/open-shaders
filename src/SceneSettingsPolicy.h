@@ -24,8 +24,9 @@ namespace SceneSettingsPolicy
 		{ "PostProcessing", "Color Grading and Tone Mapping", "tonemapParams" },
 	};
 
-	inline constexpr std::array<std::string_view, 7> kLocationFeatureWhitelist = {
+	inline constexpr std::array<std::string_view, 8> kLocationFeatureWhitelist = {
 		"CSUtility",
+		"ExponentialHeightFog",
 		"PostProcessing",
 		"ScreenSpaceGI",
 		"ScreenSpaceShadows",

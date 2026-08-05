@@ -76,6 +76,10 @@ class SceneSettingsPolicyTests(unittest.TestCase):
                 extract_strings(self.policy, "kTimeOfDayFeatureWhitelist")):
             self.assertIn(name, discovered)
 
+    def test_exponential_height_fog_is_available_for_interiors(self):
+        interior = extract_strings(self.policy, "kLocationFeatureWhitelist")
+        self.assertIn("ExponentialHeightFog", interior)
+
     def test_every_blacklist_prefix_matches_cataloged_settings(self):
         addresses = [
             tuple(normalize_address_token(token) for token in catalog_address(entry))

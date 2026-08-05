@@ -3,6 +3,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <span>
 #include <tuple>
 
 #include "SceneSettingsManager.h"
@@ -31,12 +32,36 @@ namespace SceneSettingsUI
 		bool operator<(const SettingId& o) const { return std::tie(feature, path, key, componentStart) < std::tie(o.feature, o.path, o.key, o.componentStart); }
 	};
 
-	/// Period-indexed entry map built from a set of entries.
+	/// One logical setting row with cached entry membership.
+	struct SourceRow
+	{
+		SettingId setting;
+		std::array<std::vector<size_t>, kPeriodCount> cells;
+		std::vector<size_t> indices;
+		std::vector<size_t> addPeriodSourceIndices;
+	};
+
+	/// Contiguous rows sharing one category header.
+	struct SourceCategoryRange
+	{
+		size_t begin = 0;
+		size_t end = 0;
+	};
+
+	/// Cached table model built from a set of entries.
 	struct SourceGroup
 	{
-		std::vector<SettingId> order;
-		std::map<SettingId, std::array<size_t, kPeriodCount>> map;
-		std::map<SettingId, std::array<std::vector<size_t>, kPeriodCount>> members;
+		std::vector<SourceRow> rows;
+		std::vector<SourceCategoryRange> categories;
+		std::array<std::vector<size_t>, kPeriodCount> perColumn;
+	};
+
+	/// Measured table columns shared by a section header and its settings table.
+	struct SourceTableLayout
+	{
+		int numValueColumns = 1;
+		std::array<float, kPeriodCount> valueColumnWidths{};
+		float sectionWidth = 0.0f;
 	};
 
 	/// Build a SourceGroup from entries, optionally filtered to a single source.
@@ -67,7 +92,10 @@ namespace SceneSettingsUI
 		std::vector<int> selectedSubFeaturePath;
 		AddSettingNode settingTree;
 		std::vector<bool> selectedSettings;  // Checkbox state per setting key
-		std::vector<int> selectedMembers;  // -1 selects every member of a logical control
+		std::vector<int> selectedMembers;    // -1 selects every member of a logical control
+		std::vector<std::vector<uint8_t>> cachedAddedMembers;
+		bool addedMembersCached = false;
+		bool shiftWasDown = false;
 
 		void Reset()
 		{
@@ -79,6 +107,9 @@ namespace SceneSettingsUI
 			settingTree = {};
 			selectedSettings.clear();
 			selectedMembers.clear();
+			cachedAddedMembers.clear();
+			addedMembersCached = false;
+			shiftWasDown = false;
 		}
 	};
 
@@ -141,7 +172,7 @@ namespace SceneSettingsUI
 
 	bool DrawSectionHeader(const char* label, const char* idSuffix,
 		bool allPaused, std::function<void()> onTogglePause, std::function<void()> onDeleteAll,
-		int numValueColumns, std::function<void()> onExportAll = nullptr,
+		const SourceTableLayout& layout, std::function<void()> onExportAll = nullptr,
 		bool hasActiveOverrides = false);
 
 	/// State for the export-to-overwrites selection popup.
@@ -152,6 +183,8 @@ namespace SceneSettingsUI
 		bool dialogOpen = false;
 		std::vector<size_t> userIndices;
 		std::vector<uint8_t> selected;
+		std::vector<std::vector<size_t>> flatGroups;
+		bool flatGroupsCached = false;
 		char modName[kModNameBufferSize] = "";
 
 		void Open(const std::vector<size_t>& indices)
@@ -159,6 +192,8 @@ namespace SceneSettingsUI
 			dialogOpen = true;
 			userIndices = indices;
 			selected.assign(indices.size(), 1);
+			flatGroups.clear();
+			flatGroupsCached = false;
 		}
 	};
 
@@ -166,17 +201,17 @@ namespace SceneSettingsUI
 	void DrawWeatherExportAllPopup(RE::FormID weatherId, const std::vector<SceneSettingsManager::SettingEntry>& entries, ExportAllPopupState& state, bool showTod);
 
 	/// Draw a source table with feature-grouped rows and per-cell value editing.
-	/// @param numValueColumns 1 for single-value (Interior), kPeriodCount for TOD.
-	/// When numValueColumns == 1, row actions are drawn in a fixed right-side column.
+	/// When layout.numValueColumns is 1, row actions are drawn in a fixed right-side column.
 	void DrawSourceTable(
 		const SourceGroup& group,
 		const std::vector<SceneSettingsManager::SettingEntry>& entries,
 		const char* tableId,
 		EntrySource source,
-		int numValueColumns,
+		const SourceTableLayout& layout,
 		PopupState* popups,
 		TableFlyoutState& flyout,
-		const TableCallbacks& cb);
+		const TableCallbacks& cb,
+		std::span<const uint8_t> overriddenEntries = {});
 
 	// --- Consolidated Panel Functions ---
 

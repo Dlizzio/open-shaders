@@ -12,13 +12,14 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
+#include <numeric>
 #include <set>
 #include <string_view>
 #include <tuple>
@@ -26,6 +27,8 @@
 namespace
 {
 	using SceneSettingControlType = SceneSettingsManager::SettingControlType;
+	using ManagerAggregatePresentation = SceneSettingsManager::AggregatePresentation;
+	using ManagerUnifiedEditMode = SceneSettingsManager::UnifiedEditMode;
 	using ManagerSettingDescriptor = SceneSettingsManager::SettingDescriptor;
 	struct CatalogSceneSettingUpdate
 	{
@@ -483,8 +486,13 @@ namespace
 	bool ConvertCatalogNumericStoredToDisplay(const SceneSettingsCatalog::SettingMetadata& setting,
 		double storedValue, double& displayValue)
 	{
-		if (setting.editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric ||
-			!std::isfinite(storedValue))
+		if (!std::isfinite(storedValue))
+			return false;
+		if (setting.editorSemantic == SceneSettingsCatalog::EditorSemantic::Generic) {
+			displayValue = storedValue;
+			return true;
+		}
+		if (setting.editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric)
 			return false;
 
 		double transformedValue = storedValue;
@@ -507,8 +515,13 @@ namespace
 	bool ConvertCatalogNumericDisplayToStored(const SceneSettingsCatalog::SettingMetadata& setting,
 		double displayValue, double& storedValue)
 	{
-		if (setting.editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric ||
-			!std::isfinite(displayValue))
+		if (!std::isfinite(displayValue))
+			return false;
+		if (setting.editorSemantic == SceneSettingsCatalog::EditorSemantic::Generic) {
+			storedValue = displayValue;
+			return true;
+		}
+		if (setting.editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric)
 			return false;
 
 		const double transformedValue = displayValue / GetCatalogNumericDisplayScale(setting);
@@ -531,15 +544,31 @@ namespace
 	const SceneSettingsCatalog::SettingMetadata* FindStoredAllComponent(
 		const SceneSettingsCatalog::SettingMetadata& setting)
 	{
-		for (const auto& candidate : SceneSettingsCatalog::GetSettings())
-			if (candidate.featureShortName == setting.featureShortName &&
-				candidate.serializedPath == setting.serializedPath &&
-				candidate.serializedKey == setting.serializedKey &&
-				candidate.aggregateSemantic == setting.aggregateSemantic &&
-				candidate.aggregateStart == setting.aggregateStart &&
-				candidate.aggregateCount == setting.aggregateCount && candidate.aggregateAll)
-				return &candidate;
-		return nullptr;
+		const auto settings = SceneSettingsCatalog::GetSettings();
+		static const auto storedAllComponents = [] {
+			using AggregateKey = std::tuple<std::string_view, std::string_view, std::string_view,
+				SceneSettingsCatalog::AggregateSemantic, std::int8_t, std::uint8_t>;
+			const auto makeKey = [](const auto& candidate) {
+				return AggregateKey{ candidate.featureShortName, candidate.serializedPath,
+					candidate.serializedKey, candidate.aggregateSemantic,
+					candidate.aggregateStart, candidate.aggregateCount };
+			};
+			std::map<AggregateKey, const SceneSettingsCatalog::SettingMetadata*> storedAll;
+			for (const auto& candidate : SceneSettingsCatalog::GetSettings())
+				if (candidate.aggregateAll)
+					storedAll.try_emplace(makeKey(candidate), &candidate);
+			std::vector<const SceneSettingsCatalog::SettingMetadata*> components(
+				SceneSettingsCatalog::GetSettings().size(), nullptr);
+			for (size_t index = 0; index < SceneSettingsCatalog::GetSettings().size(); ++index) {
+				const auto& source = SceneSettingsCatalog::GetSettings()[index];
+				if (auto component = storedAll.find(makeKey(source)); component != storedAll.end())
+					components[index] = component->second;
+			}
+			return components;
+		}();
+		const auto index = static_cast<size_t>(&setting - settings.data());
+		assert(index < storedAllComponents.size());
+		return index < storedAllComponents.size() ? storedAllComponents[index] : nullptr;
 	}
 
 	SceneSettingControlType GetCatalogControlType(const SceneSettingsCatalog::SettingMetadata& setting)
@@ -626,6 +655,22 @@ namespace
 		if (info.controlType != SceneSettingControlType::Scalar) {
 			info.componentStart = setting.aggregateStart;
 			info.componentCount = setting.aggregateCount;
+			info.aggregatePresentation =
+				info.controlType == SceneSettingControlType::Color &&
+						setting.aggregatePresentation == SceneSettingsCatalog::AggregatePresentation::ColorPicker ?
+					ManagerAggregatePresentation::ColorPicker :
+					ManagerAggregatePresentation::Components;
+			switch (setting.unifiedEditMode) {
+			case SceneSettingsCatalog::UnifiedEditMode::Always:
+				info.unifiedEditMode = ManagerUnifiedEditMode::Always;
+				break;
+			case SceneSettingsCatalog::UnifiedEditMode::Shift:
+				info.unifiedEditMode = ManagerUnifiedEditMode::Shift;
+				break;
+			default:
+				info.unifiedEditMode = ManagerUnifiedEditMode::None;
+				break;
+			}
 		}
 		return info;
 	}
@@ -812,13 +857,28 @@ namespace
 		return ContainsFeatureName(SceneSettingsPolicy::kTimeOfDayFeatureWhitelist, featureShortName);
 	}
 
-	bool IsCatalogSettingAllowedByPolicy(const SceneSettingsCatalog::SettingMetadata& setting)
+	bool ComputeCatalogSettingAllowedByPolicy(const SceneSettingsCatalog::SettingMetadata& setting)
 	{
 		return SceneSettingsCatalog::IsSceneControllable(setting) &&
 		       !IsBlacklistedSceneSetting(
 			       std::string(setting.featureShortName),
 			       SplitCatalogPath(setting.settingPath),
 			       std::string(setting.settingKey));
+	}
+
+	bool IsCatalogSettingAllowedByPolicy(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		const auto settings = SceneSettingsCatalog::GetSettings();
+		static const auto allowedSettings = [] {
+			std::vector<uint8_t> allowed;
+			allowed.reserve(SceneSettingsCatalog::GetSettings().size());
+			for (const auto& candidate : SceneSettingsCatalog::GetSettings())
+				allowed.push_back(ComputeCatalogSettingAllowedByPolicy(candidate) ? 1 : 0);
+			return allowed;
+		}();
+		const auto index = static_cast<size_t>(&setting - settings.data());
+		assert(index < allowedSettings.size());
+		return index < allowedSettings.size() && allowedSettings[index] != 0;
 	}
 
 	const SceneSettingsCatalog::SettingMetadata* FindAllowedCatalogSetting(
@@ -1143,6 +1203,8 @@ namespace
 			.displayPath = GetCatalogSelectorPath(setting),
 			.value = value,
 			.controlType = SceneSettingControlType::Scalar,
+			.aggregatePresentation = ManagerAggregatePresentation::Components,
+			.unifiedEditMode = ManagerUnifiedEditMode::None,
 			.members = { { physicalPath, physicalKey, info.componentDisplayName, value,
 				setting.serializedComponent, info.aggregateAll } },
 		};
@@ -1201,6 +1263,13 @@ namespace
 				descriptor.displayPath = GetCatalogSelectorPath(setting);
 				descriptor.value = *value;
 				descriptor.controlType = info.controlType;
+				descriptor.aggregatePresentation = info.aggregatePresentation;
+				descriptor.unifiedEditMode = info.unifiedEditMode;
+			} else {
+				if (descriptor.aggregatePresentation != info.aggregatePresentation)
+					descriptor.aggregatePresentation = ManagerAggregatePresentation::Components;
+				if (descriptor.unifiedEditMode != info.unifiedEditMode)
+					descriptor.unifiedEditMode = ManagerUnifiedEditMode::None;
 			}
 			descriptor.members.push_back({
 				std::move(settingPath), std::string(setting.settingKey), info.componentDisplayName,
@@ -1530,6 +1599,11 @@ std::vector<SceneSettingsManager::SettingEntry>& SceneSettingsManager::GetEntrie
 	return entries[type];
 }
 
+void SceneSettingsManager::BumpEntryPresentationRevision()
+{
+	++entryPresentationRevision;
+}
+
 const std::vector<SceneSettingsManager::SettingEntry>& SceneSettingsManager::GetEntries(SceneType type) const
 {
 	static const std::vector<SettingEntry> empty;
@@ -1618,6 +1692,7 @@ bool SceneSettingsManager::AddSetting(SceneType type, const std::string& feature
 	entry.source = EntrySource::User;
 	entry.period = period;
 	vec.push_back(std::move(entry));
+	BumpEntryPresentationRevision();
 	MarkEntryListUserSettingsModified(type);
 	if (deferCommit)
 		MarkDeferredSceneChanges();
@@ -1644,6 +1719,7 @@ void SceneSettingsManager::RemoveSetting(SceneType type, size_t index)
 		entry.source == EntrySource::Overwrite ? "overwrite" : "user");
 
 	vec.erase(vec.begin() + static_cast<ptrdiff_t>(index));
+	BumpEntryPresentationRevision();
 	if (entry.source == EntrySource::User) {
 		MarkEntryListUserSettingsModified(type);
 		SaveAllUserSettings();
@@ -1658,6 +1734,7 @@ void SceneSettingsManager::TogglePauseEntry(SceneType type, size_t index)
 	auto& vec = GetEntriesMut(type);
 	if (index < vec.size()) {
 		vec[index].paused = !vec[index].paused;
+		BumpEntryPresentationRevision();
 		if (vec[index].source == EntrySource::User) {
 			MarkEntryListUserSettingsModified(type);
 			SaveAllUserSettings();
@@ -1691,9 +1768,15 @@ void SceneSettingsManager::SetAllOverwritesPaused(SceneType type, bool paused)
 {
 	if (!IsEntryListSceneType(type))
 		return;
-	for (auto& entry : GetEntriesMut(type))
-		if (entry.source == EntrySource::Overwrite)
+	bool changed = false;
+	for (auto& entry : GetEntriesMut(type)) {
+		if (entry.source == EntrySource::Overwrite && entry.paused != paused) {
 			entry.paused = paused;
+			changed = true;
+		}
+	}
+	if (changed)
+		BumpEntryPresentationRevision();
 	ReapplyIfActive();
 }
 
@@ -1743,10 +1826,15 @@ void SceneSettingsManager::DeleteAllOverwrites(SceneType type)
 	}
 	// Erase only entries whose backing files were successfully cleaned up
 	// (iterate in reverse to preserve index validity)
+	bool changed = false;
 	for (size_t i = vec.size(); i-- > 0;) {
-		if (shouldErase[i])
+		if (shouldErase[i]) {
 			vec.erase(vec.begin() + static_cast<ptrdiff_t>(i));
+			changed = true;
+		}
 	}
+	if (changed)
+		BumpEntryPresentationRevision();
 
 	ReapplyIfActive();
 }
@@ -1755,9 +1843,15 @@ void SceneSettingsManager::SetAllUserPaused(SceneType type, bool paused)
 {
 	if (!IsEntryListSceneType(type))
 		return;
-	for (auto& entry : GetEntriesMut(type))
-		if (entry.source == EntrySource::User)
+	bool changed = false;
+	for (auto& entry : GetEntriesMut(type)) {
+		if (entry.source == EntrySource::User && entry.paused != paused) {
 			entry.paused = paused;
+			changed = true;
+		}
+	}
+	if (changed)
+		BumpEntryPresentationRevision();
 	MarkEntryListUserSettingsModified(type);
 	SaveAllUserSettings();
 	ReapplyIfActive();
@@ -1783,9 +1877,11 @@ void SceneSettingsManager::DeleteAllUserSettings(SceneType type)
 	if (!IsEntryListSceneType(type))
 		return;
 	auto& vec = GetEntriesMut(type);
-	std::erase_if(vec, [](const SettingEntry& e) {
+	const auto removed = std::erase_if(vec, [](const SettingEntry& e) {
 		return e.source == EntrySource::User;
 	});
+	if (removed != 0)
+		BumpEntryPresentationRevision();
 	unresolvedUserEntries[type].clear();
 
 	MarkEntryListUserSettingsModified(type);
@@ -2968,6 +3064,7 @@ void SceneSettingsManager::LoadAllUserSettings()
 		std::erase_if(entries[type], [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
 	unresolvedUserEntries[SceneType::InteriorOnly].clear();
 	unresolvedUserEntries[SceneType::TimeOfDay].clear();
+	BumpEntryPresentationRevision();
 	interiorUserSettingsModified = false;
 	timeOfDayUserSettingsModified = false;
 	std::error_code ec;
@@ -3245,6 +3342,7 @@ void SceneSettingsManager::DiscoverOverwrites(SceneType type)
 {
 	if (!IsEntryListSceneType(type))
 		return;
+	const auto previousEntryCount = GetEntries(type).size();
 	// TimeOfDay has period subfolders; delegate to a shared loader
 	if (type == SceneType::TimeOfDay) {
 		auto basePath = GetOverwritesPath(type);
@@ -3253,10 +3351,12 @@ void SceneSettingsManager::DiscoverOverwrites(SceneType type)
 			auto periodPath = basePath / GetPeriodName(period);
 			DiscoverOverwritesInDir(type, periodPath, period);
 		}
-		return;
+	} else {
+		DiscoverOverwritesInDir(type, GetOverwritesPath(type));
 	}
 
-	DiscoverOverwritesInDir(type, GetOverwritesPath(type));
+	if (GetEntries(type).size() != previousEntryCount)
+		BumpEntryPresentationRevision();
 }
 
 static bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,
@@ -3346,6 +3446,7 @@ void SceneSettingsManager::LoadAll()
 		DiscoverOverwrites(SceneType::InteriorOnly);
 		DiscoverOverwrites(SceneType::TimeOfDay);
 		LoadAllUserSettings();
+		BumpEntryPresentationRevision();
 		activeEntryCacheDirty = true;
 		resolverDirty = true;
 	}
@@ -3374,6 +3475,7 @@ bool SceneSettingsManager::TryEnsureLocationDataLoaded()
 			LoadLocationUserSettings(preservedUserSettingsRoot);
 		locationDataLoaded = true;
 		locationTargetsCached = false;
+		BumpEntryPresentationRevision();
 		activeEntryCacheDirty = true;
 		resolverDirty = true;
 		return true;
@@ -3394,6 +3496,7 @@ bool SceneSettingsManager::TryEnsureWeatherDataLoaded()
 
 	weatherDataLoaded = true;
 	LoadWeatherData();
+	BumpEntryPresentationRevision();
 	activeEntryCacheDirty = true;
 	resolverDirty = true;
 	return true;
@@ -3539,6 +3642,7 @@ bool SceneSettingsManager::AddWeatherSetting(RE::FormID weatherId, const std::st
 	entry.source = EntrySource::User;
 	entry.period = period;
 	config.entries.push_back(std::move(entry));
+	BumpEntryPresentationRevision();
 	PrepareWeatherUserSettingsMutation(weatherId, true);
 	if (deferSave)
 		MarkDeferredSceneChanges();
@@ -3556,6 +3660,7 @@ void SceneSettingsManager::RemoveWeatherSetting(RE::FormID weatherId, size_t ind
 	auto it = weatherSceneConfigs.find(weatherId);
 	if (it == weatherSceneConfigs.end() || index >= it->second.entries.size())
 		return;
+	const auto previousSize = it->second.entries.size();
 	const auto entry = it->second.entries[index];
 	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty()) {
 		const auto backingPath = GetWeatherOverwritePath(weatherId, entry);
@@ -3571,6 +3676,8 @@ void SceneSettingsManager::RemoveWeatherSetting(RE::FormID weatherId, size_t ind
 		PrepareWeatherUserSettingsMutation(weatherId, false);
 		SaveAllUserSettings();
 	}
+	if (it->second.entries.size() != previousSize)
+		BumpEntryPresentationRevision();
 	ReapplyIfActive();
 }
 
@@ -3579,9 +3686,12 @@ void SceneSettingsManager::DeleteAllWeatherUserSettings(RE::FormID weatherId)
 	if (!TryEnsureWeatherDataLoaded())
 		return;
 	auto configIt = weatherSceneConfigs.find(weatherId);
-	if (configIt != weatherSceneConfigs.end())
-		std::erase_if(configIt->second.entries,
+	if (configIt != weatherSceneConfigs.end()) {
+		const auto removed = std::erase_if(configIt->second.entries,
 			[](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+		if (removed != 0)
+			BumpEntryPresentationRevision();
+	}
 	PrepareWeatherUserSettingsMutation(weatherId, false);
 	const auto normalizedSpid = NormalizeLocationFormKey(Util::FormIdToSpid(weatherId));
 	for (auto& [rawSpid, rawWeather] : unresolvedWeatherUserSettings.items())
@@ -3600,6 +3710,7 @@ void SceneSettingsManager::TogglePauseWeatherEntry(RE::FormID weatherId, size_t 
 	if (it == weatherSceneConfigs.end() || index >= it->second.entries.size())
 		return;
 	it->second.entries[index].paused = !it->second.entries[index].paused;
+	BumpEntryPresentationRevision();
 	if (it->second.entries[index].source == EntrySource::User) {
 		PrepareWeatherUserSettingsMutation(weatherId, false);
 		SaveAllUserSettings();
@@ -3898,6 +4009,7 @@ bool SceneSettingsManager::AddLocationSetting(LocationTargetType type, const std
 		.originalValue = *lowerValue,
 		.source = EntrySource::User,
 	});
+	BumpEntryPresentationRevision();
 	PrepareLocationUserSettingsMutation(type, formKey, true);
 	if (deferSave)
 		MarkDeferredSceneChanges();
@@ -3918,6 +4030,7 @@ void SceneSettingsManager::RemoveLocationSetting(LocationTargetType type, const 
 		!RemoveSettingFromOverwriteFile(GetLocationOverwritePath(type, formKey, entry), entry.settingPath, entry.settingKey))
 		return;
 	it->second.entries.erase(it->second.entries.begin() + static_cast<ptrdiff_t>(index));
+	BumpEntryPresentationRevision();
 	if (userEntry) {
 		PrepareLocationUserSettingsMutation(type, formKey, false);
 		SaveAllUserSettings();
@@ -3930,9 +4043,12 @@ void SceneSettingsManager::DeleteAllLocationUserSettings(LocationTargetType type
 	if (!TryEnsureLocationDataLoaded())
 		return;
 	auto configIt = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	if (configIt != locationSceneConfigs.end())
-		std::erase_if(configIt->second.entries,
+	if (configIt != locationSceneConfigs.end()) {
+		const auto removed = std::erase_if(configIt->second.entries,
 			[](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+		if (removed != 0)
+			BumpEntryPresentationRevision();
+	}
 	PrepareLocationUserSettingsMutation(type, formKey, false);
 	const auto* sectionName = type == LocationTargetType::Cell ? "cells" : "locations";
 	auto sectionIt = unresolvedLocationUserSettings.find(sectionName);
@@ -3953,6 +4069,7 @@ void SceneSettingsManager::TogglePauseLocationEntry(LocationTargetType type, con
 	if (it == locationSceneConfigs.end() || index >= it->second.entries.size())
 		return;
 	it->second.entries[index].paused = !it->second.entries[index].paused;
+	BumpEntryPresentationRevision();
 	if (it->second.entries[index].source == EntrySource::User) {
 		PrepareLocationUserSettingsMutation(type, formKey, false);
 		SaveAllUserSettings();
@@ -4157,6 +4274,8 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(LocationTargetTyp
 
 void SceneSettingsManager::DiscoverWeatherOverwrites()
 {
+	const auto previousEntryCount = std::accumulate(weatherSceneConfigs.begin(), weatherSceneConfigs.end(), size_t{ 0 },
+		[](size_t total, const auto& config) { return total + config.second.entries.size(); });
 	auto baseDir = GetWeatherOverwritesDir();
 	std::error_code ec;
 	if (!std::filesystem::exists(baseDir, ec))
@@ -4174,6 +4293,11 @@ void SceneSettingsManager::DiscoverWeatherOverwrites()
 
 		DiscoverWeatherOverwritesForSpid(weatherId, weatherDirectory);
 	}
+
+	const auto entryCount = std::accumulate(weatherSceneConfigs.begin(), weatherSceneConfigs.end(), size_t{ 0 },
+		[](size_t total, const auto& config) { return total + config.second.entries.size(); });
+	if (entryCount != previousEntryCount)
+		BumpEntryPresentationRevision();
 }
 
 void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId, const std::filesystem::path& weatherDir)
