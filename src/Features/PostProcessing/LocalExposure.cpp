@@ -385,7 +385,7 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		state->EndPerfEvent();
 	}
 
-	// === Pass 4: Guided upsample and output raw-HDR exposure multiplier ===
+	// === Pass 4: Joint-bilateral upsample and output raw-HDR exposure multiplier ===
 	{
 		CS_GPU_PASS("PostProcessing::LocalExposure::ComputeExposure");
 		state->BeginPerfEvent("Compute Exposure");
