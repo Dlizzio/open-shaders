@@ -139,10 +139,8 @@ namespace Util
 		if (!imageSpaceManager)
 			return false;
 		// VR keeps its own ISTemporalAA instance at a different offset.
-		auto& taaShader = !globals::game::isVR ?
-		                      imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA :
-		                      imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA;
-		return taaShader && taaShader->taaEnabled;
+		GET_INSTANCE_MEMBER_VRPTR(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+		return BSImagespaceShaderISTemporalAA && BSImagespaceShaderISTemporalAA->taaEnabled;
 	}
 
 	void SetTemporal(bool enabled)
@@ -150,11 +148,9 @@ namespace Util
 		auto* imageSpaceManager = globals::game::imageSpaceManager;
 		if (!imageSpaceManager)
 			return;
-		auto& taaShader = !globals::game::isVR ?
-		                      imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA :
-		                      imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA;
-		if (taaShader)
-			taaShader->taaEnabled = enabled;
+		GET_INSTANCE_MEMBER_VRPTR(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+		if (BSImagespaceShaderISTemporalAA)
+			BSImagespaceShaderISTemporalAA->taaEnabled = enabled;
 	}
 
 	void DisableVanillaTAA()

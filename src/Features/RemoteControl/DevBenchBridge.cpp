@@ -255,8 +255,8 @@ namespace
 		}
 
 		// Live runtime-only debug flags (never persisted to SettingsUser.json)
-		// via Feature::GetRuntimeFlags/SetRuntimeFlag, mirroring
-		// GetDiagnostics above. Empty object / false if unimplemented.
+		// via Feature::GetRuntimeFlags/SetRuntimeFlag; see LightLimitFix for
+		// the reference override. Empty object / false if unimplemented.
 		if (action == "runtimeGet") {
 			return RunOnMainThread([shortName]() -> json {
 				auto* feature = Feature::FindFeatureByShortName(shortName);
@@ -390,14 +390,21 @@ namespace
 				{ "reason", ShadowCasterManager::SchedReasonName(reason) },
 			});
 		json slots = json::array();
-		// renderedScale histogram (full..sixteenth) so gates can assert the
-		// class ladder without walking the slot array.
+		// Bucketed from tile.size, not renderedScale, which reflects the requested
+		// scale -- a starved light can request full and get only the smallest tile.
 		int classes[5] = {};
+		int classNone = 0;  // tileSize == 0: no atlas tile, distinct from the smallest class
+		const float baseTexels = snap.baseTileTexels > 0.0f ? snap.baseTileTexels : 2048.0f;
 		for (const auto& s : snap.slots) {
-			int cls = 0;
-			for (float step = 1.0f; s.renderedScale < step && cls < 4; step *= 0.5f)
-				cls++;
-			classes[cls]++;
+			if (s.tileSize == 0) {
+				classNone++;
+			} else {
+				int cls = 0;
+				const float tileScale = static_cast<float>(s.tileSize) / baseTexels;
+				for (float step = 1.0f; tileScale < step && cls < 4; step *= 0.5f)
+					cls++;
+				classes[cls]++;
+			}
 			slots.push_back(json{
 				{ "slot", s.index },
 				{ "ptr", std::format("{:#018x}", s.light) },
@@ -408,9 +415,18 @@ namespace
 				{ "pendingScale", s.pendingScale },
 				{ "renderedScale", s.renderedScale },
 				{ "tile", json{ { "x", s.tileX }, { "y", s.tileY }, { "size", s.tileSize }, { "contentValid", s.tileContentValid } } },
+				{ "geomListSize", s.geomListSize },
+				{ "staticValid", s.staticValid },
+				{ "staticEmpty", s.staticEmpty },
 				{ "upload", json{ { "recorded", s.uploadRecorded }, { "paramY", s.uploadParamY }, { "range", s.uploadRange } } },
 				{ "suppressed", s.suppressed },
 				{ "promoted", s.promoted },
+				{ "redrawnThisFrame", s.redrawnThisFrame },
+				{ "schedDirty", s.schedDirty },
+				{ "dirtyStallFrames", s.dirtyStallFrames },
+				{ "redrawScore", s.redrawScore },
+				{ "lastDrawnFrame", s.lastDrawnFrame },
+				{ "cameraHold", s.cameraHold },
 			});
 		}
 		return json{
@@ -427,14 +443,16 @@ namespace
 			{ "slotsInUse", snap.slotsInUse },
 			{ "lights", lights },
 			{ "slots", slots },
-			{ "classes", json{ { "full", classes[0] }, { "half", classes[1] }, { "quarter", classes[2] }, { "eighth", classes[3] }, { "sixteenth", classes[4] } } },
+			{ "classes", json{ { "full", classes[0] }, { "half", classes[1] }, { "quarter", classes[2] }, { "eighth", classes[3] }, { "sixteenth", classes[4] }, { "none", classNone } } },
 			{ "atlas", json{
 						   { "dim", snap.atlasDim },
+						   { "baseTileTexels", snap.baseTileTexels },
 						   { "capacityCells", snap.atlasCapacityCells },
 						   { "occupancy", snap.atlasOccupancy },
 						   { "vramBytes", snap.atlasVramBytes },
 						   { "tileReallocs", snap.atlasTileReallocs },
 						   { "ownerInvalidations", snap.atlasOwnerInvalidations },
+						   { "allocDenied", snap.atlasAllocDenied },
 						   { "cpuAccumUsAvg", snap.cpuAccumUsAvg },
 						   { "cpuSubmitUsAvg", snap.cpuSubmitUsAvg },
 						   { "cpuEnableUsAvg", snap.cpuEnableUsAvg },
@@ -444,9 +462,39 @@ namespace
 							{ "avgRedrawsPerFrame", snap.avgRedrawsPerFrame },
 							{ "estPassMsPerFrame", snap.avgLightCostUs / 1000.0 * snap.avgRedrawsPerFrame },
 							{ "staticBakesTotal", snap.staticBakesTotal },
+							{ "cellResetsTotal", snap.cellResetsTotal },
+							{ "cullPoolDropsTotal", snap.cullPoolDropsTotal },
+							{ "casterCullDropsTotal", snap.casterCullDropsTotal },
 							{ "sleepSkips", snap.sleepSkips },
 							{ "sleepSkipsTotal", snap.sleepSkipsTotal },
+							{ "demandSkips", snap.demandSkips },
+							{ "demandSkipsTotal", snap.demandSkipsTotal },
+							{ "alphaGroupPeak", snap.alphaGroupPeak },
+							{ "alphaGroupDrops", snap.alphaGroupDrops },
 						} },
+			{ "demandAudit", json{
+								 { "frustumCandidates", snap.frustumAuditCandidates },
+								 { "frustumKeptSphereOut", snap.frustumAuditKeptOut },
+								 { "frustumSuspects", snap.frustumAuditSuspects },
+								 { "slotted", snap.demandSlotted },
+								 { "zero", snap.demandZero },
+								 { "subTap", snap.demandSubTap },
+								 { "skipEligible", snap.demandSkipEligible },
+								 { "swapIn", snap.demandSwapIn },
+								 { "swapInAboveEps", snap.demandSwapInAboveEps },
+								 { "redrawsSaved", snap.demandRedrawsSaved },
+								 { "budgetSaturated", snap.demandBudgetSaturated },
+								 { "phase1Enabled", snap.demandPhase1Enabled },
+								 { "skipActive", snap.demandSkipActive },
+								 { "skipEligibleTotal", snap.demandSkipEligibleTotal },
+								 { "swapInTotal", snap.demandSwapInTotal },
+								 { "redrawsSavedTotal", snap.demandRedrawsSavedTotal },
+							 } },
+			{ "redrawStall", json{
+								 { "stallMax", snap.stallMax },
+								 { "stallWorstSlot", snap.stallWorstSlot },
+								 { "demandRatio", snap.demandRatio },
+							 } },
 		};
 	}
 
