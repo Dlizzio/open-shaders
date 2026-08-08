@@ -51,7 +51,6 @@ struct TimeOfDayValue
 	{
 		return std::equal(std::begin(values), std::end(values), std::begin(other.values));
 	}
-
 };
 
 struct ColorTimeOfDayValue
@@ -86,7 +85,6 @@ struct ColorTimeOfDayValue
 		}
 		return true;
 	}
-
 };
 
 using SettingValue = std::variant<bool, float, TimeOfDayValue, ColorTimeOfDayValue>;

@@ -1,8 +1,10 @@
 #include "CloudShadows.h"
 
+#if defined(ENABLE_EFFECTS11)
+#	include "Effects11.h"
+#	include "Effects11/SettingManager.h"
+#endif
 #include "../I18n/I18n.h"
-#include "Effects11.h"
-#include "Effects11/SettingManager.h"
 #include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -15,6 +17,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void CloudShadows::DrawSettings()
 {
+#if defined(ENABLE_EFFECTS11)
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
@@ -22,6 +25,7 @@ void CloudShadows::DrawSettings()
 			return;
 		}
 	}
+#endif
 
 	ImGui::SliderFloat(T(TKEY("opacity"), "Opacity"), &settings.Opacity, 0.0f, 4.0f, "%.1f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -54,6 +58,7 @@ CloudShadows::Settings CloudShadows::GetCommonBufferData()
 
 	auto data = settings;
 
+#if defined(ENABLE_EFFECTS11)
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
@@ -65,6 +70,7 @@ CloudShadows::Settings CloudShadows::GetCommonBufferData()
 			}
 		}
 	}
+#endif
 
 	return data;
 }

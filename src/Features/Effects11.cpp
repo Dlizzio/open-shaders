@@ -571,7 +571,6 @@ void Effects11::ModifySky(RE::BSRenderPass* Pass)
 	}
 }
 
-
 void Effects11::ModifyParticle(RE::BSRenderPass* Pass)
 {
 	if (!enableEffect || !raindropSRV)
@@ -591,7 +590,6 @@ void Effects11::ModifyParticle(RE::BSRenderPass* Pass)
 	ID3D11Buffer* cbs[] = { globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
 	context->VSSetConstantBuffers(5, 2, cbs);
 }
-
 
 void Effects11::ParticleShaderHacks()
 {

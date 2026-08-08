@@ -1203,8 +1203,10 @@ void Menu::ProcessInputEventQueue()
 							 globals::features::screenshotFeature.captureRequested = true;
 					 } },
 					{ settings.Effects11ToggleKey, []() {
+#if defined(ENABLE_EFFECTS11)
 						 if (globals::features::effects11.loaded)
 							 globals::features::effects11.ToggleEnabled();
+#endif
 					 } },
 				};
 				// RenderDoc's capture key is a single, unmodified key; only consider it on key-up.

@@ -6,8 +6,10 @@
 #include "State.h"
 #include "WeatherVariableRegistry.h"
 
-#include "Effects11.h"
-#include "Effects11/SettingManager.h"
+#if defined(ENABLE_EFFECTS11)
+#	include "Effects11.h"
+#	include "Effects11/SettingManager.h"
+#endif
 #include "Globals.h"
 
 #include "../I18n/I18n.h"
@@ -66,6 +68,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void IBL::DrawSettings()
 {
+#if defined(ENABLE_EFFECTS11)
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
@@ -73,6 +76,7 @@ void IBL::DrawSettings()
 			return;
 		}
 	}
+#endif
 
 	Util::WeatherUI::Checkbox(T(TKEY("enable_ibl"), "Enable IBL"), this, "EnableIBL", (bool*)&settings.EnableIBL);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -194,6 +198,7 @@ void IBL::RestoreDefaultSettings()
 
 void IBL::RegisterWeatherVariables()
 {
+#if defined(ENABLE_EFFECTS11)
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
@@ -203,6 +208,7 @@ void IBL::RegisterWeatherVariables()
 			}
 		}
 	}
+#endif
 
 	auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton()
 	                     ->GetOrCreateFeatureRegistry(GetShortName());
@@ -288,6 +294,7 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 		.DALCMode = GetEffectiveDALCMode(settings)
 	};
 
+#if defined(ENABLE_EFFECTS11)
 	if (!sceneDisabled && globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
@@ -304,6 +311,7 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 			}
 		}
 	}
+#endif
 
 	return data;
 }

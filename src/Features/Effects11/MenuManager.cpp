@@ -1,12 +1,12 @@
 ﻿#include "MenuManager.h"
 
 #include "EffectManager.h"
-#include "SettingManager.h"
-#include "TextureManager.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/ShaderPatches.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "SettingManager.h"
+#include "TextureManager.h"
 
 static const char* const timeOfDayNames[] = { "Dawn", "Sunrise", "Day", "Sunset", "Dusk", "Night", "InteriorDay", "InteriorNight" };
 
@@ -485,4 +485,3 @@ void MenuManager::RenderAllSettings()
 		ImGui::EndTabBar();
 	}
 }
-

@@ -9,15 +9,15 @@ SamplerState defaultSampler : register(s0);
 
 struct VS_OUTPUT_POST
 {
-	float4 pos : SV_POSITION;
-	float2 txcoord0 : TEXCOORD0;
+	float4 pos: SV_POSITION;
+	float2 txcoord0: TEXCOORD0;
 };
 
 struct PS_OUTPUT
 {
-	float Scattering : SV_Target0;
+	float Scattering: SV_Target0;
 	// Depth this texel raymarched with; the bilateral blur + upsample weight against it.
-	float Depth : SV_Target1;
+	float Depth: SV_Target1;
 };
 
 PS_OUTPUT main(VS_OUTPUT_POST input)
@@ -41,8 +41,8 @@ PS_OUTPUT main(VS_OUTPUT_POST input)
 	float scattering = 0.0;
 	float transmittance = 1.0;
 
-	[unroll]
-	for (uint i = 0; i < sampleCount; i++) {
+	[unroll] for (uint i = 0; i < sampleCount; i++)
+	{
 		float t0 = float(i) * rcpSampleCount;
 		float t1 = float(i + 1) * rcpSampleCount;
 
@@ -55,7 +55,7 @@ PS_OUTPUT main(VS_OUTPUT_POST input)
 		float3 samplePos = positionMS.xyz * t;
 
 		float shadow = 1.0;
-		
+
 #if defined(TERRAIN_SHADOWS)
 		shadow = TerrainShadows::GetTerrainShadow(samplePos + cameraOffset, LinearSampler);
 #endif

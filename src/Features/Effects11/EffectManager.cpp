@@ -88,7 +88,6 @@ void EffectManager::Initialize()
 	} else {
 		initialized = true;
 	}
-
 }
 
 void EffectManager::LogPresetStatus() const
@@ -284,7 +283,6 @@ void EffectManager::RegisterSettings()
 	settingManager.SetSettingDependency("ProceduralGradientWeightCurve", "SKY", "UseProceduralGradientWeights", "SKY");
 	settingManager.SetSettingDependency("AdaptationMin", "ADAPTATION", "ForceMinMaxValues", "ADAPTATION");
 	settingManager.SetSettingDependency("AdaptationMax", "ADAPTATION", "ForceMinMaxValues", "ADAPTATION");
-
 
 	settingManager.SetCategoryExteriorOnly("RAIN", true);
 	settingManager.SetCategoryExteriorOnly("SKYLIGHTING", true);

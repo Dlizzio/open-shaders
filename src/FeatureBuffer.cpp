@@ -65,7 +65,14 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::extendedTranslucency.GetCommonBufferData(),
 		globals::features::csUtility.GetCommonBufferData(),
 		globals::features::linearLighting.GetCommonBufferData(),
+#if defined(ENABLE_EFFECTS11)
 		globals::features::effects11.GetCommonBufferData(),
+#else
+		// Effects11::PerFrame keeps this cbuffer slot's size/offset stable across the
+		// ENABLE_EFFECTS11 build gate; the type is declared unconditionally in
+		// Effects11.h even though the feature instance only exists when the gate is on.
+		Effects11::PerFrame{},
+#endif
 		globals::features::terrainBlending.settings,
 		globals::features::exponentialHeightFog.GetCommonBufferData(),
 		globals::features::truePBR.settings,

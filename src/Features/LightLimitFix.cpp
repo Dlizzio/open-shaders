@@ -1638,8 +1638,8 @@ void LightLimitFix::UpdateShadowDemand()
 	// Prepass) is the actual demand-skip consumption path and doesn't need this log.
 	if (ShadowDemandInstrumentation && shadowDemandEMAInitialized && shadowDemandFrameCounter - shadowDemandLastLogFrame >= 300) {
 		shadowDemandLastLogFrame = shadowDemandFrameCounter;
-		auto installed = ShadowCasterManager::GetInstalledSlotCount();
-		auto count = std::min<uint32_t>(installed, MAX_SHADOW_DEMAND_SLOTS);
+		auto installedSlotCount = ShadowCasterManager::GetInstalledSlotCount();
+		auto count = std::min<uint32_t>(installedSlotCount, MAX_SHADOW_DEMAND_SLOTS);
 		if (count > 0) {
 			float minV = shadowDemandEMA[0], maxV = shadowDemandEMA[0], sum = 0.0f;
 			for (uint32_t i = 0; i < count; i++) {

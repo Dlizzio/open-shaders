@@ -2,12 +2,12 @@
 
 #ifdef ENABLE_ENB_EXTENDER
 
-#include <sstream>
+#	include <sstream>
 
-#include "../EffectManager.h"
-#include "../PresetManager.h"
-#include "../WeatherManager.h"
-#include "Globals.h"
+#	include "../EffectManager.h"
+#	include "../PresetManager.h"
+#	include "../WeatherManager.h"
+#	include "Globals.h"
 
 void ExtendedEffect::Unload()
 {
@@ -26,9 +26,8 @@ int ExtendedEffect::ResolveTechniqueBinding(const std::string& variableName)
 
 	for (int i = 0; i < static_cast<int>(uiVariables.size()); ++i) {
 		auto& uiVar = uiVariables[i];
-		const std::string& uname = !uiVar.uniqueName.empty() ? uiVar.uniqueName
-		                           : !uiVar.group.empty()    ? uiVar.group + "." + uiVar.displayName
-		                                                     : uiVar.displayName;
+		const std::string& uname = !uiVar.uniqueName.empty() ? uiVar.uniqueName : !uiVar.group.empty() ? uiVar.group + "." + uiVar.displayName :
+		                                                                                                 uiVar.displayName;
 		if (uname == variableName) {
 			bindingCache[variableName] = i;
 			return i;
@@ -49,10 +48,18 @@ bool ExtendedEffect::IsTechniqueEnabled(TechniqueInfo& info)
 		auto& uiVar = uiVariables[idx];
 		bool val = false;
 		switch (uiVar.type) {
-		case UIVariableType::Bool: val = uiVar.boolValue; break;
-		case UIVariableType::Int: val = uiVar.intValue != 0; break;
-		case UIVariableType::Float: val = uiVar.floatValue != 0.0f; break;
-		default: val = true; break;
+		case UIVariableType::Bool:
+			val = uiVar.boolValue;
+			break;
+		case UIVariableType::Int:
+			val = uiVar.intValue != 0;
+			break;
+		case UIVariableType::Float:
+			val = uiVar.floatValue != 0.0f;
+			break;
+		default:
+			val = true;
+			break;
 		}
 
 		if (binding.inverted ? !val : val)
@@ -67,13 +74,20 @@ bool ExtendedEffect::IsTechniqueEnabled(TechniqueInfo& info)
 float ExtendedEffect::GetPeriodWeight(const std::string& period)
 {
 	auto& cd = EffectManager::GetSingleton().commonData;
-	if (period == "Dawn") return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Dawn)];
-	if (period == "Sunrise") return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Sunrise)];
-	if (period == "Day") return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Day)];
-	if (period == "Sunset") return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Sunset)];
-	if (period == "Dusk") return cd.timeOfDay2[static_cast<int>(TimeOfDay2Index::Dusk)];
-	if (period == "Night") return cd.timeOfDay2[static_cast<int>(TimeOfDay2Index::Night)];
-	if (period == "Interior") return cd.eInteriorFactor;
+	if (period == "Dawn")
+		return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Dawn)];
+	if (period == "Sunrise")
+		return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Sunrise)];
+	if (period == "Day")
+		return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Day)];
+	if (period == "Sunset")
+		return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Sunset)];
+	if (period == "Dusk")
+		return cd.timeOfDay2[static_cast<int>(TimeOfDay2Index::Dusk)];
+	if (period == "Night")
+		return cd.timeOfDay2[static_cast<int>(TimeOfDay2Index::Night)];
+	if (period == "Interior")
+		return cd.eInteriorFactor;
 	return 0.0f;
 }
 
@@ -125,7 +139,8 @@ void ExtendedEffect::ApplyTimeOfDayInterpolation()
 				result += uiVariables[e.index].floatValue * (e.weight / totalWeight);
 			baseVar->AsScalar()->SetFloat(result);
 		} else {
-			int comps = (firstVar.type == UIVariableType::Float2) ? 2 : (firstVar.type == UIVariableType::Float3) ? 3 : 4;
+			int comps = (firstVar.type == UIVariableType::Float2) ? 2 : (firstVar.type == UIVariableType::Float3) ? 3 :
+			                                                                                                        4;
 			float result[4] = {};
 			for (auto& e : entries) {
 				float w = e.weight / totalWeight;
@@ -171,7 +186,8 @@ void ExtendedEffect::LoadWeatherData()
 
 			if (IsPerComponentVector(uiVar)) {
 				static const char* suffixes[] = { "X", "Y", "Z", "W" };
-				int comps = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
+				int comps = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 :
+				                                                                                                  4;
 				for (int c = 0; c < comps; ++c) {
 					std::string compKey = iniKey + suffixes[c];
 					char buffer[256];
@@ -209,7 +225,11 @@ void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWea
 		return;
 
 	auto safeStof = [](const std::string& s, float fallback) -> float {
-		try { return std::stof(s); } catch (...) { return fallback; }
+		try {
+			return std::stof(s);
+		} catch (...) {
+			return fallback;
+		}
 	};
 
 	for (auto& uiVar : uiVariables) {
@@ -228,9 +248,11 @@ void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWea
 		case UIVariableType::Float:
 			{
 				auto getVal = [&](const WeatherValues* vals) -> float {
-					if (!vals) return uiVar.floatValue;
+					if (!vals)
+						return uiVar.floatValue;
 					auto it = vals->find(iniKey);
-					if (it == vals->end()) return uiVar.floatValue;
+					if (it == vals->end())
+						return uiVar.floatValue;
 					return safeStof(it->second, uiVar.floatValue);
 				};
 
@@ -245,7 +267,8 @@ void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWea
 		case UIVariableType::Float3:
 		case UIVariableType::Float4:
 			{
-				int comps = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
+				int comps = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 :
+				                                                                                                  4;
 				bool perComp = IsPerComponentVector(uiVar);
 
 				auto parseVec = [&](const WeatherValues* vals, float* out) {
@@ -315,7 +338,8 @@ void ExtendedEffect::SyncWeatherDataFromUI(uint32_t weatherID)
 		case UIVariableType::Float3:
 		case UIVariableType::Float4:
 			{
-				int comps = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
+				int comps = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 :
+				                                                                                                  4;
 				if (IsPerComponentVector(uiVar)) {
 					static const char* suffixes[] = { "X", "Y", "Z", "W" };
 					for (int c = 0; c < comps; ++c) {
@@ -326,7 +350,8 @@ void ExtendedEffect::SyncWeatherDataFromUI(uint32_t weatherID)
 				} else {
 					std::string val;
 					for (int c = 0; c < comps; ++c) {
-						if (c > 0) val += ", ";
+						if (c > 0)
+							val += ", ";
 						val += std::to_string(uiVar.vectorValue[c]);
 					}
 					values[iniKey] = val;
@@ -341,8 +366,8 @@ void ExtendedEffect::SyncWeatherDataFromUI(uint32_t weatherID)
 
 // Rendering
 
-#include "../ENBExtender.h"
-#include "../UITree.h"
+#	include "../ENBExtender.h"
+#	include "../UITree.h"
 
 namespace
 {
@@ -364,14 +389,22 @@ namespace
 			return boundValue != 0.0f;
 		float cmp = SafeStofLocal(condStr.substr(valueStart));
 		char c0 = condStr[0], c1 = (condStr.size() >= 2) ? condStr[1] : '\0';
-		if (c0 == '=' && c1 == '=') return boundValue == cmp;
-		if (c0 == '!' && c1 == '=') return boundValue != cmp;
-		if (c0 == '<' && c1 == '=') return boundValue <= cmp;
-		if (c0 == '>' && c1 == '=') return boundValue >= cmp;
-		if (c0 == '=' && c1 == '<') return boundValue <= cmp;
-		if (c0 == '=' && c1 == '>') return boundValue >= cmp;
-		if (c0 == '<') return boundValue < cmp;
-		if (c0 == '>') return boundValue > cmp;
+		if (c0 == '=' && c1 == '=')
+			return boundValue == cmp;
+		if (c0 == '!' && c1 == '=')
+			return boundValue != cmp;
+		if (c0 == '<' && c1 == '=')
+			return boundValue <= cmp;
+		if (c0 == '>' && c1 == '=')
+			return boundValue >= cmp;
+		if (c0 == '=' && c1 == '<')
+			return boundValue <= cmp;
+		if (c0 == '=' && c1 == '>')
+			return boundValue >= cmp;
+		if (c0 == '<')
+			return boundValue < cmp;
+		if (c0 == '>')
+			return boundValue > cmp;
 		return false;
 	}
 
@@ -406,10 +439,17 @@ namespace
 			const auto& bv = boundRef->effect->uiVariables[boundRef->index];
 			float val = 0.0f;
 			switch (bv.type) {
-			case Effect::UIVariableType::Float: val = bv.floatValue; break;
-			case Effect::UIVariableType::Int: val = static_cast<float>(bv.intValue); break;
-			case Effect::UIVariableType::Bool: val = bv.boolValue ? 1.0f : 0.0f; break;
-			default: break;
+			case Effect::UIVariableType::Float:
+				val = bv.floatValue;
+				break;
+			case Effect::UIVariableType::Int:
+				val = static_cast<float>(bv.intValue);
+				break;
+			case Effect::UIVariableType::Bool:
+				val = bv.boolValue ? 1.0f : 0.0f;
+				break;
+			default:
+				break;
 			}
 
 			bool cond = EvaluateCondition(binding.condition, val);
@@ -418,11 +458,22 @@ namespace
 
 			std::string prop = binding.property;
 			std::transform(prop.begin(), prop.end(), prop.begin(), ::tolower);
-			if (prop == "hidden") { if (cond) visible = false; }
-			else if (prop == "visible") { if (!cond) visible = false; }
-			else if (prop == "readonly") { if (cond) readOnly = true; }
-			else if (prop == "readwrite") { if (!cond) readOnly = true; }
-			else { if (!cond) visible = false; }
+			if (prop == "hidden") {
+				if (cond)
+					visible = false;
+			} else if (prop == "visible") {
+				if (!cond)
+					visible = false;
+			} else if (prop == "readonly") {
+				if (cond)
+					readOnly = true;
+			} else if (prop == "readwrite") {
+				if (!cond)
+					readOnly = true;
+			} else {
+				if (!cond)
+					visible = false;
+			}
 		}
 
 		return { visible, readOnly };
@@ -557,7 +608,10 @@ namespace
 			return false;
 
 		if (uiVar.isLabel) {
-			if (inTable) { ImGui::EndTable(); inTable = false; }
+			if (inTable) {
+				ImGui::EndTable();
+				inTable = false;
+			}
 			if (uiVar.isReadOnly)
 				ImGui::PushStyleColor(ImGuiCol_Text, globals::menu->GetSettings().Theme.StatusPalette.Disable);
 			ImGui::TextWrapped("%s", uiVar.displayName.c_str());
@@ -628,7 +682,10 @@ namespace
 
 			case UITree::Item::Type::Separator:
 				if (!lastWasSeparator) {
-					if (inTable) { ImGui::EndTable(); inTable = false; }
+					if (inTable) {
+						ImGui::EndTable();
+						inTable = false;
+					}
 					ImGui::Separator();
 					lastWasSeparator = true;
 				}
@@ -637,7 +694,10 @@ namespace
 			case UITree::Item::Type::Group:
 				if (!item.group || !HasVisibleContent(*item.group))
 					break;
-				if (inTable) { ImGui::EndTable(); inTable = false; }
+				if (inTable) {
+					ImGui::EndTable();
+					inTable = false;
+				}
 				lastWasSeparator = false;
 
 				{

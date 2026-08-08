@@ -523,6 +523,15 @@ endforeach()
 set(FEATURE_PATHS ${_valid_feature_paths})
 unset(_valid_feature_paths)
 unset(_feat_files)
+
+# Effects11's sources aren't compiled in when ENABLE_EFFECTS11 is off (see the
+# source filter above), so staging its ini/shaders to a local dev deploy only
+# produces an orphaned-ini warning at runtime, never a working feature.
+set(AIO_LOCAL_FEATURE_PATHS ${FEATURE_PATHS})
+if(NOT ENABLE_EFFECTS11)
+    list(FILTER AIO_LOCAL_FEATURE_PATHS EXCLUDE REGEX "/Effects11$")
+endif()
+
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 
 # Set AIO directory path used by multiple targets below
@@ -534,14 +543,20 @@ set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/AioPartition.cmake)
 
 # Partition features into AIO-included / -excluded sets.
-# AIO_INCLUDE_NON_AUTOUPLOAD=ON includes everything (local dev override).
+# AIO_INCLUDE_NON_AUTOUPLOAD=ON includes everything (local dev override) --
+# except a feature whose sources aren't even compiled into this binary (see
+# the ENABLE_EFFECTS11 source filter above): deploying its ini/shaders when
+# the DLL has no matching Feature class just produces an orphaned-ini warning
+# at runtime, not a working feature.
 set(AIO_INCLUDED_FEATURE_PATHS "")
 set(AIO_EXCLUDED_FEATURE_PATHS "")
 foreach(_fpath IN LISTS FEATURE_PATHS)
     if(NOT IS_DIRECTORY "${_fpath}")
         continue()
     endif()
-    if(AIO_INCLUDE_NON_AUTOUPLOAD)
+    if(NOT ENABLE_EFFECTS11 AND _fpath MATCHES "/Effects11$")
+        list(APPEND AIO_EXCLUDED_FEATURE_PATHS "${_fpath}")
+    elseif(AIO_INCLUDE_NON_AUTOUPLOAD)
         list(APPEND AIO_INCLUDED_FEATURE_PATHS "${_fpath}")
     else()
         feature_in_aio("${_fpath}" _ok)
@@ -705,7 +720,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     )
     list(FILTER _AIO_PACKAGE_FILES EXCLUDE REGEX "/Tests/")
     list(FILTER _AIO_PACKAGE_FILES EXCLUDE REGEX "/Shaders/")
-    foreach(_fpath IN LISTS FEATURE_PATHS)
+    foreach(_fpath IN LISTS AIO_LOCAL_FEATURE_PATHS)
         file(GLOB_RECURSE _tmp LIST_DIRECTORIES FALSE "${_fpath}/*")
         list(FILTER _tmp EXCLUDE REGEX "/Shaders/")
         list(APPEND _AIO_PACKAGE_FILES ${_tmp})
@@ -720,7 +735,12 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     set(_feature_paths_list_file
         "${CMAKE_CURRENT_BINARY_DIR}/feature_paths.txt"
     )
-    string(REPLACE ";" "\n" _feature_paths_file_content "${FEATURE_PATHS}")
+    string(
+        REPLACE ";"
+        "\n"
+        _feature_paths_file_content
+        "${AIO_LOCAL_FEATURE_PATHS}"
+    )
     file(WRITE "${_feature_paths_list_file}" "${_feature_paths_file_content}")
 
     # Ensure SKSE/Plugins dir exists
@@ -766,7 +786,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # trailing `remove` below deletes it anyway. When MSBuild runs the copy
     # commands in parallel two features can race for the write and one
     # fails with "Permission denied", taking PREPARE_AIO down with it.
-    foreach(_fpath IN LISTS FEATURE_PATHS)
+    foreach(_fpath IN LISTS AIO_LOCAL_FEATURE_PATHS)
         if(EXISTS "${_fpath}")
             file(
                 GLOB_RECURSE _feature_files
@@ -853,12 +873,14 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
     set(_shader_copy_cmds)
 
-    # All features' shaders are copied — cross-feature #includes need the
-    # full tree at compile time (e.g. DistantTree.hlsl pulls IBL/IBL.hlsli).
+    # All (locally deployed) features' shaders are copied — cross-feature
+    # #includes need the full tree at compile time (e.g. DistantTree.hlsl
+    # pulls IBL/IBL.hlsli). Effects11 is excluded via AIO_LOCAL_FEATURE_PATHS
+    # when ENABLE_EFFECTS11 is off, since nothing else includes its shaders.
     # Written to a file rather than passed as a `-D` list, same reason as
     # FEATURE_PATHS_FILE above (Ninja mis-quotes it).
     set(_feature_shader_paths)
-    foreach(_fpath IN LISTS FEATURE_PATHS)
+    foreach(_fpath IN LISTS AIO_LOCAL_FEATURE_PATHS)
         if(EXISTS "${_fpath}/Shaders")
             list(APPEND _feature_shader_paths "${_fpath}/Shaders")
         endif()
@@ -891,7 +913,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 
     append_copy_if_different(_shader_copy_cmds _package_shaders "${CMAKE_SOURCE_DIR}/package/Shaders" "${AIO_DIR}/Shaders")
 
-    foreach(_fpath IN LISTS FEATURE_PATHS)
+    foreach(_fpath IN LISTS AIO_LOCAL_FEATURE_PATHS)
         if(EXISTS "${_fpath}/Shaders")
             file(
                 GLOB_RECURSE _feat_shaders
