@@ -339,7 +339,6 @@ public:
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
-
 	virtual void RestoreDefaultSettings() override;
 
 	/** @brief Live particle/clustered light counts, for devbench's openshaders.feature action=diagnostics. */

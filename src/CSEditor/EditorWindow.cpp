@@ -1946,6 +1946,7 @@ namespace
 
 void EditorWindow::InstallWeatherLockHooks()
 {
+	// Re-entry would rewrite an already-hooked site to branch at its own thunk.
 	static std::atomic_bool installAttempted{ false };
 	if (installAttempted.exchange(true, std::memory_order_acq_rel)) {
 		logger::debug("[CSEditor] Weather lock hook install already attempted this session, skipping");
