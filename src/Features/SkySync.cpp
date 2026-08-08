@@ -1,6 +1,7 @@
 #include "SkySync.h"
 #include "../I18n/I18n.h"
 #include "RE/B/BSVolumetricLightingRenderData.h"
+
 #include "Utils/Game.h"
 
 #define I18N_KEY_PREFIX "feature.sky_sync."
@@ -178,6 +179,7 @@ void SkySync::PostPostLoad()
 	}
 
 	stl::detour_thunk<Sky_Update>(REL::RelocationID(25682, 26229));
+	Util::SetCelestialTransitionHandlerAvailable(true);
 
 	gSunPosition = reinterpret_cast<RE::NiPoint3*>(REL::RelocationID(527924, 414871).address());
 
@@ -194,11 +196,17 @@ void SkySync::DataLoaded()
 		DisableOnConflict("DVLaSS");
 }
 
+void SkySync::GameLoaded()
+{
+	Util::RequestGameLoadTransition();
+}
+
 void SkySync::DisableOnConflict(std::string_view conflictName)
 {
 	failedLoadedMessage = fmt::format("Disabled as {} has been detected, both cannot be used together", conflictName);
 	loaded = false;
 	settings.Enabled = false;
+	Util::SetCelestialTransitionHandlerAvailable(false);
 	logger::warn("[Sky Sync] {}", failedLoadedMessage);
 }
 
@@ -226,42 +234,46 @@ void SkySync::Sky_Update::thunk(RE::Sky* sky)
 {
 	func(sky);
 	auto& skySync = globals::features::skySync;
-	skySync.Update(sky, skySync.ObserveSunDirection(sky));
+	skySync.PreparePendingTransitions();
+	if (skySync.Update(sky))
+		Util::CompleteCelestialTransition();
 }
 
-bool SkySync::ObserveSunDirection(const RE::Sky* sky) noexcept
+void SkySync::PreparePendingTransitions()
 {
-	if (!sky || !sky->sun || !sky->sun->root) {
-		hasPreviousSunDirection = false;
-		return false;
+	const auto request = Util::ConsumeCelestialTransitionRequest();
+	if (!request.timeJump && !request.gameLoad)
+		return;
+
+	if (request.gameLoad) {
+		shadowFader.Reset();
+		currentCell = nullptr;
+		currentCellInterior = false;
+		currentCellWorldspace = nullptr;
+		currentSkyRotation = D3D11_FLOAT32_MAX;
 	}
 
-	auto direction = sky->sun->root->local.translate;
-	if (direction.Unitize() < FLT_EPSILON) {
-		hasPreviousSunDirection = false;
-		return false;
-	}
-
-	const bool discontinuity = !hasPreviousSunDirection ||
-	                           Util::HasDirectionalLightDiscontinuity(direction, previousSunDirection);
-	previousSunDirection = direction;
-	hasPreviousSunDirection = true;
-	return discontinuity;
+	immediateTransitionReady = true;
 }
 
-void SkySync::Update(const RE::Sky* sky, bool a_sunDirectionDiscontinuity)
+bool SkySync::Update(const RE::Sky* sky)
 {
 	if (!settings.Enabled) {
 		currentDim = 1.0f;
-		return;
+		const bool transitionCompleted = immediateTransitionReady;
+		immediateTransitionReady = false;
+		return transitionCompleted;
 	}
+
+	if (!sky)
+		return false;
 
 	const auto sun = sky->sun;
 	const auto climate = sky->currentClimate;
 	const auto player = RE::PlayerCharacter::GetSingleton();
 	if (!sun || !climate || !player) {
 		currentDim = 1.0f;
-		return;
+		return false;
 	}
 
 	const auto cell = player->GetParentCell();
@@ -270,19 +282,22 @@ void SkySync::Update(const RE::Sky* sky, bool a_sunDirectionDiscontinuity)
 	if (cell != currentCell) {
 		resetTransition = true;
 		const auto prevCell = currentCell;
+		const bool resetFaderForCellChange = cell && prevCell &&
+		                                     (cell->IsInteriorCell() != currentCellInterior ||
+												 cell->GetRuntimeData().worldSpace != currentCellWorldspace);
 		if (cell)
 			SetSkyRotation(sky, cell);
-		if (cell && prevCell && (cell->IsInteriorCell() != prevCell->IsInteriorCell() || cell->GetRuntimeData().worldSpace != prevCell->GetRuntimeData().worldSpace))
+		if (resetFaderForCellChange)
 			shadowFader.Reset();
 	}
 
 	// Exterior worldspaces always run; interior cells require the sunlight-shadows flag.
 	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows))) {
 		currentDim = 1.0f;
-		return;
+		return false;
 	}
 
-	// Compute dim once per frame — used by OnSkyUpdateColors (if option on) and ShadowFader (always)
+	// Compute dim once per frame - used by OnSkyUpdateColors (if option on) and ShadowFader (always)
 	if (sky->currentClimate) {
 		const auto& timing = sky->currentClimate->timing;
 		const float hour = sky->currentGameHour;
@@ -337,9 +352,11 @@ void SkySync::Update(const RE::Sky* sky, bool a_sunDirectionDiscontinuity)
 
 	const auto calendar = globals::game::calendar;
 	const auto deltaTime = globals::game::deltaTime;
-	float fadeAdvance = calendar && deltaTime ? std::max(*deltaTime * calendar->GetTimescale(), 0.0f) : 0.0f;
-
-	shadowFader.Update(sky, directions, intensities, settings.ShadowTransitionDuration, fadeAdvance, a_sunDirectionDiscontinuity || resetTransition);
+	const float fadeAdvance = calendar && deltaTime ? std::max(*deltaTime * calendar->GetTimescale(), 0.0f) : 0.0f;
+	const bool transitionCompleted = immediateTransitionReady;
+	shadowFader.Update(sky, directions, intensities, settings.ShadowTransitionDuration, fadeAdvance, transitionCompleted || resetTransition);
+	immediateTransitionReady = false;
+	return transitionCompleted;
 }
 void SkySync::SetSunAngle()
 {
@@ -367,6 +384,8 @@ void SkySync::SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell)
 		return;
 
 	currentCell = cell;
+	currentCellInterior = cell->IsInteriorCell();
+	currentCellWorldspace = cell->GetRuntimeData().worldSpace;
 	const float rotation = cell->GetNorthRotation();
 	if (rotation == currentSkyRotation)
 		return;
