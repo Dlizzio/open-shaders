@@ -139,9 +139,9 @@ namespace ExponentialHeightFog
 		return lerp(float4(0.0f, 0.0f, 0.0f, 1.0f), volumetricFog, saturate((sceneDepth - GetVolumetricStartDistance()) * 100000000.0f));
 	}
 
-	float4 CombineVolumetricFog(float4 analyticalFog, float3 positionWS)
+	float4 CombineVolumetricFog(float4 analyticalFog, float3 positionWS, uint eyeIndex)
 	{
-		float4 volumetricFog = SampleVolumetricFog(positionWS);
+		float4 volumetricFog = SampleVolumetricFog(positionWS, eyeIndex);
 		float analyticalTransmittance = 1.0f - analyticalFog.w;
 		float combinedTransmittance = volumetricFog.a * analyticalTransmittance;
 		float combinedOpacity = saturate(1.0f - combinedTransmittance);
@@ -241,7 +241,7 @@ namespace ExponentialHeightFog
 		if (!applyVolumetricFog) {
 			return analyticalFog;
 		}
-		return useScreenPosition ? CombineVolumetricFog(analyticalFog, screenPosition) : CombineVolumetricFog(analyticalFog, positionWS);
+		return useScreenPosition ? CombineVolumetricFog(analyticalFog, screenPosition) : CombineVolumetricFog(analyticalFog, positionWS, eyeIndex);
 	}
 
 	float4 GetExponentialHeightFog(float3 positionWS, float3 cameraWS, float3 fogColor)
