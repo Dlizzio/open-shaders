@@ -1,4 +1,7 @@
 #include "LightLimitFix.h"
+#if defined(ENABLE_EFFECTS11)
+#	include "Features/Effects11.h"
+#endif
 #include "Features/InverseSquareLighting/Common.h"
 #include "Features/LightLimitFix/SettingsSanitize.h"
 #include "Features/LightLimitFix/ShadowCasterMath.h"
@@ -890,6 +893,12 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			const bool isPortalStrict = !IsGlobalLight(bsLight);
 			ApplyJsonPlacedLightIntensityScale(light, bsLight, niLight, isPortalStrict, isInterior);
 
+#if defined(ENABLE_EFFECTS11)
+			auto& effects11 = globals::features::effects11;
+			if (inWorld && effects11.enableEffect)
+				effects11.OverridePointLightColor(light.color);
+#endif
+
 			SetLightPosition(light, niLight->world.translate, inWorld);
 
 			ApplyLightDebugOverrides(light, bsLight);
@@ -1202,6 +1211,12 @@ void LightLimitFix::UpdateLights()
 							light.radius = runtimeData.radius.x;
 							light.fade = runtimeData.fade;
 						}
+
+#if defined(ENABLE_EFFECTS11)
+						auto& effects11 = globals::features::effects11;
+						if (effects11.enableEffect)
+							effects11.OverridePointLightColor(light.color);
+#endif
 
 						SetPointLightTypeFlags(light, bsLight);
 						light.fade *= bsLight->lodDimmer;
@@ -1623,8 +1638,8 @@ void LightLimitFix::UpdateShadowDemand()
 	// Prepass) is the actual demand-skip consumption path and doesn't need this log.
 	if (ShadowDemandInstrumentation && shadowDemandEMAInitialized && shadowDemandFrameCounter - shadowDemandLastLogFrame >= 300) {
 		shadowDemandLastLogFrame = shadowDemandFrameCounter;
-		auto installed = ShadowCasterManager::GetInstalledSlotCount();
-		auto count = std::min<uint32_t>(installed, MAX_SHADOW_DEMAND_SLOTS);
+		auto installedSlotCount = ShadowCasterManager::GetInstalledSlotCount();
+		auto count = std::min<uint32_t>(installedSlotCount, MAX_SHADOW_DEMAND_SLOTS);
 		if (count > 0) {
 			float minV = shadowDemandEMA[0], maxV = shadowDemandEMA[0], sum = 0.0f;
 			for (uint32_t i = 0; i < count; i++) {
