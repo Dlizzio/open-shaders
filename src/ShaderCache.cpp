@@ -2822,8 +2822,11 @@ namespace SIE
 	{
 		std::vector<Util::CacheInvalidation::FeatureState> featureStates;
 		for (auto* feature : Feature::GetFeatureList()) {
+			// Only a non-empty failedLoadedMessage is a genuine load failure; !loaded
+			// alone also covers ordinary and environment-gated disables.
 			featureStates.push_back({ feature->GetShortName(), feature->GetDisplayName(), feature->loaded,
-				feature->version, std::string(feature->GetShaderDefineName()) });
+				feature->version, std::string(feature->GetShaderDefineName()),
+				!feature->loaded && !feature->failedLoadedMessage.empty() });
 		}
 		return featureStates;
 	}
@@ -2869,17 +2872,10 @@ namespace SIE
 
 	using Util::CacheInvalidation::OnlyEnabledFlips;
 
-	static bool IsFeatureDeliberatelyDisabled(const std::string& shortName)
-	{
-		auto* state = globals::state;
-		return state && state->IsFeatureDisabled(shortName);
-	}
-
-	// Thin runtime wrappers: real logic in Utils/CacheInvalidation.h (unit-tested),
-	// kept pure over parameters via the injected globals::state predicate above.
+	// Thin runtime wrapper: real logic in Utils/CacheInvalidation.h (unit-tested).
 	static bool HasMissingOrFailedFeature(const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches)
 	{
-		return Util::CacheInvalidation::HasMissingFeature(mismatches, IsFeatureDeliberatelyDisabled);
+		return Util::CacheInvalidation::HasFailedFeature(mismatches);
 	}
 
 	// The rollback slot's on-disk presence is the one filesystem check these
@@ -2887,7 +2883,7 @@ namespace SIE
 	// passed in rather than the callee reaching for PreviousDiskCachePath() itself.
 	static bool ArePreviousCacheMismatchesRestorable(const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches)
 	{
-		return Util::CacheInvalidation::AreCacheMismatchesRestorable(mismatches, IsFeatureDeliberatelyDisabled);
+		return Util::CacheInvalidation::AreCacheMismatchesRestorable(mismatches);
 	}
 
 	static bool SetPreviousCacheRestoreCandidate(
@@ -2896,18 +2892,22 @@ namespace SIE
 		std::vector<Util::CacheInvalidation::CacheMismatch>& previousCacheMismatches)
 	{
 		return Util::CacheInvalidation::TrySetRestoreCandidate(std::move(mismatches),
-			HasDiskCacheInfo(PreviousDiskCachePath()), IsFeatureDeliberatelyDisabled,
+			HasDiskCacheInfo(PreviousDiskCachePath()),
 			previousDiskCacheAvailable, previousCacheMismatches);
 	}
 
 	// Thin runtime wrapper: real logic in Utils/CacheInvalidation.h (unit-tested).
-	static bool PartialInvalidation(const std::vector<std::string>& defines)
+	// outDestructive is set when the active cache was left partially deleted --
+	// the caller must wipe it outright rather than rotate it into the rollback slot.
+	static bool PartialInvalidation(const std::vector<std::string>& defines, bool& outDestructive)
 	{
 		size_t deleted = 0, kept = 0;
 		const bool ok = Util::CacheInvalidation::TryPartialInvalidation(
-			DiskCachePath(), L"Data/Shaders", defines, &deleted, &kept);
+			DiskCachePath(), L"Data/Shaders", defines, &deleted, &kept, &outDestructive);
 		if (ok)
 			logger::info("Partial disk cache invalidation: deleted {} shader dirs, kept {}", deleted, kept);
+		else if (outDestructive)
+			logger::warn("Partial disk cache invalidation failed mid-delete: active cache is now inconsistent, wiping outright");
 		else
 			logger::warn("Partial disk cache invalidation unavailable, falling back to full wipe");
 		return ok;
@@ -3040,7 +3040,8 @@ namespace SIE
 		for (auto* feature : Feature::GetFeatureList()) {
 			const auto shortName = feature->GetShortName();
 			featureStates.push_back({ shortName, feature->GetDisplayName(), feature->loaded,
-				feature->version, std::string(feature->GetShaderDefineName()) });
+				feature->version, std::string(feature->GetShaderDefineName()),
+				!feature->loaded && !feature->failedLoadedMessage.empty() });
 			Util::CacheInvalidation::CacheIniEntry entry;
 			entry.enabled = ini.GetBoolValue(shortName.c_str(), "Enabled", false);
 			if (auto v = ini.GetValue(shortName.c_str(), "Version"))
@@ -3080,22 +3081,35 @@ namespace SIE
 				return;
 			}
 
-			const bool allExpected = std::ranges::all_of(cacheMismatches, [&](const CacheMismatch& m) {
-				auto it = expectedEnabledMatches.find(m.shortName);
-				return it != expectedEnabledMatches.end() && it->second;
-			});
-			if (allExpected && PartialInvalidation(heldMismatchDefines)) {
-				logger::info("Disk cache mismatch matches a settings save from last session; auto-resolving");
-				WriteDiskCacheInfo();  // also drops the now-consumed ExpectedEnabled markers
+			// No genuine failure here, so recompile just the flipped features'
+			// shaders instead of rotating the whole cache below.
+			bool partialInvalidationDestructive = false;
+			if (PartialInvalidation(heldMismatchDefines, partialInvalidationDestructive)) {
+				const bool allExpected = std::ranges::all_of(cacheMismatches, [&](const CacheMismatch& m) {
+					auto it = expectedEnabledMatches.find(m.shortName);
+					return it != expectedEnabledMatches.end() && it->second;
+				});
+				WriteDiskCacheInfo();  // also drops any now-consumed ExpectedEnabled markers
 				heldMismatchDefines.clear();
 				{
 					std::lock_guard lock{ mismatchesMutex };
 					cacheMismatches.clear();
 				}
+				if (allExpected)
+					logger::info("Disk cache mismatch matches a settings save from last session; auto-resolving");
+				else
+					logger::info("Disk cache mismatch resolved: recompiling only the affected features");
 				return;
 			}
 
-			if (BackupActiveDiskCache()) {
+			// A partially-deleted active cache is unsafe to keep as a rollback
+			// candidate -- wipe it outright instead of rotating it into Previous.
+			if (partialInvalidationDestructive) {
+				DeleteActiveDiskCache();
+				featureSetChanged = true;
+				WriteDiskCacheInfo();
+				logger::info("Feature set changed: compiling a new active disk cache; the inconsistent one was discarded, no restore available");
+			} else if (BackupActiveDiskCache()) {
 				featureSetChanged = true;
 				featureSetCacheBackedUp = true;
 				bool previousRestoreAvailable;
@@ -3132,7 +3146,11 @@ namespace SIE
 		// staleness now, so this no longer needs a full wipe to stay safe.
 		const bool onlyPluginVersion = std::ranges::all_of(cacheMismatches,
 			[](const CacheMismatch& m) { return m.kind == CacheMismatch::Kind::PluginVersion; });
-		if (onlyFeatureVersions && PartialInvalidation(versionMismatchDefines)) {
+		// Any failure here (destructive or not) already falls through to the
+		// unconditional DeleteActiveDiskCache() below, so the distinction doesn't
+		// change behavior at this call site.
+		[[maybe_unused]] bool versionInvalidationDestructive = false;
+		if (onlyFeatureVersions && PartialInvalidation(versionMismatchDefines, versionInvalidationDestructive)) {
 			WriteDiskCacheInfo();  // refresh the manifest so surviving blobs validate next boot
 			// The cache survives this mismatch instead of a full wipe, so nothing else
 			// prunes entries for shaders removed/renamed since the last version that did wipe.
@@ -3158,7 +3176,8 @@ namespace SIE
 			committedPreviousCacheMismatches = cacheMismatches;
 		}
 
-		if (!featureSetCacheBackedUp && !PartialInvalidation(heldMismatchDefines))
+		[[maybe_unused]] bool commitInvalidationDestructive = false;
+		if (!featureSetCacheBackedUp && !PartialInvalidation(heldMismatchDefines, commitInvalidationDestructive))
 			DeleteActiveDiskCache();
 
 		diskCacheHeld = false;
@@ -3260,7 +3279,8 @@ namespace SIE
 		if (!diskCacheHeld)
 			return;
 
-		if (!PartialInvalidation(heldMismatchDefines))
+		[[maybe_unused]] bool acceptInvalidationDestructive = false;
+		if (!PartialInvalidation(heldMismatchDefines, acceptInvalidationDestructive))
 			DeleteActiveDiskCache();
 
 		heldMismatchDefines.clear();
