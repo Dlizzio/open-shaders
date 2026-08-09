@@ -161,12 +161,23 @@ namespace ShadowCasterManager
 	constexpr uint16_t kPromoteStreakFrames = 60;
 
 	/// Lights held this frame (UpdateCamera failed, exit streak immature, but
-	/// already held a slot). Excluded from `pending` before budget accounting --
-	/// rejected camera state means they keep their cached tile, not redraw.
+	/// already held a slot). Excluded from `pending` before budget accounting.
+	/// Main::Draw thread only (both populating hooks run on it) -- no lock needed.
 	std::unordered_set<RE::BSShadowLight*> s_cameraHold;
 
-	bool IsCameraHeld(RE::BSShadowLight* light)
+	/// Bumped once per non-reentrant ScheduleShadowCasters attempt, before any of
+	/// its early returns. s_cameraHoldGeneration only catches up once the hold set
+	/// actually finishes repopulating -- see ValidateCandidates. A mismatch means a
+	/// bail skipped scoring this frame, so the set is stale, not just possibly empty.
+	uint64_t s_scheduleGeneration = 0;
+	uint64_t s_cameraHoldGeneration = static_cast<uint64_t>(-1);
+
+	/// Eviction veto: true if the light is genuinely held, OR the hold set is stale
+	/// (scoring bailed this frame) -- a stale set can't be trusted to say "not held".
+	bool IsEvictionHeld(RE::BSShadowLight* light)
 	{
+		if (s_cameraHoldGeneration != s_scheduleGeneration)
+			return true;
 		return light && s_cameraHold.count(light) > 0;
 	}
 
@@ -257,6 +268,13 @@ namespace ShadowCasterManager
 	// Slot-phase stagger so lights that fell asleep together (scene load)
 	// don't all take their backstop redraw on the same frame.
 	constexpr int32_t kSleepStaggerStride = 7;
+
+	// Tile-invalid backoff step and ceiling: an admission that leaves a tile
+	// invalid is backed off streak*step frames, capped, instead of
+	// re-admitted every frame -- separately clamped to this light's own
+	// max-delay ceiling so it can never miss its normal interval.
+	constexpr int32_t kTileBackoffStepFrames = 4;
+	constexpr int32_t kTileBackoffMaxStreak = 8;
 
 	// Stop-motion reporting floor: ~133ms at 60fps, roughly where a held shadow
 	// reads as visible judder. Well inside kSleepRedrawIntervalFrames so a real
@@ -1412,6 +1430,10 @@ namespace ShadowCasterManager
 					c.excess = true;
 				}
 			}
+			// s_cameraHold just finished repopulating -- publish freshness now, not at
+			// the earlier clear, so a reader can never observe a generation match
+			// against a partially-populated set.
+			s_cameraHoldGeneration = s_scheduleGeneration;
 
 			// Tracy candidate breakdown, per-frame, to verify chosen + excess +
 			// invalid_camera + invalid_portal == total. Demotion map only fills
@@ -2081,11 +2103,27 @@ namespace ShadowCasterManager
 			const int32_t deadlineStagger = (e->Index * 41) % staggerCapFrames;
 			e->RedrawScore -= static_cast<double>(deadlineStagger);
 
-			// Unshadowed is strictly worse than stale -- the due-gate must
-			// never hold a blank tile past "due", or a multi-admission heal
-			// stretches a 1-frame blip into a full interval of bright shadow.
-			if (tileInvalid)
-				e->RedrawScore = std::min(e->RedrawScore, static_cast<double>(now));
+			// Unshadowed is strictly worse than stale, so a blank tile is due
+			// now -- unless a real admission already left it invalid, in
+			// which case back off geometrically instead of wasting a slot on
+			// content that can't currently render (capped to effectiveMaxFrames).
+			if (tileInvalid) {
+				if (e->awaitingTileResult) {
+					e->tileFailStreak = std::min(e->tileFailStreak + 1, kTileBackoffMaxStreak);
+					e->tileRetryFrame = now + (kTileBackoffStepFrames << (e->tileFailStreak - 1));
+					e->awaitingTileResult = false;
+				}
+				if (e->tileFailStreak > 0 && now < e->tileRetryFrame) {
+					e->RedrawScore = std::max(e->RedrawScore, static_cast<double>(e->tileRetryFrame));
+					e->RedrawScore = std::min(e->RedrawScore, e->LastDrawnFrame + effectiveMaxFrames);
+				} else {
+					e->RedrawScore = std::min(e->RedrawScore, static_cast<double>(now));
+				}
+			} else {
+				e->awaitingTileResult = false;
+				e->tileFailStreak = 0;
+				e->tileRetryFrame = -1;
+			}
 
 			// Skinned pose animation never registers in the geom hash, so a
 			// light with live dynamic casters is dirty the moment it is due.
@@ -2113,6 +2151,9 @@ namespace ShadowCasterManager
 				e->FadeStartSeconds = Util::GetNowSecs();
 		}
 		e->LastDrawnFrame = now;
+		// Consumed by the next scoring pass to tell a genuine tile-invalid
+		// failure apart from a light that simply hasn't been tried yet.
+		e->awaitingTileResult = true;
 	}
 
 	/// Sorts `pending` by admission priority and admits candidates until
@@ -2407,6 +2448,7 @@ namespace ShadowCasterManager
 		// Deliberately outside the maxRedraw>0/budgetRemain>0 guard above: a
 		// frame where the scheduler bails entirely is the worst case for a
 		// stall, and it must still be counted.
+		const int32_t now = *globals::game::frameCounter;
 		s_redrawnLightsThisFrame = 0;
 		s_schedDiag.stall_max = 0;
 		s_schedDiag.stall_over_threshold = 0;
@@ -2415,10 +2457,12 @@ namespace ShadowCasterManager
 			auto& e = s_lights.Lights[j];
 			if (e.RedrawFrame)
 				++s_redrawnLightsThisFrame;
-			// Reset on admission or going clean; frozen while skippedThisFrame.
+			// Reset on admission or going clean; frozen while skippedThisFrame or
+			// backing off from a tile-invalid failure (not a scheduler stall).
+			const bool tileBackoffActive = e.tileFailStreak > 0 && now < e.tileRetryFrame;
 			if (!e.Light || e.RedrawFrame || !e.schedDirty)
 				e.dirtyStallFrames = 0;
-			else if (!e.skippedThisFrame && e.dirtyStallFrames < 0xFFFFu)
+			else if (!e.skippedThisFrame && !tileBackoffActive && e.dirtyStallFrames < 0xFFFFu)
 				++e.dirtyStallFrames;
 			if (static_cast<int>(e.dirtyStallFrames) > s_schedDiag.stall_max) {
 				s_schedDiag.stall_max = e.dirtyStallFrames;
@@ -2935,6 +2979,11 @@ namespace ShadowCasterManager
 			~Guard() { s_inSchedule.store(false, std::memory_order_release); }
 		} guard;
 
+		// Marks a genuine attempt, ahead of every early return below -- an early
+		// return leaves s_cameraHoldGeneration behind, correctly marking the hold
+		// set stale for this frame's readers instead of silently reusing an older one.
+		++s_scheduleGeneration;
+
 		// Advance once per frame, before accumulate and render-split, so a caster
 		// classifies identically across both (a mid-frame bump would double-count).
 		if (++s_casterClassEpoch % 300 == 0) {
@@ -3091,8 +3140,9 @@ namespace ShadowCasterManager
 
 		// Atlas rank budget: in importance order, each light gets the biggest class
 		// that still leaves a quarter cell for every lower-ranked light; without it,
-		// first arrivals hoard full tiles and later lights get no tile at all.
-		if (AtlasActive()) {
+		// first arrivals hoard full tiles and later lights get no tile at all. Skips
+		// on a stale hold-set frame -- next fresh frame re-ranks.
+		if (AtlasActive() && s_cameraHoldGeneration == s_scheduleGeneration) {
 			static std::vector<LightEntry*> ranked;
 			ranked.clear();
 			for (int i = s_lights.PointLightFirst(); i < s_lights.PointLightEnd(s_settings.ShadowLightCount); i++)
