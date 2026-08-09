@@ -456,6 +456,15 @@ namespace SIE
 			return std::format(L"Data/Shaders/{}.hlsl", std::wstring(name.begin(), name.end()));
 		}
 
+		// ImageSpace shaders are keyed by technique (fxpFilename) but all compile
+		// from a shared source file named by originalShaderName instead.
+		static std::string_view GetShaderSourceName(const RE::BSShader& shader)
+		{
+			return shader.shaderType == RE::BSShader::Type::ImageSpace ?
+			           static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
+			           std::string_view(shader.fxpFilename);
+		}
+
 		static const char* GetShaderProfile(ShaderClass shaderClass)
 		{
 			switch (shaderClass) {
@@ -1731,10 +1740,7 @@ namespace SIE
 				// Manifest-first: a recorded digest is authoritative, falling back
 				// to the mtime checks below only when no digest is on record yet.
 				bool decidedByDigest = false;
-				const std::wstring shaderSourcePath = GetShaderPath(
-					shader.shaderType == RE::BSShader::Type::ImageSpace ?
-						static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
-						shader.fxpFilename);
+				const std::wstring shaderSourcePath = GetShaderPath(GetShaderSourceName(shader));
 				// Manifest lookup is a cheap map Get; gate the expensive digest walk
 				// (file read + full include-closure hash) on it actually finding
 				// something to compare against, not the other way around -- a blob
@@ -3677,6 +3683,107 @@ namespace SIE
 		return compilationSet.GetTopSlowTasks(n);
 	}
 
+	std::vector<CompilationSet::SlowTaskRecord> CompilationSet::GetAllTaskRecords() const
+	{
+		std::lock_guard lock(slowTasksMutex);
+		return slowTaskRecords;
+	}
+
+	std::vector<CompilationSet::SlowTaskRecord> ShaderCache::GetAllTaskRecords()
+	{
+		return compilationSet.GetAllTaskRecords();
+	}
+
+	int64_t ShaderCache::GetLastResetQpc()
+	{
+		return compilationSet.GetLastResetQpc();
+	}
+
+	int64_t ShaderCache::GetQpcFrequency()
+	{
+		return compilationSet.GetQpcFrequency();
+	}
+
+	bool ShaderCache::ExportCompileTrace(const std::filesystem::path& a_path)
+	{
+		const auto records = compilationSet.GetAllTaskRecords();
+		if (records.empty()) {
+			logger::warn("ExportCompileTrace: no task records for the current build");
+			return false;
+		}
+
+		const int64_t freq = compilationSet.GetQpcFrequency();
+		// Anchor on the earliest drawn point (a task's queue_wait slice starts before
+		// its startQpc), not lastReset -- a straggler finishing after a Clear() reset
+		// can predate it, which would otherwise draw at a negative ts.
+		int64_t baselineQpc = records.front().startQpc;
+		for (const auto& rec : records) {
+			const int64_t queueWaitQpc = static_cast<int64_t>(rec.queueWaitMs * static_cast<double>(freq) / 1000.0);
+			baselineQpc = std::min(baselineQpc, rec.startQpc - queueWaitQpc);
+		}
+		const auto qpcToUs = [freq, baselineQpc](int64_t qpc) {
+			return static_cast<double>(qpc - baselineQpc) * 1'000'000.0 / static_cast<double>(freq);
+		};
+
+		nlohmann::json events = nlohmann::json::array();
+		const uint32_t pid = GetCurrentProcessId();
+
+		// One thread_name event per worker so Perfetto groups lanes readably.
+		std::unordered_set<uint32_t> namedThreads;
+		for (const auto& rec : records) {
+			if (namedThreads.insert(rec.threadId).second) {
+				events.push_back({ { "name", "thread_name" },
+					{ "ph", "M" },
+					{ "pid", pid },
+					{ "tid", rec.threadId },
+					{ "args", { { "name", "Shader Compile Worker" } } } });
+			}
+		}
+
+		for (const auto& rec : records) {
+			const double startUs = qpcToUs(rec.startQpc);
+			// Separate slice for the queue wait so it reads as scheduler starvation.
+			if (rec.queueWaitMs > 0.0) {
+				events.push_back({ { "name", "queue_wait" },
+					{ "cat", "shader_compile" },
+					{ "ph", "X" },
+					{ "ts", startUs - rec.queueWaitMs * 1000.0 },
+					{ "dur", rec.queueWaitMs * 1000.0 },
+					{ "pid", pid },
+					{ "tid", rec.threadId } });
+			}
+			events.push_back({ { "name", rec.key },
+				{ "cat", "shader_compile" },
+				{ "ph", "X" },
+				{ "ts", startUs },
+				{ "dur", rec.elapsedMs * 1000.0 },
+				{ "pid", pid },
+				{ "tid", rec.threadId },
+				{ "args", { { "priority", rec.priority }, { "defineCount", rec.defineCount }, { "sourceSizeBytes", rec.sourceSizeBytes } } } });
+		}
+
+		try {
+			std::filesystem::create_directories(a_path.parent_path());
+			std::ofstream file(a_path);
+			if (!file.is_open()) {
+				logger::warn("ExportCompileTrace: failed to open {} for writing", a_path.string());
+				return false;
+			}
+			file << events.dump(2);
+			file.flush();
+			if (!file.good()) {
+				logger::warn("ExportCompileTrace: write to {} failed (disk full or I/O error)", a_path.string());
+				return false;
+			}
+		} catch (const std::exception& e) {
+			logger::warn("ExportCompileTrace: failed writing {}: {}", a_path.string(), e.what());
+			return false;
+		}
+
+		logger::info("ExportCompileTrace: wrote {} task records to {}", records.size(), a_path.string());
+		return true;
+	}
+
 	std::optional<CompilationSet::ParallelismStats> CompilationSet::GetParallelismStats() const
 	{
 		std::vector<SlowTaskRecord> records;
@@ -3951,15 +4058,10 @@ namespace SIE
 		const auto descriptorComplexity = std::popcount(static_cast<uint32_t>(task.GetId()));
 		uintmax_t sourceBytes = 0;
 		{
-			// GetString() format: "fxpFilename:ShaderClass:defines" — filename is before the first colon.
-			const auto taskStr = task.GetString();
-			const auto sep = taskStr.find(':');
-			if (sep != std::string::npos) {
-				const auto shaderName = taskStr.substr(0, sep);
-				if (auto path = SIE::SShaderCache::GetShaderPath(shaderName); !path.empty()) {
-					std::error_code ec;
-					sourceBytes = std::filesystem::file_size(path, ec);
-				}
+			std::error_code ec;
+			sourceBytes = std::filesystem::file_size(task.GetSourcePath(), ec);
+			if (ec) {
+				sourceBytes = 0;
 			}
 		}
 
@@ -3971,11 +4073,11 @@ namespace SIE
 		constexpr double kSlowMs = 2000.0;
 		constexpr double kVerySlowMs = 8000.0;
 
-		// Record every task for post-mortem analysis and developer UI (top-N display).
+		// Recorded for post-mortem analysis, the developer UI, and trace export.
 		{
 			std::lock_guard lock(compilationSet.slowTasksMutex);
 			compilationSet.slowTaskRecords.push_back({ taskKey, elapsedMs, queueWaitMs, task.GetPriority(),
-				static_cast<int>(descriptorComplexity), sourceBytes });
+				static_cast<int>(descriptorComplexity), sourceBytes, GetCurrentThreadId(), start.QuadPart });
 		}
 
 		if (elapsedMs >= kVerySlowMs) {
@@ -4032,6 +4134,11 @@ namespace SIE
 	std::string ShaderCompilationTask::GetString() const
 	{
 		return SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
+	}
+
+	std::wstring ShaderCompilationTask::GetSourcePath() const
+	{
+		return SIE::SShaderCache::GetShaderPath(SIE::SShaderCache::GetShaderSourceName(shader));
 	}
 
 	bool ShaderCompilationTask::operator==(const ShaderCompilationTask& other) const
@@ -4124,6 +4231,7 @@ namespace SIE
 		// before the conditionVariable notification.
 		if (!shaderCache->IsCompiling()) {
 			QueryPerformanceCounter(&lastReset);
+			lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 			lastCalculation = lastReset;
 		}
 
@@ -4172,6 +4280,7 @@ namespace SIE
 				// Complete() and Forget(), which do know.
 				if (totalTasks.load(std::memory_order_relaxed) == 0) {
 					QueryPerformanceCounter(&lastReset);
+					lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 					lastCalculation = lastReset;
 				}
 
@@ -4238,6 +4347,7 @@ namespace SIE
 				// restart the clock and un-freeze completion tracking.
 				if (completionTime.load(std::memory_order_relaxed) != 0) {
 					QueryPerformanceCounter(&lastReset);
+					lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 					lastCalculation = lastReset;
 					completionTime.store(0, std::memory_order_relaxed);
 					compilationPhaseStarted.store(false, std::memory_order_relaxed);
@@ -4338,6 +4448,7 @@ namespace SIE
 		completedPriorityWeight = 0;
 		heavyTasksInFlight = 0;
 		QueryPerformanceCounter(&lastReset);
+		lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 		QueryPerformanceCounter(&lastCalculation);
 		completionTime = { 0 };  // Reset completion time
 		totalTime = { 0 };

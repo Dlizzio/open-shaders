@@ -1,5 +1,9 @@
 #include "Features/RemoteControl/DevBenchBridge.h"
 
+#include <algorithm>
+
+#include "Utils/FileSystem.h"
+
 // Registers our tools into the devbench test bench over its C-ABI. Gated by
 // DEVBENCH_BRIDGE_ENABLED (set by CMake when the devbench-api port is available);
 // otherwise this file compiles to an empty Install(). Inert at runtime when no
@@ -656,7 +660,31 @@ namespace
 			task->AddTask([cache]() { cache->RestorePreviousDiskCache(); });
 			return json{ { "action", "restorePrevious" }, { "queued", true }, { "enqueued_at_frame", frame }, { "note", "restore requires compilation to be idle and a compatible previous cache; check CommunityShaders.log or inspect(kind=shadercache).featureSetRevertPending for the outcome, then restart to load it" } };
 		}
-		return json{ { "error", "unknown action (clear|deleteDisk|activeOnly|backgroundCompile|acceptRebuild|restorePrevious)" }, { "action", action } };
+		if (action == "exportTrace") {
+			// Only reads records (mutex-guarded) and writes a file -- safe off-thread. Don't
+			// add render/UI-state access here without marshalling like the actions above.
+			const auto logDir = Util::PathHelpers::GetLogPath().parent_path();
+			std::filesystem::path path = logDir / "compile-trace.json";
+			if (a_args.contains("path")) {
+				const std::filesystem::path requested(a_args.value("path", std::string{}));
+				if (requested.is_absolute()) {
+					return json{ { "action", "exportTrace" }, { "success", false }, { "error", "path must be relative to the log directory, not absolute" } };
+				}
+				const auto resolved = (logDir / requested).lexically_normal();
+				const auto rel = resolved.lexically_relative(logDir);
+				const bool escapesLogDir = rel.empty() || std::any_of(rel.begin(), rel.end(), [](const auto& part) { return part == ".."; });
+				if (escapesLogDir) {
+					return json{ { "action", "exportTrace" }, { "success", false }, { "error", "path escapes the log directory" } };
+				}
+				path = resolved;
+			}
+			const bool ok = cache->ExportCompileTrace(path);
+			if (!ok) {
+				return json{ { "action", "exportTrace" }, { "success", false }, { "error", "export failed or no task records for the current build; see CommunityShaders.log" } };
+			}
+			return json{ { "action", "exportTrace" }, { "success", true }, { "path", path.string() } };
+		}
+		return json{ { "error", "unknown action (clear|deleteDisk|activeOnly|backgroundCompile|acceptRebuild|restorePrevious|exportTrace)" }, { "action", action } };
 	}
 
 	void ShadercacheToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
@@ -1003,7 +1031,7 @@ namespace DevBenchBridge
 		dvb->RegisterTool("openshaders.feature", featureDesc, &FeatureToolHandler, nullptr);
 
 		static constexpr const char* shadercacheDesc =
-			R"({"description":"Manage Open Shaders' compiled shader cache. clear, deleteDisk, activeOnly, acceptRebuild, and restorePrevious are queued onto the main thread, fire-and-forget. backgroundCompile is an immediate atomic state change made on the calling (devbench listener) thread. clear: drop the IN-MEMORY cache only; with the disk cache enabled shaders reload from Data/ShaderCache rather than recompiling, so this does NOT guarantee a recompile. deleteDisk: delete the on-disk cache AND drop the in-memory cache, forcing a full cold recompile (use this for compile benchmarks). activeOnly: the in-game 'smart clear' -- captures whatever shaders are on screen over two windows, then evicts+recompiles just those (needs something rendering; a menu-only screen may capture nothing). backgroundCompile: skip the boot-time wait for the FULL eager compile queue to drain -- same effect as the in-game 'Skip Compilation' hotkey. Compilation keeps running in the background afterward (fewer threads, so it doesn't starve gameplay), but the game becomes playable/scriptable immediately. For a benchmark harness: call this once right after launch, then drive one throwaway replay to demand-compile just that scene's own shaders before the timed run, instead of waiting out every permutation the whole install could ever need (can be 20-30 minutes on a large AIO modlist). acceptRebuild: when a feature-set change is holding the disk cache (see inspect(kind=shadercache).diskCacheHeld/cacheMismatches), accept it and rebuild for the current setup -- mirrors the in-game prompt's 'rebuild' button. restorePrevious: swap the rollback slot (the pre-change cache) back into the active slot -- mirrors the in-game prompt's 'restore previous' button; requires compilation to be idle, only takes effect after a restart, check inspect(kind=shadercache).featureSetRevertPending or the log for the outcome. Watch progress via inspect kind=shadercache and the openshaders.shaderRecompiled event. Read-only status (including rollback/backup-slot state) is inspect kind=shadercache.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["clear","deleteDisk","activeOnly","backgroundCompile","acceptRebuild","restorePrevious"]}},"required":["action"]}})";
+			R"({"description":"Manage Open Shaders' compiled shader cache. clear, deleteDisk, activeOnly, acceptRebuild, and restorePrevious are queued onto the main thread, fire-and-forget. backgroundCompile is an immediate atomic state change made on the calling (devbench listener) thread. clear: drop the IN-MEMORY cache only; with the disk cache enabled shaders reload from Data/ShaderCache rather than recompiling, so this does NOT guarantee a recompile. deleteDisk: delete the on-disk cache AND drop the in-memory cache, forcing a full cold recompile (use this for compile benchmarks). activeOnly: the in-game 'smart clear' -- captures whatever shaders are on screen over two windows, then evicts+recompiles just those (needs something rendering; a menu-only screen may capture nothing). backgroundCompile: skip the boot-time wait for the FULL eager compile queue to drain -- same effect as the in-game 'Skip Compilation' hotkey. Compilation keeps running in the background afterward (fewer threads, so it doesn't starve gameplay), but the game becomes playable/scriptable immediately. For a benchmark harness: call this once right after launch, then drive one throwaway replay to demand-compile just that scene's own shaders before the timed run, instead of waiting out every permutation the whole install could ever need (can be 20-30 minutes on a large AIO modlist). acceptRebuild: when a feature-set change is holding the disk cache (see inspect(kind=shadercache).diskCacheHeld/cacheMismatches), accept it and rebuild for the current setup -- mirrors the in-game prompt's 'rebuild' button. restorePrevious: swap the rollback slot (the pre-change cache) back into the active slot -- mirrors the in-game prompt's 'restore previous' button; requires compilation to be idle, only takes effect after a restart, check inspect(kind=shadercache).featureSetRevertPending or the log for the outcome. Watch progress via inspect kind=shadercache and the openshaders.shaderRecompiled event. Read-only status (including rollback/backup-slot state) is inspect kind=shadercache. exportTrace: write every task record from the current build to a Chrome Trace Event Format JSON file (importable at ui.perfetto.dev or chrome://tracing) -- a timeline can localize external CPU contention during a build in a way aggregate stats can't. Runs synchronously on the calling thread (read-only over the record set plus a file write). Optional 'path' overrides the default (next to CommunityShaders.log); fails if the current build has no recorded tasks yet.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["clear","deleteDisk","activeOnly","backgroundCompile","acceptRebuild","restorePrevious","exportTrace"]},"path":{"type":"string","description":"exportTrace only: destination file path; defaults to CommunityShaders.log's directory."}},"required":["action"]}})";
 		dvb->RegisterTool("openshaders.shadercache", shadercacheDesc, &ShadercacheToolHandler, nullptr);
 
 		static constexpr const char* profilerDesc =
