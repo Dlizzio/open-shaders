@@ -66,8 +66,11 @@ namespace ShadowCasterManager
 
 	/// Hash of a shadow map's content-determining inputs (light pose+radius,
 	/// each caster's worldBound+identity); unchanged hash means the cached slot is current.
-	static std::uint64_t ComputeShadowGeomHash(RE::BSShadowLight* light, float posStep)
+	/// Also counts skinned casters on the same walk: pose animation never
+	/// moves worldBound, so the hash alone cannot see them.
+	static std::uint64_t ComputeShadowGeomHash(RE::BSShadowLight* light, float posStep, uint32_t& skinnedOut)
 	{
+		skinnedOut = 0;
 		if (!light)
 			return 0;
 		auto* ni = light->light.get();
@@ -91,6 +94,8 @@ namespace ShadowCasterManager
 			auto* ts = nip.get();
 			if (!ts)
 				continue;
+			if (ts->GetGeometryRuntimeData().skinInstance)
+				skinnedOut++;
 			const auto raw = reinterpret_cast<std::uintptr_t>(ts);
 			h = HashCombine(h, static_cast<std::uint32_t>(raw));
 			h = HashCombine(h, static_cast<std::uint32_t>(raw >> 32));
@@ -104,6 +109,18 @@ namespace ShadowCasterManager
 		return h;
 	}
 
+	/// True when the player stands inside `ni`'s radius. Player-specific
+	/// supplement to the geomList-derived signals: the player's geometry
+	/// usually isn't in geomList at scheduling time. O(1), safe every frame.
+	static bool PlayerWithinLightRadius(RE::NiLight* ni)
+	{
+		auto* plr = globals::game::player;
+		if (!plr || !ni)
+			return false;
+		const float r = ni->GetLightRuntimeData().radius.x;
+		return ni->world.translate.GetSquaredDistance(plr->GetPosition()) < r * r;
+	}
+
 	/// Player-only dynamic-caster proxy, applied every frame on top of the
 	/// (possibly stale) cached geomList hash -- see ComputeShadowGeomHash's
 	/// walk cache below. Must never be folded into the cached hash itself: a
@@ -114,15 +131,9 @@ namespace ShadowCasterManager
 	/// budget, so this stays player-only; O(1), safe to run uncached.
 	static std::uint64_t FoldPlayerCasterProxy(std::uint64_t h, RE::NiLight* ni, float posStep)
 	{
-		auto* plr = RE::PlayerCharacter::GetSingleton();
-		if (!plr || !ni)
+		if (!PlayerWithinLightRadius(ni))
 			return h;
-		const auto pp = plr->GetPosition();
-		const auto& lp = ni->world.translate;
-		const float dx = pp.x - lp.x, dy = pp.y - lp.y, dz = pp.z - lp.z;
-		const float r = ni->GetLightRuntimeData().radius.x;
-		if (dx * dx + dy * dy + dz * dz >= r * r)
-			return h;
+		const auto pp = globals::game::player->GetPosition();
 		const float actorStep = std::clamp(posStep, 1.0f, 8.0f);
 		h = HashCombineFloat(h, QuantizeFloat(pp.x, actorStep));
 		h = HashCombineFloat(h, QuantizeFloat(pp.y, actorStep));
@@ -153,6 +164,11 @@ namespace ShadowCasterManager
 	/// already held a slot). Excluded from `pending` before budget accounting --
 	/// rejected camera state means they keep their cached tile, not redraw.
 	std::unordered_set<RE::BSShadowLight*> s_cameraHold;
+
+	bool IsCameraHeld(RE::BSShadowLight* light)
+	{
+		return light && s_cameraHold.count(light) > 0;
+	}
 
 	/// Consecutive frames a light scored below ShadowImpactFloor (exit hysteresis
 	/// mirroring s_lastValidFrame); without it a light hovering near the floor
@@ -491,7 +507,7 @@ namespace ShadowCasterManager
 
 	/// What SkipZeroDemandRedraw would skip. The ceiling on any win this feature
 	/// can produce, and the input the Q2 counterfactual removes.
-	static bool DemandSkipCandidate(const LightEntry& e)
+	bool DemandSkipCandidate(const LightEntry& e)
 	{
 		if (!DemandSampleUsable())
 			return false;
@@ -563,6 +579,11 @@ namespace ShadowCasterManager
 		// A pending static-set divergence or an observed mover means the
 		// next accumulate would change the tile.
 		if (st.mismatchStreak != 0 || st.sawDynamicLastAccum)
+			return false;
+		// The player's pose animation changes the tile without touching any
+		// signal a sleeping light re-checks -- never sleep a light the
+		// player stands in.
+		if (PlayerWithinLightRadius(e.Light->light.get()))
 			return false;
 		uint64_t bakedHash = 0;
 		bool staticValid = false;
@@ -905,9 +926,9 @@ namespace ShadowCasterManager
 
 			if (split) {
 				st->pendingHash = s_visitStaticHash;
-				// Latch mover presence for the sleep skip; only passes that could
-				// see movers may clear it (StaticOnly filters them out).
-				if (mode != CasterPass::StaticOnly && !duplicateAccum)
+				// Latch mover presence for the sleep skip; StaticOnly counts
+				// the movers it filters, so bake passes update this too.
+				if (!duplicateAccum)
 					st->sawDynamicLastAccum = s_visitDynamicCount.load(std::memory_order_relaxed) != 0;
 				if (mode == CasterPass::StaticOnly)
 					st->bakeSawStatic = !duplicateAccum && s_visitStaticCount.load(std::memory_order_relaxed) != 0;
@@ -1566,9 +1587,11 @@ namespace ShadowCasterManager
 				// Clear at acquire so the new occupant doesn't inherit LastDrawnFrame/
 				// lastGeomHash and skip its first render, sampling stale content.
 				s_lights.Lights[idx].Clear();
-				// Drop the previous occupant's tile: its depth must not be
-				// advertised under the new light's projection.
-				FreeSlotTile(idx);
+				// Drop the previous occupant's tile from this index: its depth must
+				// not be advertised under the new light's projection. Park it at a
+				// light-free index when possible so a flapped owner can reclaim it.
+				if (!ParkOrphanSlotRecord(idx))
+					FreeSlotTile(idx);
 				// A fresh occupant may be a recycled pointer; the pointer-keyed
 				// EMA/streak/split-state caches aren't cleared by Clear() above, so
 				// erase them explicitly or it inherits the previous occupant's state.
@@ -1846,6 +1869,17 @@ namespace ShadowCasterManager
 				}
 			}
 
+			// Computed OUTSIDE the accumulate so admission can't deadlock on a
+			// latch that only updates after admission.
+			uint32_t dynamicCasters = e->cachedSkinnedCasters;
+			if (PlayerWithinLightRadius(e->Light->light.get()))
+				dynamicCasters++;
+			if (dynamicCasters == 0) {
+				if (const auto splitIt = s_splitState.find(e->Light);
+					splitIt != s_splitState.end() && splitIt->second.sawDynamicLastAccum)
+					dynamicCasters = 1;
+			}
+
 			double interval = 0.0;
 			if (s_formulaRedrawInterval) {
 				SetupLightFormula(e->Light, camera, 0);
@@ -1856,6 +1890,7 @@ namespace ShadowCasterManager
 				// Exposed as `lightdisplacement` so the formula can prioritise fast-moving
 				// lights without relying on distance-to-camera alone.
 				FormulaHelper::SetParam(kFormulaParam_LightDisplacement, formulaDisplacement);
+				FormulaHelper::SetParam(kFormulaParam_LightDynamicCasters, static_cast<double>(dynamicCasters));
 
 				// NaN/inf reaches std::sort via RedrawScore otherwise -- UB (see
 				// the budget formula above for the same sanitize pattern).
@@ -1937,7 +1972,7 @@ namespace ShadowCasterManager
 			                          geomSize != e->lastHashGeomListSize ||
 			                          (now - e->lastHashComputeFrame) >= kGeomHashRehashInterval;
 			if (dueForRehash) {
-				e->cachedPendingGeomHash = ComputeShadowGeomHash(e->Light, posStep);
+				e->cachedPendingGeomHash = ComputeShadowGeomHash(e->Light, posStep, e->cachedSkinnedCasters);
 				e->lastHashComputeFrame = now;
 				e->lastHashGeomListSize = geomSize;
 			}
@@ -1981,8 +2016,13 @@ namespace ShadowCasterManager
 				backstopWindowFrames - ((e->Index * kSleepStaggerStride) % backstopSpreadCap);
 			const double displacementTexels =
 				formulaDisplacement / static_cast<double>(std::max(posStep, 1e-4f));
+			// A slot with no tile at all must count as invalid too, not just a
+			// present-but-invalid one, or a fully freed slot can sample
+			// unshadowed indefinitely. Gated on AtlasActive() so non-atlas mode
+			// doesn't force every light dirty every frame.
 			AtlasTileTexels schedDirtyTile{};
-			const bool tileInvalid = GetSlotTileTexels(e->Index, schedDirtyTile) && !schedDirtyTile.contentValid;
+			const bool tileInvalid = AtlasActive() &&
+			                         (!GetSlotTileTexels(e->Index, schedDirtyTile) || !schedDirtyTile.contentValid);
 			e->schedDirty = e->LastDrawnFrame < 0 ||
 			                e->lastGeomHash == 0 ||
 			                e->pendingGeomHash != e->lastGeomHash ||
@@ -2017,6 +2057,19 @@ namespace ShadowCasterManager
 			const int32_t staggerCapFrames = std::max(1, static_cast<int32_t>(effectiveDelay * 0.5));
 			const int32_t deadlineStagger = (e->Index * 41) % staggerCapFrames;
 			e->RedrawScore -= static_cast<double>(deadlineStagger);
+
+			// Unshadowed is strictly worse than stale -- the due-gate must
+			// never hold a blank tile past "due", or a multi-admission heal
+			// stretches a 1-frame blip into a full interval of bright shadow.
+			if (tileInvalid)
+				e->RedrawScore = std::min(e->RedrawScore, static_cast<double>(now));
+
+			// Skinned pose animation never registers in the geom hash, so a
+			// light with live dynamic casters is dirty the moment it is due.
+			// Keyed on the fully-adjusted RedrawScore (importance, occlusion
+			// stretch, stagger) so this cannot disagree with the admission gate.
+			if (dynamicCasters > 0 && e->RedrawScore <= static_cast<double>(now))
+				e->schedDirty = true;
 
 			// Demanded redraws/frame vs actual admissions/frame distinguishes a tuning
 			// problem (demand within capacity) from genuine overload.
@@ -2083,10 +2136,14 @@ namespace ShadowCasterManager
 			// spent unconditionally every frame. isFirst stays exempt to match its
 			// unconditional admission below.
 			if (s_shadowDemand.redrawDueGate && !isFirst) {
+				// Dirty sorts before clean (ScheduleOrderLess), so once we reach a
+				// clean entry nothing after it can be dirty either -- safe to break.
 				if (!e->schedDirty)
 					break;
+				// continue, not break: a starved-but-not-yet-due entry must not
+				// block a LATER dirty entry that IS due (e.g. tileInvalid-clamped).
 				if (e->RedrawScore > static_cast<double>(now))
-					break;
+					continue;
 			}
 			int32_t budgetEstimate = s_budget.GetCost(e->Light);
 			if (isFirst) {

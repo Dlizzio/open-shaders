@@ -206,8 +206,7 @@ namespace ShadowCasterManager
 		// coneFraction since falloff alone cannot distinguish beam-elsewhere
 		// from actually-lit within the sphere.
 		auto computeAtt = [&](const RE::NiPoint3& pos) -> float {
-			const float dx = pos.x - lp.x, dy = pos.y - lp.y, dz = pos.z - lp.z;
-			const float dist2 = dx * dx + dy * dy + dz * dz;
+			const float dist2 = pos.GetSquaredDistance(lp);
 			const float r2 = lightRadius * lightRadius;
 			if (dist2 >= r2)
 				return 0.0f;
@@ -293,6 +292,7 @@ namespace ShadowCasterManager
 		FormulaHelper::SetParam(kFormulaParam_LightConverted, 0.0);
 		FormulaHelper::SetParam(kFormulaParam_LightIndex, index);
 		FormulaHelper::SetParam(kFormulaParam_LightDisplacement, 0.0);    // overridden per-entry in redraw interval loop
+		FormulaHelper::SetParam(kFormulaParam_LightDynamicCasters, 0.0);  // overridden per-entry in redraw interval loop
 		FormulaHelper::SetParam(kFormulaParam_PlayerLightDistance, 0.0);  // overridden below after light position is known
 
 		// Temporal stickiness signals. Both derived from the slot pool in one
