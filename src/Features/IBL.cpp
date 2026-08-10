@@ -303,7 +303,7 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 		data.DALCAmount = 1.0f;
 		data.EnvIBLSaturation = 1.0f;
 		data.SkyIBLSaturation = 1.0f;
-		data.DALCMode = 3;
+		data.DALCMode = kDALCPlusSkyDirectionalMode;
 		data.FogAmount = 0.0f;
 	}
 #endif

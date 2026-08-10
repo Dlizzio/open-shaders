@@ -2835,7 +2835,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 		if (!(SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection)) {
-#		if defined(SKYLIGHTING)
+#		if defined(SKYLIGHTING) && !defined(INTERIOR)
 			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(directionalAmbientColor, -ambientNormal, skylightingDiffuse);
 #		else
 			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -ambientNormal);
@@ -2973,7 +2973,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	directionalAmbientColor *= outputAlbedo;
 
 #	if defined(SKYLIGHTING)
-#		if defined(IBL)
+#		if defined(IBL) && !defined(INTERIOR)
 	if (!SharedData::iblSettings.EnableIBL)
 #		endif
 	{

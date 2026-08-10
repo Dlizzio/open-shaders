@@ -1226,7 +1226,7 @@ PS_OUTPUT main(PS_INPUT input)
 	dirColor *= dirShadow;
 
 #				if defined(SKYLIGHTING)
-#					if defined(IBL)
+#					if defined(IBL) && !defined(INTERIOR)
 	if (!SharedData::iblSettings.EnableIBL)
 #					endif
 	{
