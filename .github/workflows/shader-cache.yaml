@@ -102,7 +102,8 @@ jobs:
             - name: Package
               run: |
                   NAME="ShaderCache-${{ matrix.runtime }}-${{ inputs.tag }}.7z"
-                  7z a -t7z -mx=7 "$NAME" ./ShaderCache
+                  mkdir -p SKSE
+                  7z a -t7z -mx=7 "$NAME" ./ShaderCache ./SKSE
                   ls -lh "$NAME"
 
             - name: Attach to release
