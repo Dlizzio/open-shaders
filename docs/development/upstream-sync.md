@@ -66,6 +66,8 @@ The workflow `git merge --abort`s, posts the conflicted file list to the workflo
 
 ### Conflict Resolution Guidelines
 
+> **Open Shaders prerelease invariant:** every Alpha and Beta feature remains disabled by default, regardless of core status. Do not take Community Shaders' core-only behavior in `src/Feature.h`, and keep the default-disabled profile in `tools/build-shader-cache.py` aligned with it.
+
 1. **Resolve conflicts in favor of keeping VR** (this fork is the VR maintainer). Typical conflicts are just fork CI config or feature `.ini` versions — resolve `--ours`.
 2. If upstream ships a VR removal, revert it and keep VR.
 3. **Verify ancestry after landing:** `git merge-base --is-ancestor <upstream-sha> HEAD` must pass for each adopted upstream commit.
