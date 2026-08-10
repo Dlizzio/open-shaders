@@ -2,6 +2,11 @@
 
 #include <imgui.h>
 
+bool HorizonFix::IsInMenu() const
+{
+	return loaded || GetModuleHandleW(L"HorizonFix.dll") != nullptr;
+}
+
 void HorizonFix::DrawSettings()
 {
 	ImGui::TextWrapped(
