@@ -286,8 +286,8 @@ namespace Util::CacheInvalidation
 	}
 
 	/// Delete only the cache dirs whose root shader references any of the defines.
-	/// Returns false (caller must full-wipe) on any empty define, missing root
-	/// source, or scan failure -- conservative by construction. If a deletion
+	/// Returns false (caller must full-wipe) on any empty define, unresolved
+	/// non-ImageSpace source, or scan failure. If a deletion
 	/// itself fails partway through (some dirs already removed, others not), sets
 	/// *outDestructivePartialFailure so the caller knows the active cache is now
 	/// inconsistent and must be wiped outright rather than treated as untouched.
@@ -302,6 +302,20 @@ namespace Util::CacheInvalidation
 			for (const auto& define : defines)
 				if (define.empty())
 					return false;
+			std::vector<std::filesystem::path> imageSpaceRoots;
+			for (const auto& entry : std::filesystem::directory_iterator(shadersRoot)) {
+				if (entry.is_regular_file() && entry.path().extension() == L".hlsl" &&
+					(entry.path().stem().wstring().starts_with(L"IS") || entry.path().stem() == L"Utility")) {
+					imageSpaceRoots.push_back(entry.path());
+				}
+			}
+			std::map<std::pair<std::filesystem::path, std::string>, std::optional<bool>> referenceCache;
+			const auto referencesDefine = [&](const std::filesystem::path& root, const std::string& define) -> const std::optional<bool>& {
+				auto [it, inserted] = referenceCache.try_emplace({ root, define });
+				if (inserted)
+					it->second = RootShaderReferencesToken(root, define, shadersRoot);
+				return it->second;
+			};
 			// Two-phase: scan to completion before deleting, so a mid-scan bail-out
 			// can't leave a half-deleted cache to rotate into the rollback slot.
 			std::vector<std::filesystem::path> toDelete;
@@ -311,23 +325,44 @@ namespace Util::CacheInvalidation
 					continue;
 				const auto dirName = entry.path().filename().wstring();
 				auto root = shadersRoot / (dirName + L".hlsl");
-				if (!std::filesystem::exists(root)) {
-					// ImageSpace cache dirs are named for the technique (e.g. "ISDepthOfField"),
-					// not their real source; they all compile from the shared Utility.hlsl.
-					const bool isImageSpace = dirName.starts_with(L"IS") || dirName == L"ReflectionsRayTracing";
-					root = isImageSpace ? shadersRoot / L"Utility.hlsl" : root;
-					if (!isImageSpace || !std::filesystem::exists(root))
-						return false;
-				}
 				bool affected = false;
-				for (const auto& define : defines) {
-					auto refs = RootShaderReferencesToken(root, define, shadersRoot);
-					if (!refs.has_value())
-						return false;
-					if (*refs) {
-						affected = true;
-						break;
+				const bool isImageSpace = dirName.starts_with(L"IS") || dirName == L"ReflectionsRayTracing";
+				if (isImageSpace) {
+					bool sourceResolved = false;
+					for (const auto& imageSpaceRoot : imageSpaceRoots) {
+						const auto sourceName = imageSpaceRoot.stem().wstring();
+						const bool isUtility = sourceName == L"Utility";
+						const bool matchesTechnique = dirName.starts_with(sourceName) ||
+						                              (sourceName.starts_with(L"IS") && dirName.starts_with(sourceName.substr(2)));
+						if (!isUtility && !matchesTechnique)
+							continue;
+						sourceResolved = sourceResolved || matchesTechnique;
+						for (const auto& define : defines) {
+							const auto& refs = referencesDefine(imageSpaceRoot, define);
+							if (!refs.has_value())
+								return false;
+							if (*refs) {
+								affected = true;
+								break;
+							}
+						}
+						if (affected)
+							break;
 					}
+					// An unresolved remapped technique cannot be proven independent of the feature.
+					affected = affected || !sourceResolved;
+				} else if (std::filesystem::exists(root)) {
+					for (const auto& define : defines) {
+						const auto& refs = referencesDefine(root, define);
+						if (!refs.has_value())
+							return false;
+						if (*refs) {
+							affected = true;
+							break;
+						}
+					}
+				} else {
+					return false;
 				}
 				if (affected)
 					toDelete.push_back(entry.path());

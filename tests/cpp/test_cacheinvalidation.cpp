@@ -204,6 +204,38 @@ TEST_CASE("TryPartialInvalidation: deletes exactly the referencing dirs", "[cach
 	CHECK(fs::exists(cache / "Sky/1.pso"));
 }
 
+TEST_CASE("TryPartialInvalidation: resolves remapped ImageSpace cache directories", "[cacheinvalidation]")
+{
+	TempDir t;
+	auto shaders = t.path / "Shaders";
+	auto cache = t.path / "ShaderCache";
+	Write(shaders / "ISHDR.hlsl", "#if defined(POSTPROCESS)\n#endif\n");
+	Write(shaders / "ISBasicCopy.hlsl", "float4 main() { return 0; }\n");
+	Write(shaders / "Utility.hlsl", "float4 main() { return 0; }\n");
+	Write(cache / "ISHDRTonemapBlendCinematic/37.pso", "blob");
+	Write(cache / "ISBasicCopy/68.pso", "blob");
+
+	size_t deleted = 0, kept = 0;
+	REQUIRE(TryPartialInvalidation(cache, shaders, { "POSTPROCESS" }, &deleted, &kept));
+	CHECK(deleted == 1);
+	CHECK(kept == 1);
+	CHECK_FALSE(fs::exists(cache / "ISHDRTonemapBlendCinematic"));
+	CHECK(fs::exists(cache / "ISBasicCopy/68.pso"));
+}
+
+TEST_CASE("TryPartialInvalidation: conservatively deletes unresolved ImageSpace techniques", "[cacheinvalidation]")
+{
+	TempDir t;
+	auto shaders = t.path / "Shaders";
+	auto cache = t.path / "ShaderCache";
+	Write(shaders / "ISCompositeLensFlareVolumetricLighting.hlsl", "float4 main() { return 0; }\n");
+	Write(shaders / "Utility.hlsl", "float4 main() { return 0; }\n");
+	Write(cache / "ISCompositeLensFlare/72.pso", "blob");
+
+	REQUIRE(TryPartialInvalidation(cache, shaders, { "POSTPROCESS" }));
+	CHECK_FALSE(fs::exists(cache / "ISCompositeLensFlare"));
+}
+
 TEST_CASE("TryPartialInvalidation: conservative fallbacks", "[cacheinvalidation]")
 {
 	TempDir t;
