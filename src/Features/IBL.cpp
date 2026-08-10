@@ -41,6 +41,16 @@ namespace
 		return settings.DALCMode;
 	}
 
+#if defined(ENABLE_EFFECTS11)
+	bool IsENBIBLControlActive()
+	{
+		if (!globals::features::effects11.loaded || !globals::features::effects11.enableEffect)
+			return false;
+
+		return SettingManager::GetSingleton().GetValue<bool>("EnableImageBasedLighting", "EFFECT");
+	}
+#endif
+
 	void DrawEnableCheckbox(const char* label, bool& disableSetting)
 	{
 		bool enableSetting = !disableSetting;
@@ -69,12 +79,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void IBL::DrawSettings()
 {
 #if defined(ENABLE_EFFECTS11)
-	if (globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
-			return;
-		}
+	if (IsENBIBLControlActive()) {
+		ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
+		return;
 	}
 #endif
 
@@ -199,15 +206,8 @@ void IBL::RestoreDefaultSettings()
 void IBL::RegisterWeatherVariables()
 {
 #if defined(ENABLE_EFFECTS11)
-	if (globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			auto& settingManager = SettingManager::GetSingleton();
-			if (settingManager.GetValue<bool>("EnableImageBasedLighting", "EFFECT")) {
-				return;
-			}
-		}
-	}
+	if (IsENBIBLControlActive())
+		return;
 #endif
 
 	auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton()
@@ -295,21 +295,16 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 	};
 
 #if defined(ENABLE_EFFECTS11)
-	if (!sceneDisabled && globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			auto& settingManager = SettingManager::GetSingleton();
-			if (settingManager.GetValue<bool>("EnableImageBasedLighting", "EFFECT")) {
-				data.EnableIBL = Util::IsInterior() ? 0u : 1u;
-				data.EnvIBLScale = 0.0f;
-				data.SkyIBLScale = settingManager.GetInterpolatedTimeOfDayValue("MultiplicativeAmount", "IMAGEBASEDLIGHTING");
-				data.DALCAmount = 1.0f;
-				data.EnvIBLSaturation = 1.0f;
-				data.SkyIBLSaturation = 1.0f;
-				data.DALCMode = 3;
-				data.FogAmount = 0.0f;
-			}
-		}
+	if (!sceneDisabled && IsENBIBLControlActive()) {
+		auto& settingManager = SettingManager::GetSingleton();
+		data.EnableIBL = Util::IsInterior() ? 0u : 1u;
+		data.EnvIBLScale = 0.0f;
+		data.SkyIBLScale = settingManager.GetInterpolatedTimeOfDayValue("MultiplicativeAmount", "IMAGEBASEDLIGHTING");
+		data.DALCAmount = 1.0f;
+		data.EnvIBLSaturation = 1.0f;
+		data.SkyIBLSaturation = 1.0f;
+		data.DALCMode = kDALCPlusSkyDirectionalMode;
+		data.FogAmount = 0.0f;
 	}
 #endif
 

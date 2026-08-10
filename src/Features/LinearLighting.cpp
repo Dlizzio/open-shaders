@@ -232,8 +232,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
 			data.vanillaDiffuseColorMult = 1.0f;
-			data.directionalLightMult = 1.0f;
-			data.pointLightMult = 1.0f;
+			data.dirLightMult = 1.0f;
 			data.ambientMult = 1.0f;
 			data.emitColorMult = 1.0f;
 			data.glowmapMult = 1.0f;
