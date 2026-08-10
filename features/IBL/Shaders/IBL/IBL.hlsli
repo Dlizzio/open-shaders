@@ -113,7 +113,7 @@ namespace ImageBasedLighting
 		if (SharedData::enbSettings.Enable)
 			linSky *= saturate(-rayDir.z * 0.65 + 0.35);
 #endif
-		return linEnv + linSky;
+		return Color::IrradianceToGamma(linEnv + linSky);
 	}
 
 	/// Compute diffuse IBL ambient with a skylighting visibility factor applied per DALCMode
@@ -142,6 +142,7 @@ namespace ImageBasedLighting
 		float level,
 		float directionalAmbientColorSpecular,
 		float skylightingSpecular,
+		float skylightingVisibility,
 		out float3 envSpecular,
 		out float3 skySpecular)
 	{
@@ -153,7 +154,7 @@ namespace ImageBasedLighting
 			envSpecular = (linEnvSample / max(envLum, 0.001)) * Color::IrradianceToLinear(directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
 			skySpecular = max(0, linFullSample - linEnvSample) * SharedData::iblSettings.SkyIBLScale;
 #if defined(SKYLIGHTING)
-			envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSpecular : 1.0;
+			envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingVisibility : 1.0;
 			skySpecular *= skylightingSpecular;
 #endif
 		} else {
