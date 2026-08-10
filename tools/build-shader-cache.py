@@ -73,12 +73,8 @@ def stage_merged_shaders(stage: Path) -> None:
 # for them at all on the other (verified against live SE and VR installs).
 RUNTIME_EXCLUDED_FEATURES = {"SE": {"VR"}, "VR": set()}
 
-# Features that self-disable at runtime based on an optional external dependency
-# (a companion plugin DLL, a conflicting mod) rather than the Alpha/Beta .ini stage
-# flag -- the CI build environment has neither, so building with them enabled would
-# ship blobs a default install can never use. Keep in sync with the runtime's
-# self-disable sites (src/Features/HorizonFix.cpp, src/Features/SkySync.cpp).
-ENVIRONMENT_GATED_FEATURES = {"HorizonFix", "SkySync"}
+# Features whose required companion DLL is not bundled with the AIO.
+DEFAULT_DISABLED_COMPANION_FEATURES = {"HorizonFix"}
 
 
 def feature_define_map(source_root: Path) -> dict:
@@ -373,7 +369,7 @@ IMAGESPACE_DIRS = {
 def write_info_ini(cache_dir: Path, stage: Path, plugin_version: str, runtime: str, include_stems=None, disabled_stems=None) -> int:
     """Emit Info.ini matching ShaderCache::WriteDiskCacheInfo's output format.
     include_stems limits sections to the target profile (AIO default install);
-    disabled_stems (default_disabled_features() | ENVIRONMENT_GATED_FEATURES) marks
+    disabled_stems (default-disabled stages plus required external dependencies) marks
     which of those sections a default install actually loads with Enabled=false."""
     disabled_stems = disabled_stems or set()
     lines = ["[Cache]", f"PluginVersion = {plugin_version}", "", ""]
@@ -482,7 +478,7 @@ def profile_strip_defines(source_root: Path, profile: str) -> tuple:
     profile's runtime (non-AIO features + default-disabled), the manifest stems, and
     which of those stems a default install ships Enabled=false for (see write_info_ini)."""
     defines = feature_define_map(source_root)
-    disabled = default_disabled_features(source_root) | ENVIRONMENT_GATED_FEATURES
+    disabled = default_disabled_features(source_root) | DEFAULT_DISABLED_COMPANION_FEATURES
     all_stems = {p.stem for p in (source_root / "features").glob("*/Shaders/Features/*.ini")}
     include = aio_feature_stems(source_root) if profile == "aio" else all_stems
     excluded = (all_stems - include) | disabled
