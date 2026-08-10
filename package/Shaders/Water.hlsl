@@ -1217,14 +1217,23 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 dirColor;
 	float3 ambientColor;
+#				if defined(SKYLIGHTING) && !defined(INTERIOR)
+	ShadowSampling::ExtractLighting(diffuseOutput.refractionDiffuseColor, dirColor, ambientColor, skylightingDiffuse);
+#				else
 	ShadowSampling::ExtractLighting(diffuseOutput.refractionDiffuseColor, dirColor, ambientColor);
+#				endif
 
 	dirColor *= dirShadow;
 
 #				if defined(SKYLIGHTING)
-	ambientColor = Color::IrradianceToLinear(ambientColor);
-	ambientColor *= skylightingDiffuse;
-	ambientColor = Color::IrradianceToGamma(ambientColor);
+#					if defined(IBL)
+	if (!SharedData::iblSettings.EnableIBL)
+#					endif
+	{
+		ambientColor = Color::IrradianceToLinear(ambientColor);
+		ambientColor *= skylightingDiffuse;
+		ambientColor = Color::IrradianceToGamma(ambientColor);
+	}
 #				endif
 
 	diffuseOutput.refractionDiffuseColor = dirColor + ambientColor;

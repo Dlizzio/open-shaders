@@ -561,12 +561,20 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 
 	float3 dirColor;
 	float3 ambientColor;
+#		if defined(SKYLIGHTING) && !defined(INTERIOR)
+	ShadowSampling::ExtractLighting(color, dirColor, ambientColor, skylightingDiffuse);
+#		else
 	ShadowSampling::ExtractLighting(color, dirColor, ambientColor);
+#		endif
 
 #		if defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {
 		dirColor = ShadowSampling::GetDirectionalLighting();
+#			if defined(SKYLIGHTING) && !defined(INTERIOR)
+		ambientColor = ShadowSampling::GetAmbientLighting(skylightingDiffuse);
+#			else
 		ambientColor = ShadowSampling::GetAmbientLighting();
+#			endif
 		dirColor *= SharedData::enbSettings.ParticleLightingInfluence;
 		ambientColor *= SharedData::enbSettings.ParticleAmbientInfluence;
 	}
@@ -640,7 +648,11 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 {
 	float3 dirColor;
 	float3 ambientColor;
+#		if defined(SKYLIGHTING) && !defined(INTERIOR)
+	ShadowSampling::ExtractLighting(color, dirColor, ambientColor, 1.0);
+#		else
 	ShadowSampling::ExtractLighting(color, dirColor, ambientColor);
+#		endif
 
 	static const uint sampleCount = 8;
 	static const float rcpSampleCount = 1.0 / float(sampleCount);

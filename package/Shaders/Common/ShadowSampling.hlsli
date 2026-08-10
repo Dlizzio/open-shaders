@@ -155,6 +155,21 @@ namespace ShadowSampling
 		return ambientColor;
 	}
 
+#if defined(SKYLIGHTING) && !defined(INTERIOR)
+	float3 GetAmbientLighting(float skylightingDiffuse)
+	{
+		float3 ambientColor = GetRawAmbientLighting();
+
+#	if defined(IBL)
+		if (SharedData::iblSettings.EnableIBL) {
+			ambientColor = ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ImageBasedLightingNormal, skylightingDiffuse);
+		}
+#	endif
+
+		return ambientColor;
+	}
+#endif
+
 	float3 GetDirectionalLighting()
 	{
 		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
@@ -166,9 +181,17 @@ namespace ShadowSampling
 		return GetAmbientLighting() + GetDirectionalLighting();
 	}
 
+#if defined(SKYLIGHTING) && !defined(INTERIOR)
+	void ExtractLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skylightingDiffuse)
+#else
 	void ExtractLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor)
+#endif
 	{
+#if defined(SKYLIGHTING) && !defined(INTERIOR)
+		float3 ambientColorAmb = GetAmbientLighting(skylightingDiffuse);
+#else
 		float3 ambientColorAmb = GetAmbientLighting();
+#endif
 		float3 dirLightColorDir = GetDirectionalLighting();
 
 		float inputLuma = Color::RGBToLuminance(inputColor);
