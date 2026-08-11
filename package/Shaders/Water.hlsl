@@ -863,14 +863,15 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	finalNormal = ReorientNormal(rippleNormal, finalNormal);
 #			endif
 
-	result.normal = finalNormal;
+	float waveAmplitude = SharedData::csUtilitySettings.waterWaveAmplitude;
+	result.normal = waveAmplitude == 1.0 ? finalNormal : normalize(lerp(float3(0, 0, 1), finalNormal, waveAmplitude));
 	return result;
 }
 
 float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular)
 {
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections))
-		return ReflectionColor.xyz * VarAmounts.y;
+		return ReflectionColor.xyz * VarAmounts.y * SharedData::csUtilitySettings.waterReflectionAmount;
 
 	float3 R = reflect(viewDirection, WaterParams.y * normal + float3(0, 0, 1 - WaterParams.y));
 	float3 reflectionColor = CubeMapTex.SampleLevel(CubeMapSampler, R, 0).xyz;
@@ -918,7 +919,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
 #			endif
 
-	return reflectionColor;
+	return reflectionColor * SharedData::csUtilitySettings.waterReflectionAmount;
 }
 
 float GetScreenDepthWater(float2 screenPosition, uint a_useVR = 0)
@@ -950,7 +951,8 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	float3 actualNormal = normal;
 #			endif
 	float viewAngle = 1 - saturate(dot(-viewDirection, actualNormal));
-	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
+	float vanillaFresnel = (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
+	return lerp(SharedData::csUtilitySettings.waterFresnelMin, SharedData::csUtilitySettings.waterFresnelMax, vanillaFresnel);
 }
 
 struct DiffuseOutput
@@ -965,7 +967,7 @@ struct DiffuseOutput
 DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection, inout float4 distanceMul, float refractionsDepthFactor, float fresnel, uint eyeIndex, float3 viewPosition, float depth)
 {
 #			if defined(REFRACTIONS)
-	float4 refractionNormal = mul(transpose(TextureProj[eyeIndex]), float4((VarAmounts.w * refractionsDepthFactor * normal.xy) + input.MPosition.xy, input.MPosition.z, 1));
+	float4 refractionNormal = mul(transpose(TextureProj[eyeIndex]), float4((VarAmounts.w * SharedData::csUtilitySettings.waterRefractionAmount * refractionsDepthFactor * normal.xy) + input.MPosition.xy, input.MPosition.z, 1));
 
 	float2 refractionUvRaw = float2(refractionNormal.x, refractionNormal.w - refractionNormal.y) / refractionNormal.ww;
 	refractionUvRaw = Stereo::ConvertToStereoUV(refractionUvRaw, eyeIndex);  // need to convert here for VR due to refractionNormal values
@@ -1026,7 +1028,7 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	output.refractionColor = refractionColor;
 	output.refractionDiffuseColor = refractionDiffuseColor;
 	output.depth = depth;
-	output.refractionMul = refractionMul;
+	output.refractionMul = saturate(refractionMul * SharedData::csUtilitySettings.waterMuddiness);
 	output.refractedViewDirection = normalize(refractionWorldPosition.xyz - input.WPosition.xyz);
 	return output;
 #			else
@@ -1058,7 +1060,7 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition, ui
 		sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
 	}
 #				endif
-	return reflectionMul * sunColor;
+	return reflectionMul * sunColor * SharedData::csUtilitySettings.waterSunSpecularMultiplier;
 #			endif
 }
 #		endif
@@ -1463,7 +1465,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #				endif
 #			endif
-	psout.Lighting = float4(finalColor, isSpecular);
+	psout.Lighting = float4(finalColor * SharedData::csUtilitySettings.waterBrightness, isSpecular);
 #		endif
 
 #		if defined(STENCIL)

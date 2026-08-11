@@ -239,6 +239,14 @@ namespace SharedData
 		float linearSpotlightMult;
 		float omnidirectionalBulbMult;
 		float linearOmnidirectionalBulbMult;
+		float waterBrightness;
+		float waterReflectionAmount;
+		float waterRefractionAmount;
+		float waterSunSpecularMultiplier;
+		float waterWaveAmplitude;
+		float waterFresnelMin;
+		float waterFresnelMax;
+		float waterMuddiness;
 	};
 
 	struct LinearLightingSettings
