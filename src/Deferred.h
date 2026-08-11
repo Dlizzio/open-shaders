@@ -44,7 +44,18 @@ public:
 	// directional shadow record so we want it to fail at compile time.
 	// 8 float4x4 (Shadow + Inv + Focus) + 2 float4 (splits + FocusCount/pad).
 	static_assert(sizeof(DirectionalShadowLightData) == 8 * sizeof(float4x4) + 2 * sizeof(float4),
-		"DirectionalShadowLightData layout drifted from ShadowSampling.hlsli mirror");
+		"DirectionalShadowLightData layout drifted from its HLSL mirrors in ShadowSampling.hlsli, "
+		"UpdateProbesCS.hlsl, and VolumetricFogLightScatteringCS.hlsl");
+	// The sizeof guard above only catches drift that changes total size, not field order --
+	// the two local struct copies below only depend on these leading fields staying in place.
+	static_assert(offsetof(DirectionalShadowLightData, ShadowProj) == 0,
+		"UpdateProbesCS.hlsl/VolumetricFogLightScatteringCS.hlsl mirror drifted: ShadowProj offset");
+	static_assert(offsetof(DirectionalShadowLightData, InvShadowProj) == 2 * sizeof(float4x4),
+		"UpdateProbesCS.hlsl/VolumetricFogLightScatteringCS.hlsl mirror drifted: InvShadowProj offset");
+	static_assert(offsetof(DirectionalShadowLightData, EndSplitDistances) == 4 * sizeof(float4x4),
+		"UpdateProbesCS.hlsl/VolumetricFogLightScatteringCS.hlsl mirror drifted: EndSplitDistances offset");
+	static_assert(offsetof(DirectionalShadowLightData, StartSplitDistances) == 4 * sizeof(float4x4) + sizeof(float2),
+		"UpdateProbesCS.hlsl/VolumetricFogLightScatteringCS.hlsl mirror drifted: StartSplitDistances offset");
 
 	struct alignas(16) ShadowLightData
 	{
@@ -56,11 +67,14 @@ public:
 		/// tile" -- the shader then samples the kSHADOWMAPS array slice, so
 		/// zero-filled slots and mixed builds keep the array path.
 		float4 AtlasRect;
+		/// x = shadow fade-in blend [0,1] (0 = just gained a shadow, blend
+		/// fully toward lit; 1 = fade complete, sample normally). yzw reserved.
+		float4 FadeParam;
 	};
 
 	STATIC_ASSERT_ALIGNAS_16(ShadowLightData);
 	// Same guard for the per-slot point/spot shadow record (LightLimitFix.hlsli).
-	static_assert(sizeof(ShadowLightData) == 2 * sizeof(float4x4) + 2 * sizeof(float4),
+	static_assert(sizeof(ShadowLightData) == 2 * sizeof(float4x4) + 3 * sizeof(float4),
 		"ShadowLightData layout drifted from LightLimitFix.hlsli mirror");
 
 	/** @brief Creates render targets, samplers, and the directional shadow structured buffer. */

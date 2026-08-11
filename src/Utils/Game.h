@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 /**
  @def GET_INSTANCE_MEMBER
  @brief Set variable in current namespace based on instance member from GetRuntimeData or GetVRRuntimeData.
@@ -30,8 +32,43 @@
 	/* Keep raw runtime check: this macro can be used before globals::ReInit(). */ \
 	&(!REL::Module::IsVR() ? a_source->GetRuntimeData().a_value : a_source->GetVRRuntimeData().a_value)
 
+/**
+ @def GET_INSTANCE_MEMBER_VRPTR
+ @brief Like GET_INSTANCE_MEMBER, for classes whose GetVRRuntimeData() returns
+ a pointer instead of a reference (e.g. ImageSpaceManager).
+
+ @warning The class must have GetRuntimeData() (reference) and GetVRRuntimeData() (pointer).
+
+ @param a_value The instance member value to access (e.g., BSImagespaceShaderApplyReflections).
+ @param a_source The instance of the class (e.g., imageSpaceManager).
+ @result The a_value will be set as a variable in the current namespace.
+ */
+#define GET_INSTANCE_MEMBER_VRPTR(a_value, a_source)                               \
+	/* Keep raw runtime check: this macro can be used before globals::ReInit(). */ \
+	auto& a_value = !REL::Module::IsVR() ? a_source->GetRuntimeData().a_value : a_source->GetVRRuntimeData()->a_value;
+
 namespace Util
 {
+	/** @brief Pending celestial synchronization requests consumed by the sky update hook. */
+	struct CelestialTransitionRequest
+	{
+		bool timeJump = false;
+		bool gameLoad = false;
+	};
+
+	/** @brief Sets whether a sky update hook can synchronize celestial transitions. */
+	void SetCelestialTransitionHandlerAvailable(bool a_available);
+	/** @brief Requests celestial synchronization after an abrupt game-time change. */
+	void RequestTimeJumpTransition();
+	/** @brief Requests celestial synchronization after loading an existing save. */
+	void RequestGameLoadTransition();
+	/** @brief Consumes pending celestial synchronization requests. */
+	[[nodiscard]] CelestialTransitionRequest ConsumeCelestialTransitionRequest();
+	/** @brief Marks a celestial transition ready for dependent rendering updates. */
+	void CompleteCelestialTransition();
+	/** @brief Returns the latest completed celestial-transition generation. */
+	[[nodiscard]] std::uint32_t GetCompletedCelestialTransitionGeneration();
+
 	void StoreTransform3x4NoScale(DirectX::XMFLOAT3X4& Dest, const RE::NiTransform& Source);
 
 	float4 TryGetWaterData(float offsetX, float offsetY);

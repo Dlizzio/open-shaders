@@ -4,6 +4,7 @@
  */
 
 #include "Common/Color.hlsli"
+#include "Common/DisplayMapping.hlsli"
 #include "Common/SharedData.hlsli"
 
 Texture2D<float4> SceneTex : register(t0);
@@ -21,6 +22,7 @@ cbuffer PerFrame : register(b0)
 	float isMainOrLoadingMenu : packoffset(c1.z);
 	float fgTweenMenuMidAlphaBoost : packoffset(c1.w);  ///< TweenMenu: soften AA band when compositing here (UIBrightnessCS skips while paused)
 	float previewSDR : packoffset(c2.x);                ///< 1.0 = emit sRGB SDR (crop preview) instead of PQ HDR10
+	float applyAutoHDR : packoffset(c2.y);              ///< 1.0 = Effects11 replaced ISHDR, so expand its SDR result into HDR
 }
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
@@ -34,11 +36,20 @@ cbuffer PerFrame : register(b0)
 
 	bool hdrEnabled = enableHDR > 0.5;
 	bool skipUI = skipUIComposite > 0.5;
+	bool isMainLoading = isMainOrLoadingMenu > 0.5;
+	bool postProcessOutput = SharedData::postProcessingSettings.DisableVanillaTonemapping != 0 && !isMainLoading;
 
 	float3 finalColor;
 
 	if (hdrEnabled) {
-		bool sceneIsLinear = isSceneLinear > 0.5;
+		bool sceneIsLinear = isSceneLinear > 0.5 || postProcessOutput;
+
+		if (applyAutoHDR > 0.5) {
+			float3 outputColor = sceneIsLinear ? scene.xyz : Color::GammaToLinearSafe(scene.xyz);
+			outputColor = DisplayMapping::PumboAutoHDR(outputColor, SharedData::HDRData.z, SharedData::HDRData.y, 2.75, 1.0);
+			scene.xyz = sceneIsLinear ? outputColor : Color::LinearToGammaSafe(outputColor);
+		}
+
 		float3 compositedColorLinear;
 
 		if (sceneIsLinear) {
@@ -47,11 +58,15 @@ cbuffer PerFrame : register(b0)
 				compositedColorLinear = sceneLinear;
 			} else {
 				float3 uiLinear = Color::SrgbToLinear(max(0.0, ui.rgb));
-				if (!(isMainOrLoadingMenu > 0.5)) {  // UI and scene can't be separated in main menu or loading screen
+				if (!isMainLoading) {  // UI and scene can't be separated in main menu or loading screen
 					// scale UI brightness (multiplier based on paperWhite)
 					uiLinear *= uiBrightness;
 				}
-				compositedColorLinear = uiLinear + sceneLinear * (1.0 - ui.a);
+				if (postProcessOutput) {
+					compositedColorLinear = Color::BT709ToBT2020(uiLinear) + sceneLinear * (1.0 - ui.a);
+				} else {
+					compositedColorLinear = uiLinear + sceneLinear * (1.0 - ui.a);
+				}
 			}
 		} else {
 			float3 sceneGamma = scene.rgb;
@@ -60,7 +75,7 @@ cbuffer PerFrame : register(b0)
 				compositedColorGamma = sceneGamma;
 			} else {
 				float3 uiGamma = ui.rgb;
-				if (!(isMainOrLoadingMenu > 0.5)) {  // UI and scene can't be separated in main menu or loading screen
+				if (!isMainLoading) {  // UI and scene can't be separated in main menu or loading screen
 					// scale UI brightness (multiplier based on paperWhite)
 					float3 uiLinear = Color::SrgbToLinear(max(0, uiGamma));
 					uiLinear *= uiBrightness;
@@ -85,7 +100,8 @@ cbuffer PerFrame : register(b0)
 			// Crop preview lives in the SDR menu buffer: emit sRGB instead of PQ.
 			finalColor = saturate(Color::LinearToSrgb(max(0.0, compositedColorLinear)));
 		} else {
-			compositedColorLinear = Color::BT709ToBT2020(compositedColorLinear);
+			if (!postProcessOutput)
+				compositedColorLinear = Color::BT709ToBT2020(compositedColorLinear);
 			finalColor = Color::pq::Encode(max(0.0, compositedColorLinear), paperWhite);
 
 			finalColor = saturate(finalColor);

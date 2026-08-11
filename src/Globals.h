@@ -10,6 +10,7 @@ struct ExtendedMaterials;
 struct GrassCollision;
 struct GrassLighting;
 struct HairSpecular;
+struct HorizonFix;
 struct IBL;
 struct LightLimitFix;
 struct LinearLighting;
@@ -30,7 +31,7 @@ struct VanillaFresnel;
 struct VolumetricLighting;
 struct VR;
 struct WaterEffects;
-struct WeatherPicker;
+struct SceneSelector;
 struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
@@ -38,8 +39,12 @@ struct Upscaling;
 class Profiler;
 struct CSEditor;
 struct CSUtility;
+#if defined(ENABLE_EFFECTS11)
+struct Effects11;
+#endif
 struct ExponentialHeightFog;
 struct HDRDisplay;
+struct PostProcessing;
 struct ScreenshotFeature;
 struct Skin;
 
@@ -102,6 +107,7 @@ namespace globals
 		extern GrassCollision grassCollision;
 		extern GrassLighting grassLighting;
 		extern HairSpecular hairSpecular;
+		extern HorizonFix horizonFix;
 		extern IBL ibl;
 		extern LightLimitFix lightLimitFix;
 		extern LinearLighting linearLighting;
@@ -122,12 +128,15 @@ namespace globals
 		extern VolumetricLighting volumetricLighting;
 		extern VR vr;
 		extern WaterEffects waterEffects;
-		extern WeatherPicker weatherPicker;
+		extern SceneSelector sceneSelector;
 		extern PerformanceOverlay performanceOverlay;
 		extern WetnessEffects wetnessEffects;
 		extern ExtendedTranslucency extendedTranslucency;
 		extern Upscaling upscaling;
 		extern HDRDisplay hdrDisplay;
+#if defined(ENABLE_EFFECTS11)
+		extern Effects11 effects11;
+#endif
 		extern RenderDoc renderDoc;
 		extern RemoteControl remoteControl;
 		extern ScreenshotFeature screenshotFeature;
@@ -136,6 +145,7 @@ namespace globals
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
 		extern Skin skin;
+		extern PostProcessing postProcessing;
 
 		namespace llf
 		{
@@ -270,6 +280,7 @@ namespace globals
 		extern float* deltaTime;
 		extern RE::BSUtilityShader* utilityShader;
 		extern RE::PlayerCharacter* player;
+		extern RE::PlayerCamera* playerCamera;
 		extern RE::Sky* sky;
 		extern RE::UI* ui;
 		extern RE::Calendar* calendar;

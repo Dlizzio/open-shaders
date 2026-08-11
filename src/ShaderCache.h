@@ -2,6 +2,7 @@
 
 #include <BS_thread_pool.hpp>
 #include <efsw/efsw.hpp>
+#include <unordered_set>
 #include <vector>
 
 #include "Utils/CacheInvalidation.h"
@@ -225,8 +226,14 @@ namespace SIE
 
 		/** @brief Returns a unique hash identifying this shader class, type, and descriptor combo. */
 		size_t GetId() const;
+		/** @brief Packs a task identity: descriptor in bits 0-31, shader type in bits 32-59,
+		 *  shader class in bits 60-63. Adding a RE::BSShader::Type value beyond 2^28 or a
+		 *  ShaderClass value beyond 2^4 silently collides task ids. */
+		static size_t MakeId(ShaderClass shaderClass, RE::BSShader::Type shaderType, uint32_t descriptor);
 		/** @brief Returns a human-readable string describing this task (shader file, class, defines). */
 		std::string GetString() const;
+		/** @brief Path to the actual HLSL source this task compiles from (not always fxpFilename -- see ImageSpace shaders). */
+		std::wstring GetSourcePath() const;
 
 		/**
 		 * LPT scheduling score: higher = more expensive = should be dispatched first.
@@ -287,6 +294,7 @@ namespace SIE
 	{
 	public:
 		LARGE_INTEGER lastReset;
+		std::atomic<int64_t> lastResetQpc{ 0 };  // Lock-free mirror of lastReset.QuadPart for GetLastResetQpc().
 		LARGE_INTEGER lastCalculation;
 		std::atomic<int64_t> completionTime;  // When compilation completed (QuadPart equivalent)
 		LARGE_INTEGER frequency;
@@ -296,6 +304,7 @@ namespace SIE
 		{
 			QueryPerformanceFrequency(&frequency);
 			QueryPerformanceCounter(&lastReset);
+			lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 			QueryPerformanceCounter(&lastCalculation);
 			completionTime.store(0, std::memory_order_relaxed);
 		}
@@ -308,6 +317,10 @@ namespace SIE
 		void Complete(const ShaderCompilationTask& task);
 		/** @brief Resets all task queues and counters for a fresh compilation pass. */
 		void Clear();
+		/** @brief Drops the given task ids from the completed/in-progress bookkeeping so a
+		 *  scoped cache evict can re-enqueue them. Leaves queued work in availableTasks
+		 *  and does not touch progress counters. */
+		void Forget(const std::unordered_set<size_t>& a_taskIds);
 		/** @brief Formats a millisecond duration into a human-readable time string. */
 		static std::string GetHumanTime(double a_totalMs);
 		/** @brief Estimates remaining compilation time based on completed task throughput. */
@@ -341,6 +354,8 @@ namespace SIE
 			int priority = 0;               // estimated compile weight (see ComputePriority)
 			int defineCount = 0;            // popcount of descriptor — active define permutations
 			uintmax_t sourceSizeBytes = 0;  // HLSL source file size at compile time
+			uint32_t threadId = 0;          // worker thread id at compile time, for trace export
+			int64_t startQpc = 0;           // QueryPerformanceCounter ticks at compile start, for trace export
 		};
 
 		/** On-demand parallelism metrics derived from task timings. */
@@ -366,6 +381,16 @@ namespace SIE
 
 		/** @brief Returns a copy of the N records with the highest elapsedMs, sorted descending. */
 		std::vector<SlowTaskRecord> GetTopSlowTasks(size_t n = 3) const;
+
+		/** @brief Returns a copy of every task record collected for the current build. */
+		std::vector<SlowTaskRecord> GetAllTaskRecords() const;
+
+		/** @brief QPC tick of the last Clear(), a per-build generation marker so UI caches
+		 *  invalidate on a fresh build even if it happens to complete the same task count. */
+		int64_t GetLastResetQpc() const { return lastResetQpc.load(std::memory_order_relaxed); }
+
+		/** @brief Ticks per second for converting QPC-based timestamps (e.g. SlowTaskRecord::startQpc). */
+		int64_t GetQpcFrequency() const { return frequency.QuadPart; }
 
 		/** @brief Computes parallelism metrics on demand from collected task timings. */
 		std::optional<ParallelismStats> GetParallelismStats() const;
@@ -453,18 +478,46 @@ namespace SIE
 		bool IsDiskCache() const;
 		/** Sets whether the persistent disk cache is enabled. */
 		void SetDiskCache(bool value);
-		/** @brief Deletes the entire on-disk shader cache directory. */
+		/** @brief Deletes the on-disk shader cache directory plus the rollback and swap slots. Main-thread only: also resets UI-facing mismatch state. */
 		void DeleteDiskCache();
+		/** @brief Deletes the same on-disk directories as DeleteDiskCache(), without touching UI-facing mismatch state. Safe to call from the file-watcher thread. */
+		void DeleteDiskCacheFiles();
 		/** @brief Validates disk cache integrity against current shader sources and feature set. */
 		void ValidateDiskCache();
+		/** @brief Finalizes a boot-detected feature set change: refresh the manifest and clear the change state. */
+		void CommitFeatureSetChange();
+		/** @brief Swaps the rollback cache back into use and matches boot toggles to it. Restart required. */
+		bool RestorePreviousDiskCache();
 		/** @brief Writes cache metadata (version, feature list) to the disk cache directory. */
 		void WriteDiskCacheInfo();
 		/// One disk-cache/runtime state divergence found by ValidateDiskCache.
 		/// (Logic lives in Utils/CacheInvalidation.h so tests/cpp can exercise it.)
 		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
 
-		/// Mismatches found at boot (empty when the disk cache validated clean).
-		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
+		/// Mismatches found at boot (empty when the disk cache validated clean). Returned by
+		/// value: devbench's listener thread reads this while the main thread (via
+		/// ValidateDiskCache/rollback actions) reassigns it, so a reference would be unsafe.
+		std::vector<CacheMismatch> GetCacheMismatches() const
+		{
+			std::lock_guard lock{ mismatchesMutex };
+			return cacheMismatches;
+		}
+		/// Mismatches between the restorable rollback cache and the current setup. See
+		/// GetCacheMismatches for why this is returned by value.
+		std::vector<CacheMismatch> GetPreviousCacheMismatches() const
+		{
+			std::lock_guard lock{ mismatchesMutex };
+			return previousCacheMismatches;
+		}
+		/// True when boot detected a pure feature-toggle change and rotated the old
+		/// cache into the rollback slot; cleared once the new cache is committed.
+		bool HasFeatureSetChanges() const { return featureSetChanged; }
+		/// True after a rollback restore this session: it takes effect on restart.
+		bool HasFeatureSetRevertPending() const { return featureSetRevertPending; }
+		/// True if the previous cache backup succeeded in this session.
+		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp; }
+		/// True if Data/ShaderCache.Previous holds a cache restorable for the current setup.
+		bool HasPreviousDiskCache() const { return previousDiskCacheAvailable; }
 
 		/// True while an enabled-flip mismatch holds the disk cache: blobs preserved on
 		/// disk, this session compiles memory-only, and the menu offers rebuild vs
@@ -474,7 +527,8 @@ namespace SIE
 		/// Disk-cache IO gate: user setting AND not held. The hold must not flip
 		/// isDiskCache itself -- that value persists as "Enable Disk Cache" in user
 		/// settings, so a save during a held session would disable the cache forever.
-		bool IsDiskCacheActive() const { return isDiskCache && !diskCacheHeld; }
+		/// A pending rollback also gates IO so new blobs can't dirty the restored cache.
+		bool IsDiskCacheActive() const { return isDiskCache && !diskCacheHeld && !featureSetRevertPending; }
 
 		/// User accepted the new feature state: wipe the held cache and rebuild to disk.
 		void AcceptCacheRebuild();
@@ -608,7 +662,23 @@ namespace SIE
 
 		/** @brief Returns a copy of the top-N slowest task records from the last build, sorted descending. */
 		std::vector<CompilationSet::SlowTaskRecord> GetTopSlowTasks(size_t n = 3);
+		/** @brief Returns a copy of every task record collected for the current build. */
+		std::vector<CompilationSet::SlowTaskRecord> GetAllTaskRecords();
+		/** @brief QPC tick of the last build reset, a generation marker for UI caches. */
+		int64_t GetLastResetQpc();
+		/** @brief Ticks per second for converting QPC-based timestamps (e.g. SlowTaskRecord::startQpc). */
+		int64_t GetQpcFrequency();
 		std::optional<CompilationSet::ParallelismStats> GetParallelismStats();
+
+		/**
+		 * @brief Writes every collected task record for the current build to a_path as a
+		 * Chrome Trace Event Format JSON array (importable directly by ui.perfetto.dev or
+		 * chrome://tracing) for diagnosing whether a slow build is genuine shader compile
+		 * cost or external CPU contention during the build window.
+		 * @return true on success; false on an empty record set or a file-write failure
+		 *  (logged, never throws).
+		 */
+		bool ExportCompileTrace(const std::filesystem::path& a_path);
 
 		/**
 		 * @brief Clears all shaders of a specific type from the shader map.
@@ -733,7 +803,6 @@ namespace SIE
 		enum class GrassShaderTechniques
 		{
 			RenderDepth = 8,
-			TruePbr = 9,
 		};
 
 		enum class GrassShaderFlags
@@ -869,9 +938,68 @@ namespace SIE
 		void ResetFrameShaderTracking();
 		std::vector<ActiveShaderInfo> GetActiveShaders() const;
 
+		/** @brief Bounded scene-capture window for the scoped ("smart") cache clear. */
+		enum class ActiveShaderCaptureStage
+		{
+			Idle,
+			FirstWindow,        ///< armed by the click; menu typically still open
+			AwaitingMenuClose,  ///< first batch already evicted; waiting to sample occluded passes
+			SecondWindow        ///< post-close sample
+		};
+
+		/// Frames sampled per capture window. ~1s at 60fps, ~0.67s at 90fps (VR).
+		static constexpr uint32_t kActiveShaderCaptureFrames = 60;
+		/// Wall-clock ceiling per window; guards a scene rendering at single-digit fps.
+		static constexpr std::chrono::milliseconds kActiveShaderCaptureTimeout{ 2000 };
+
+		/** @brief Arms a bounded capture of the shaders drawing the current scene, then
+		 *  evicts only those. Two windows are sampled: one immediately, and one after the
+		 *  settings menu closes to catch passes occluded by menu chrome. Ignored if a
+		 *  capture is already in progress. */
+		void BeginActiveShaderCapture();
+		/** @brief True while either capture window is sampling. */
+		bool IsCapturingActiveShaders() const;
+		/** @brief Frames left in the current window; 0 when not sampling. */
+		uint32_t GetActiveShaderCaptureFramesRemaining() const;
+		/** @brief True once the first batch is evicted and the menu has yet to close. */
+		bool IsAwaitingMenuCloseCapture() const;
+		/** @brief Advances the capture state machine. Render thread only; call once per
+		 *  presented frame. Fires ClearActive() when a window expires. */
+		void TickActiveShaderCapture(bool a_menuVisible);
+		/** @brief True while dev mode or a capture window requires shader tracking. */
+		bool IsTrackingActiveShaders() const;
+		/** @brief Evicts every shader in the current capture batch from memory, disk, and
+		 *  the compilation set. a_clearFeatures also clears Deferred and every loaded
+		 *  feature's shader cache - pass false on a cycle's second window, since that
+		 *  work isn't scoped by the capture and doesn't need repeating.
+		 *  @return Number of cache entries evicted. */
+		size_t ClearActive(bool a_clearFeatures = true);
+		/** @brief Result of the most recent ClearActive() call, for UI status display. */
+		size_t GetLastScopedClearCount() const { return lastScopedClearCount; }
+		/** @brief Elapsed time in milliseconds of the most recent ClearActive() call. */
+		double GetLastScopedClearMs() const { return lastScopedClearMs; }
+
 		HANDLE managementThread = nullptr;
 
 	private:
+		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
+
+		/** @brief Releases one compiled shader from memory and, unless a_deleteDiskBlob is
+		 *  false, deletes its disk blob. Does not touch the compilation set; callers must
+		 *  Forget() the task id. */
+		void EvictShader(const std::string& a_key, RE::BSShader::Type a_type, uint32_t a_descriptor,
+			ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob = true);
+
+		std::atomic<uint32_t> activeShaderCaptureFramesRemaining{ 0 };                       // read cross-thread (TrackActiveShader)
+		ActiveShaderCaptureStage activeShaderCaptureStage = ActiveShaderCaptureStage::Idle;  // render thread only
+		std::chrono::steady_clock::time_point activeShaderCaptureDeadline;                   // render thread only
+		bool activeShaderCaptureMenuWasVisible = false;                                      // render thread only
+		std::atomic<std::thread::id> activeShaderCaptureThread;                              // read cross-thread (TrackActiveShader)
+		ankerl::unordered_dense::map<std::string, ActiveShaderInfo> capturedShaders;         // guarded by activeShadersMutex
+		std::unordered_set<std::string> clearedThisCaptureCycle;                             // render thread only; reset per BeginActiveShaderCapture()
+		size_t lastScopedClearCount = 0;
+		double lastScopedClearMs = 0.0;
+
 		struct hlslRecord
 		{
 			std::string key;
@@ -888,6 +1016,9 @@ namespace SIE
 		ShaderCache();
 		void ManageCompilationSet(std::stop_token stoken);
 		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
+		bool BackupActiveDiskCache();
+		void DeleteActiveDiskCache();
+		void RefreshPreviousDiskCacheInfo();
 
 		~ShaderCache();
 
@@ -903,7 +1034,16 @@ namespace SIE
 		bool isEnabled = true;
 		bool isDiskCache = true;
 		bool diskCacheHeld = false;
+		bool featureSetChanged = false;
+		bool featureSetRevertPending = false;
+		bool featureSetCacheBackedUp = false;
+		bool previousDiskCacheAvailable = false;
+		// Guards cacheMismatches/previousCacheMismatches: reassigned/cleared on the main
+		// thread (ValidateDiskCache, rollback actions), read from devbench's listener
+		// thread via GetCacheMismatches/GetPreviousCacheMismatches.
+		mutable std::mutex mismatchesMutex;
 		std::vector<CacheMismatch> cacheMismatches;
+		std::vector<CacheMismatch> previousCacheMismatches;
 		std::vector<std::string> heldMismatchDefines;
 		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
 		bool isAsync = true;
@@ -923,6 +1063,18 @@ namespace SIE
 		std::mutex modifiedMapMutex;                                                              // guard for modifiedShaderMap
 		ankerl::unordered_dense::map<std::string, std::set<hlslRecord>> hlslToShaderMap{};        // hashmap linking specific hlsl files to shader keys in shaderMap
 		std::mutex hlslMapMutex;                                                                  // guard for hlslToShaderMap
+
+		// Evictions parked while their key was Pending; guarded by mapMutex.
+		// deferredEvictionCount is a lock-free fast path for the common empty case.
+		ankerl::unordered_dense::map<std::string, hlslRecord> deferredEvictions;
+		std::atomic<size_t> deferredEvictionCount{ 0 };
+
+		/** @brief Parks a_record's eviction if its key is Pending, returning true;
+		 *  otherwise returns false and the caller should EvictShader it immediately. */
+		bool TryDeferEviction(const hlslRecord& a_record);
+		/** @brief Applies a parked eviction for a_key, if any. Must be called with no ShaderCache
+		 *  mutex held: it calls EvictShader, which takes compilationMutex. */
+		void ApplyDeferredEviction(const std::string& a_key);
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;

@@ -1,3 +1,19 @@
+#if defined(HORIZON_FIX)
+namespace HorizonFix
+{
+	// Depth (z/w) that water folded back from beyond the far clip plane lands at: eight
+	// depth quanta inside the far plane, exactly representable in both D24 and D32F
+	// buffers - behind everything the scene rendered, in front of the depth clear.
+	static const float FoldedDepth = 1.0 - 8.0 / 16777216.0;
+
+	// Scene depth at or beyond this counts as "nothing rendered behind the water": the
+	// clear value, folded far water (FoldedDepth), or an external plugin's depth-clamped
+	// far-water backdrop a few quanta inside that. The margin is a few world units at the
+	// far plane, where no real surface can render.
+	static const float EmptyDepthThreshold = 1.0 - 64.0 / 16777216.0;
+}
+#endif
+
 #if defined(UNDERWATERMASK)
 
 struct VS_INPUT
@@ -185,6 +201,10 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.HPosition.xy = worldViewPos.xy;
 	vsout.HPosition.z = heightMult * 0.5 + worldViewPos.z;
 	vsout.HPosition.w = worldViewPos.w;
+
+#		if defined(HORIZON_FIX)
+	vsout.HPosition.z = min(vsout.HPosition.z, vsout.HPosition.w * HorizonFix::FoldedDepth);
+#		endif
 
 #		if defined(STENCIL)
 	vsout.WorldPosition = worldPos;
@@ -885,19 +905,17 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 #			endif
 
 #			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0
-	float pointingDirection = dot(viewDirection, R);
-	float pointingAlignment = dot(reflect(viewDirection, float3(0, 0, 1)), R);
-	float ssrAmount = min(pointingAlignment, pointingDirection);
-	if (SSRParams.x > 0.0 && ssrAmount > 0.0) {
-		float2 ssrReflectionUv = ((FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw) + 0.05 * normal.xy;
-		float2 ssrReflectionUvDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
-		float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
-		float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
-		float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
-		float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-		float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
-		reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
-	}
+	float pointingDirection = dot(viewDirection, R) * 0.5 + 0.5;
+	float pointingAlignment = dot(reflect(viewDirection, float3(0, 0, 1)), R) * 0.5 + 0.5;
+	float ssrAmount = sqrt(min(pointingAlignment, pointingDirection));
+	float2 ssrReflectionUv = ((FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw) + 0.05 * normal.xy;
+	float2 ssrReflectionUvDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
+	float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
+	float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
+	float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
+	float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
+	float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
+	reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
 #			endif
 
 	return reflectionColor;
@@ -987,6 +1005,11 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 #					endif
 		refractionWorldPosition.xyz /= refractionWorldPosition.w;
 	}
+
+#					if defined(HORIZON_FIX)
+	if (DepthTex.Load(float3(refractionScreenPosition, 0)).x >= HorizonFix::EmptyDepthThreshold)
+		distanceMul = 1.0.xxxx;
+#					endif
 #				endif
 
 	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(refractionUvRaw);
@@ -1096,6 +1119,11 @@ PS_OUTPUT main(PS_INPUT input)
 	distanceMul = saturate(
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
 		FogParam.z);
+
+#					if defined(HORIZON_FIX)
+	if (DepthTex.Load(float3(screenPosition, 0)).x >= HorizonFix::EmptyDepthThreshold)
+		distanceMul = 1.0.xxxx;
+#					endif
 #				endif
 #			endif
 
@@ -1147,6 +1175,9 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(SPECULAR) && (NUM_SPECULAR_LIGHTS != 0)
 	float3 finalColor = 0.0.xxx;
 
+	// LLF's clustered loop lights water from the same scene lights via a separate
+	// additive pass; running this loop too would double-count their specular.
+#				if !defined(LIGHT_LIMIT_FIX)
 	[unroll] for (int lightIndex = 0; lightIndex < NUM_SPECULAR_LIGHTS; ++lightIndex)
 	{
 		float3 lightVector = LightPos[lightIndex].xyz - (PosAdjust[eyeIndex].xyz + input.WPosition.xyz);
@@ -1159,6 +1190,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 lightColor = (Color::PointLight(LightColor[lightIndex].xyz, isPointLightLinear, lightFlags) * pow(LdotN, FresnelRI.z)) * lightColorMul;
 		finalColor += lightColor;
 	}
+#				endif
 
 	finalColor *= fresnel;
 #				if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
@@ -1194,9 +1226,14 @@ PS_OUTPUT main(PS_INPUT input)
 	dirColor *= dirShadow;
 
 #				if defined(SKYLIGHTING)
-	ambientColor = Color::IrradianceToLinear(ambientColor);
-	ambientColor *= skylightingDiffuse;
-	ambientColor = Color::IrradianceToGamma(ambientColor);
+#					if defined(IBL) && !defined(INTERIOR)
+	if (!SharedData::iblSettings.EnableIBL)
+#					endif
+	{
+		ambientColor = Color::IrradianceToLinear(ambientColor);
+		ambientColor *= skylightingDiffuse;
+		ambientColor = Color::IrradianceToGamma(ambientColor);
+	}
 #				endif
 
 	diffuseOutput.refractionDiffuseColor = dirColor + ambientColor;
@@ -1214,12 +1251,37 @@ PS_OUTPUT main(PS_INPUT input)
 	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+
+		// Shadow-sampling setup shared by every light this pixel considers below, matching
+		// RunGrass.hlsl's clustered-light shadow pattern.
+		float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.HPosition.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
+		float2 rotation;
+		sincos(Math::TAU * screenNoise, rotation.y, rotation.x);
+		float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
+		float3 worldPositionWS = input.WPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+		const bool inReflection = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection;
+
+		// Recovers occlusion for lights with no shadow-map slot; reflection passes render
+		// from another camera, so main-view depth can't be raymarched there.
+		uint contactShadowSteps = 0;
+		[branch] if (SharedData::lightLimitFixSettings.EnableContactShadows && inWorld && !inReflection)
+			contactShadowSteps = round(SharedData::lightLimitFixSettings.ContactShadowMaxSteps *
+									   (1.0 - saturate(viewPosition.z / SharedData::lightLimitFixSettings.ContactShadowMaxDistance)));
+
 		[loop] for (uint i = 0; i < lightCount; i++)
 		{
 			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 			LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
-			if (LightLimitFix::IsLightIgnored(light) || light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+			if (LightLimitFix::IsLightIgnored(light)) {
 				continue;
+			}
+
+			// Sample the shadow instead of dropping the light outright; skip in reflection
+			// passes, where this pixel's world position is the mirrored camera's, not ours.
+			float lightShadow = 1.0;
+			if (inWorld && !inReflection && light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+				bool shadowCoverage = false;
+				lightShadow = LightLimitFix::GetShadowLightShadow(light.shadowMapIndex, worldPositionWS, rotationMatrix, shadowCoverage);
 			}
 
 			float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WPosition.xyz;
@@ -1237,9 +1299,29 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 H = normalize(normalizedLightDirection - viewDirection);
 			float HdotN = saturate(dot(H, normal));
 
+			// Skip the raymarch where its result can't matter: already fully shadow-mapped,
+			// or the specular lobe has no contribution from this light at this pixel.
+			[branch] if (contactShadowSteps > 0 && lightShadow != 0.0 && HdotN > 0.0)
+			{
+				const bool isParticleLight = (light.lightFlags & LightLimitFix::LightFlags::Particle) != 0;
+				const bool canContactShadow = isParticleLight ?
+				                                  SharedData::lightLimitFixSettings.EnableParticleContactShadows :
+				                                  !(light.lightFlags & LightLimitFix::LightFlags::Simple);
+#					if defined(ISL)
+				float contactShadowFalloff = saturate(lightDist * light.invRadius);
+				bool passesContactIntensityGate = (1.0 - contactShadowFalloff * contactShadowFalloff) > SharedData::lightLimitFixSettings.ContactShadowMinIntensity;
+#					else
+				bool passesContactIntensityGate = intensityMultiplier > SharedData::lightLimitFixSettings.ContactShadowMinIntensity;
+#					endif
+				if (canContactShadow && passesContactIntensityGate) {
+					float3 lightPositionVS = mul(FrameBuffer::CameraView[eyeIndex], float4(light.positionWS[eyeIndex].xyz, 1)).xyz;
+					lightShadow *= LightLimitFix::ContactShadows(viewPosition, screenNoise, normalize(lightPositionVS - viewPosition), contactShadowSteps, eyeIndex);
+				}
+			}
+
 			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * pow(HdotN, FresnelRI.z) * light.fade;
-			specularLighting += lightColor * intensityMultiplier;
+			specularLighting += lightColor * intensityMultiplier * lightShadow;
 		}
 	}
 	specularColor += specularLighting * 3;

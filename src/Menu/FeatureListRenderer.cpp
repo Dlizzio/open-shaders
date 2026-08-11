@@ -2,12 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
 #include <format>
 #include <imgui.h>
 #include <numbers>
 #include <ranges>
-#include <system_error>
 #include <unordered_set>
 
 #include "Feature.h"
@@ -19,6 +17,7 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/PerformanceRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
@@ -38,8 +37,8 @@ namespace
 
 	// Core built-in menu names that always appear first in the menu list
 	// These are canonical identifiers used for logic — NOT translated
-	constexpr std::array<const char*, 5> CORE_MENU_NAMES = {
-		"Home", "General", "Advanced", "Profiling", "Display"
+	constexpr std::array<const char*, 6> CORE_MENU_NAMES = {
+		"Home", "General", "Performance", "Advanced", "Profiling", "Display"
 	};
 
 	const char* GetCoreMenuDisplayName(const char* canonicalName)
@@ -48,6 +47,8 @@ namespace
 			return T("menu.features.home", "Home");
 		if (std::strcmp(canonicalName, "General") == 0)
 			return T("menu.features.general", "General");
+		if (std::strcmp(canonicalName, "Performance") == 0)
+			return T("menu.features.performance", "Performance");
 		if (std::strcmp(canonicalName, "Advanced") == 0)
 			return T("menu.features.advanced", "Advanced");
 		if (std::strcmp(canonicalName, "Profiling") == 0)
@@ -57,9 +58,9 @@ namespace
 		return canonicalName;
 	}
 
-	bool IsCoreMenu(const std::string& menuName)
+	bool IsCoreMenu(const std::string& canonicalId)
 	{
-		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
+		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), canonicalId) != CORE_MENU_NAMES.end();
 	}
 
 	// Color for the [ALPHA]/[BETA] stage marker. Alpha (less stable) reads as an error,
@@ -400,10 +401,11 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	}
 
 	auto menuList = std::vector<MenuFuncInfo>{
-		BuiltInMenu{ T("menu.features.home", "Home"), []() { HomePageRenderer::RenderHomePage(); } },
-		BuiltInMenu{ T("menu.features.general", "General"), drawGeneralSettings },
-		BuiltInMenu{ T("menu.features.advanced", "Advanced"), drawAdvancedSettings },
-		BuiltInMenu{ T("menu.features.profiling", "Profiling"), []() { ProfilingRenderer::RenderStatistics(); } }
+		BuiltInMenu{ T("menu.features.home", "Home"), "Home", []() { HomePageRenderer::RenderHomePage(); } },
+		BuiltInMenu{ T("menu.features.general", "General"), "General", drawGeneralSettings },
+		BuiltInMenu{ T("menu.features.performance", "Performance"), "Performance", []() { PerformanceRenderer::Render(); } },
+		BuiltInMenu{ T("menu.features.advanced", "Advanced"), "Advanced", drawAdvancedSettings },
+		BuiltInMenu{ T("menu.features.profiling", "Profiling"), "Profiling", []() { ProfilingRenderer::RenderStatistics(); } }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
@@ -463,7 +465,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	}
 
 	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-		return !feat->loaded && feat->IsInMenu() && (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
+		return !feat->loaded && feat->IsInMenu() && !feat->IsHiddenUnreleased() && (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
 	});
 	if (std::ranges::distance(unloadedFeatures) != 0) {
 		menuList.push_back(T("menu.features.unloaded_features", "Unloaded Features"));
@@ -471,7 +473,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	}
 	// Add top section for feature issues (rejected features, obsolete info, etc.)
 	if (FeatureIssues::HasFeatureIssues()) {
-		menuList.insert(menuList.begin(), BuiltInMenu{ T("menu.features.feature_issues", "Feature Issues"), []() {
+		menuList.insert(menuList.begin(), BuiltInMenu{ T("menu.features.feature_issues", "Feature Issues"), "", []() {
 														  FeatureIssues::DrawFeatureIssuesUI();
 													  } });
 	}
@@ -498,6 +500,15 @@ void FeatureListRenderer::HandlePendingFeatureSelection(
 					logger::info("Navigated to {} feature menu", pendingFeatureSelection);
 					break;
 				}
+			} else if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
+				// Built-in pages (e.g. "Performance", "Home") aren't Features and have no
+				// GetShortName(); match on the same canonicalId used by IsCoreMenu() instead.
+				const auto& builtIn = std::get<BuiltInMenu>(menuList[i]);
+				if (!builtIn.canonicalId.empty() && builtIn.canonicalId == pendingFeatureSelection) {
+					selectedMenu = i;
+					logger::info("Navigated to {} built-in menu", pendingFeatureSelection);
+					break;
+				}
 			}
 		}
 		pendingFeatureSelection.clear();  // Clear after processing
@@ -520,7 +531,7 @@ void FeatureListRenderer::RenderLeftColumn(
 		for (size_t i = 0; i < menuList.size(); i++) {
 			if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
 				const BuiltInMenu& menu = std::get<BuiltInMenu>(menuList[i]);
-				if (IsCoreMenu(menu.name)) {
+				if (IsCoreMenu(menu.canonicalId)) {
 					coreMenuCount++;
 				}
 			}
@@ -531,7 +542,7 @@ void FeatureListRenderer::RenderLeftColumn(
 		for (size_t i = 0; i < menuList.size() && renderedCoreMenus < CORE_MENU_NAMES.size(); i++) {
 			if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
 				const BuiltInMenu& menu = std::get<BuiltInMenu>(menuList[i]);
-				if (IsCoreMenu(menu.name)) {
+				if (IsCoreMenu(menu.canonicalId)) {
 					std::visit(ListMenuVisitor{ i, selectedMenu, categoryExpansionStates }, menuList[i]);
 					renderedCoreMenus++;
 				}
@@ -546,7 +557,7 @@ void FeatureListRenderer::RenderLeftColumn(
 		for (size_t i = 0; i < menuList.size(); i++) {
 			if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
 				const BuiltInMenu& menu = std::get<BuiltInMenu>(menuList[i]);
-				if (IsCoreMenu(menu.name)) {
+				if (IsCoreMenu(menu.canonicalId)) {
 					continue;  // Skip, already rendered
 				}
 			}
@@ -651,14 +662,9 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	} else if (hasFailedMessage) {
 		textColor = feat->version.empty() ? themeSettings.StatusPalette.Disable : themeSettings.StatusPalette.Error;
 	} else {
-		// No failed message but not loaded - check if INI file exists
-		if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
-			// INI file missing - treat as missing feature (grey)
-			textColor = themeSettings.StatusPalette.Disable;
-		} else {
-			// INI file exists but feature not loaded - truly pending restart (green)
-			textColor = themeSettings.StatusPalette.RestartNeeded;
-		}
+		// Installed but not loaded means the feature is only pending a restart (green),
+		// otherwise it is simply missing (grey).
+		textColor = feat->installed ? themeSettings.StatusPalette.RestartNeeded : themeSettings.StatusPalette.Disable;
 	}
 
 	// Create selectable item with semantic color
@@ -735,13 +741,6 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	ImGui::PopID();
 	// Render reactive constraint warning outside the child window so it can appear as a top-level popup
 	RenderReactiveConstraintWarningDialog();
-}
-
-bool FeatureListRenderer::DrawMenuVisitor::IsFeatureInstalled(const std::string& featureName)
-{
-	const auto path = Util::PathHelpers::GetFeatureIniPath(featureName);
-	std::error_code ec;
-	return std::filesystem::exists(path, ec);
 }
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
@@ -998,7 +997,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();
-			} else if (IsFeatureInstalled(feat->GetShortName())) {
+			} else if (feat->installed) {
 				ImGui::Text("%s", T("menu.features.available_after_restart", "This feature will be available after restart."));
 			} else {
 				feat->DrawUnloadedUI();

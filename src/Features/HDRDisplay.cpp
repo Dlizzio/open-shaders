@@ -4,6 +4,9 @@
 #include "PCH.h"
 
 #include "Buffer.h"
+#if defined(ENABLE_EFFECTS11)
+#	include "Effects11.h"
+#endif
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "LinearLighting.h"
@@ -1144,7 +1147,7 @@ void HDRDisplay::ApplyHDR()
 	if (!hdrDataCB || !hdrTexture || !outputTexture)
 		return;
 
-	CS_GPU_PASS("HDRDisplay::HDROutput");
+	CS_GPU_PASS("HDRDisplay::ApplyHDR");
 
 	auto& upscaling = globals::features::upscaling;
 
@@ -1238,9 +1241,10 @@ void HDRDisplay::DispatchHDROutput(ID3D11ShaderResourceView* sceneSRV, ID3D11Sha
 	context->CSSetShader(computeShader, nullptr, 0);
 
 	auto dispatchCount = Util::GetScreenDispatchCount(false);
-	globals::profiler->BeginPass("HDRDisplay::HDROutput");
-	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
-	globals::profiler->EndPass();
+	{
+		CS_GPU_PASS("HDRDisplay::HDROutput");
+		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+	}
 
 	views[0] = nullptr;
 	views[1] = nullptr;
@@ -1319,6 +1323,11 @@ ID3D11Texture2D* HDRDisplay::ComposeCleanCapture(ID3D11ShaderResourceView* scene
 
 	if (!GetHDROutputCS())
 		return nullptr;
+
+	// Distinct name from ApplyHDR's pass: this dispatch is a separate workload
+	// (the screenshot/crop-preview path), and CollectResults sums same-named
+	// intervals, so sharing a name would double-count ApplyHDR's cost.
+	CS_GPU_PASS("HDRDisplay::CleanCapture");
 
 	// Null UI SRV (t1 samples as 0) leaves the scene alone: no UI, menu, or blur.
 	HDRDataCB data = BuildHDRData();
@@ -1632,6 +1641,11 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 	// TweenMenu = pause UI. ScaleUIBrightnessForFG skips while GameIsPaused(), so HDROutputCS applies the same mid-alpha boost when compositing gamma UI.
 	data.fgTweenMenuMidAlphaBoost = (ui && ui->IsMenuOpen(RE::TweenMenu::MENU_NAME)) ? 1.f : 0.f;
 	data.previewSDR = 0.f;
+#if defined(ENABLE_EFFECTS11)
+	data.applyAutoHDR = globals::features::effects11.ReplacedTonemapperThisFrame() ? 1.f : 0.f;
+#else
+	data.applyAutoHDR = 0.f;
+#endif
 	return data;
 }
 

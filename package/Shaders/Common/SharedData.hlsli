@@ -7,12 +7,9 @@
 
 namespace SharedData
 {
-
-#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	cbuffer SharedData : register(b5)
 	{
 		float4 WaterData[25];
-		row_major float3x4 DirectionalAmbient;
 		float4 DirLightDirection;
 		float4 DirLightColor;
 		float4 SunDirection;
@@ -63,9 +60,8 @@ namespace SharedData
 		bool EnableTerrainParallax;
 		bool EnableHeightBlending;
 		bool EnableShadows;
-		bool ExtendShadows;
 		bool EnableParallaxWarpingFix;
-		bool pad0;
+		uint2 pad0;
 	};
 
 	struct CubemapCreatorSettings
@@ -213,11 +209,11 @@ namespace SharedData
 		uint3 pad;
 	};
 
+	/** @brief Terrain Variation feature settings. */
 	struct TerrainVariationSettings
 	{
-		uint enableTilingFix;
-		uint enableLODTerrainTilingFix;
-		float2 pad0;
+		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
+		uint3 pad;
 	};
 
 	struct IBLSettings
@@ -259,6 +255,7 @@ namespace SharedData
 	struct LinearLightingSettings
 	{
 		uint enableLinearLighting;
+		uint enableACEScg;
 		uint isDirLightLinear;
 		float dirLightMult;
 		float lightGamma;
@@ -283,9 +280,49 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float3 pad0;
+		float2 pad0;
 	};
 
+	struct ENBSettings
+	{
+		uint Enable;
+		float ColorPow;
+		float LightSpriteIntensity;
+		float FireIntensity;
+
+		float FireCurve;
+		uint EnableRain;
+		float RainMotionStretch;
+		float RainMotionTransparency;
+
+		float CloudsCurve;
+		float CloudsDesaturation;
+		float CloudsEdgeIntensity;
+		float CloudsEdgeMoonMultiplier;
+
+		uint EnableProceduralSun;
+		float ProceduralSunDiskRadiusSq;
+		float ProceduralSunDiskEdgeScale;
+		float ProceduralSunGlowIntensity;
+
+		float ProceduralSunCoronaFalloff;
+		float ProceduralSunCoronaScale;
+		uint UseProceduralGradientWeights;
+		float ProceduralGradientWeightCurve;
+
+		float ParticleIntensity;
+		float ParticleLightingInfluence;
+		float ParticleAmbientInfluence;
+		float ParticlePointLightingInfluence;
+
+		uint EnableVolumetricRays;
+		float VolumetricRaysIntensity;
+		float VolumetricRaysExtinction;
+		float VolumetricRaysSkyColorAmount;
+
+		float VolumetricRaysDesaturation;
+		float3 VolumetricRaysColorFilter;
+	};
 	struct TerrainBlendingSettings
 	{
 		uint Enabled;
@@ -364,6 +401,26 @@ namespace SharedData
 		float pad;
 	};
 
+	struct BloomSettings
+	{
+		uint Enabled;
+		float EnhancementIntensity;
+		float HaloRadius;
+		float HaloSpread;
+
+		float BloomSaturation;
+		float3 BloomTint;
+		float CompressionThreshold;
+		float CompressionCeiling;
+		float2 pad;
+	};
+
+	struct PostProcessingSettings
+	{
+		uint DisableVanillaTonemapping;
+		uint3 pad0;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -382,11 +439,14 @@ namespace SharedData
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		CSUtilitySettings csUtilitySettings;
 		LinearLightingSettings linearLightingSettings;
+		ENBSettings enbSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
 		SkinData skinData;
 		VanillaFresnelSettings vanillaFresnelSettings;
+		BloomSettings bloomSettings;
+		PostProcessingSettings postProcessingSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
@@ -443,11 +503,11 @@ namespace SharedData
 		[flatten] if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
 			waterData = WaterData[waterTile];
 
-#	if defined(VR)
+#if defined(VR)
 		// Correct .w from eye-0 camera-relative Z to the current eye's camera-relative Z.
 		// No-op when eyeIndex == 0 (both terms are identical).
 		waterData.w += FrameBuffer::CameraPosAdjust[0].z - FrameBuffer::CameraPosAdjust[eyeIndex].z;
-#	endif
+#endif
 
 		return waterData;
 	}
@@ -456,7 +516,5 @@ namespace SharedData
 	{
 		return SphericalHarmonics::Unproject(AmbientSHR, AmbientSHG, AmbientSHB, normal);
 	}
-
-#endif  // PSHADER
 }
 #endif  // __SHARED_DATA_DEPENDENCY_HLSL__

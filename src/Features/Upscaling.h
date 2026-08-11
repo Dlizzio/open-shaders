@@ -9,6 +9,7 @@
 #include "Upscaling/Streamline.h"
 #include "Utils/BootSnapshot.h"
 #include "VR/OpenVRDetection.h"
+#include <algorithm>
 #include <d3d11_4.h>
 #include <d3d12.h>
 #include <winrt/base.h>
@@ -64,6 +65,8 @@ public:
 		kUltraPerformance = 4,
 	};
 
+	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
+
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
@@ -75,6 +78,7 @@ public:
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
+		bool sharpnessEnabledDLSS = false;
 		float sharpnessDLSS = 0.0f;
 		uint presetDLSS = 0;  // 0=Default, 1=J, 2=K, 3=L, 4=M
 		bool reflexLowLatencyMode = false;
@@ -91,6 +95,15 @@ public:
 		// Explicit per-eye fraction of native HMD size (0 = Auto: preset-derived).
 		// Boot-locked; the preset is inert while set. DLSS clamps into NGX range.
 		float vrRenderScale = 0.0f;
+
+		// Opt in to AMD's runtime FSR4 upscaler DLL on eligible RDNA4 hardware instead of the
+		// host-linked FSR3 SDK; falls back to FSR3 on any failure.
+		bool fsr4RuntimeEnable = false;
+
+		// Tracks whether fsr4RuntimeEnable has been auto-migrated for the detected adapter.
+		// Defaults to current so a fresh config needs no migration; LoadSettings resets it to
+		// 0 when absent from JSON so pre-existing configs run the migration once.
+		uint32_t fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 	};
 
 	static constexpr float kVRRenderScaleMin = 0.33f;
@@ -106,7 +119,7 @@ public:
 	// presetDLSS is deliberately NOT here: Streamline::SetDLSSOptions reads
 	// settings.presetDLSS per-frame and applies it via slDLSSSetOptions, so
 	// it's already runtime-effective.
-	inline static constexpr Util::Settings::RestartTable<Settings, 7> kRestartFields{ {
+	inline static constexpr Util::Settings::RestartTable<Settings, 8> kRestartFields{ {
 		UTIL_RESTART_FIELD(Settings, frameGenerationMode, "Frame Generation"),
 		UTIL_RESTART_FIELD(Settings, frameGenerationForceEnable, "Force Enable Frame Generation"),
 		UTIL_RESTART_FIELD(Settings, renderAtUpscaleRes, "Render at Upscaled Resolution"),
@@ -114,6 +127,11 @@ public:
 		UTIL_RESTART_FIELD(Settings, upscaleMethod, "Upscaling Method"),
 		UTIL_RESTART_FIELD(Settings, qualityMode, "Upscale Preset"),
 		UTIL_RESTART_FIELD(Settings, vrRenderScale, "VR Render Scale"),
+		// CreateUpscalingTextureResources (which allocates runtimeFsrDepthTexture)
+		// only runs on an upscale-method change, not on this toggle -- restart-gate
+		// it so a mid-session flip can't select the runtime provider without ever
+		// allocating the texture Upscale() then dereferences.
+		UTIL_RESTART_FIELD(Settings, fsr4RuntimeEnable, "Use Runtime FSR4"),
 	} };
 	Util::Settings::BootSnapshot<Settings> bootSnapshot{ kRestartFields };
 
@@ -199,19 +217,20 @@ public:
 	size_t GetSettingsBlobSize() const override { return sizeof(settings); }
 
 	virtual void DrawSettings() override;
-	virtual void DrawVRPerformanceSettings() override;
-	std::string GetVRPerformanceSectionLabel() override;
-	int GetVRPerformanceOrder() const override { return 10; }
-	virtual void ApplyVRPerformanceProfile(VRPerfProfile profile) override;
-	bool MatchesVRPerformanceProfile(VRPerfProfile profile) const override;
-	/// @brief Renders the VR PerfMode (render-at-upscaled-res) toggle. Shared by the
-	/// upscaler panel and the Performance hub. VR-only; caller guards on isVR.
+	virtual void DrawPerformanceSettings() override;
+	void DrawPerformancePresets() override;
+	std::string GetPerformanceSectionLabel() override;
+	int GetPerformanceOrder() const override { return 10; }
+	virtual void ApplyPerformanceProfile(PerfProfile profile) override;
+	bool MatchesPerformanceProfile(PerfProfile profile) const override;
+	/// @brief Renders the PerfMode (render-at-upscaled-res) toggle. Shared by the
+	/// upscaler panel and the Performance hub. Meaningful on Flat and VR alike;
+	/// gates on the active upscale method instead (DLSS/FSR only).
 	void DrawPerfModeToggle();
 	/// @brief Renders the Foveated DLSS enable + tuning tree. Shared by the upscaler
-	/// panel and the Performance hub. VR-only; caller guards on isVR.
+	/// panel and the Performance hub. VR-only; self-gates via IsRuntimeSupported()
+	/// (shown disabled off-VR rather than hidden).
 	void DrawFoveationControls(bool showTuning = true);
-	static uint VRProfileQualityMode(VRPerfProfile profile);
-	static bool VRProfileFoveation(VRPerfProfile profile);
 	const char* GetQualityModeName(uint qualityMode) const;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
@@ -253,7 +272,7 @@ public:
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
 	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[5];          // One for each UpscaleMethod
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR + VR: converts R24G8_TYPELESS depth to R32_FLOAT
+	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR: converts R24G8_TYPELESS depth to R32_FLOAT
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;
@@ -326,6 +345,7 @@ public:
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
 	Texture2D* sharpenerTexture = nullptr;
+	Texture2D* runtimeFsrDepthTexture = nullptr;
 
 	virtual void ClearShaderCache() override;
 

@@ -70,6 +70,9 @@ struct Feature
 	// Nexus Mods base URL for Skyrim Special Edition
 	static constexpr std::string_view NEXUS_BASE_URL = "https://www.nexusmods.com/skyrimspecialedition/mods/";
 	bool loaded = false;
+	// Whether the feature .ini is present on disk. Unlike `loaded` this stays true for
+	// features disabled at boot, so they remain reachable in the UI.
+	bool installed = false;
 	std::string version;
 	std::string failedLoadedMessage;
 
@@ -147,6 +150,20 @@ public:
 	bool IsBeta() const { return GetReleaseStage() == ReleaseStage::Beta; }
 
 	/**
+	 * Whether the feature has yet to ship, declared via `Unreleased = True` in the
+	 * feature .ini and baked into FeatureVersions.h at build time. Orthogonal to
+	 * ReleaseStage: it gates UI visibility only, and carries no marker of its own.
+	 */
+	bool IsUnreleased() const { return FeatureVersions::FEATURE_UNRELEASED_NAMES.contains(const_cast<Feature*>(this)->GetShortName()); }
+
+	/**
+	 * Whether an unreleased feature must stay out of the UI entirely. Unreleased
+	 * features only surface once their .ini is installed, so a shipped build never
+	 * advertises work in progress; once installed they render like any other feature.
+	 */
+	bool IsHiddenUnreleased() const { return !installed && IsUnreleased(); }
+
+	/**
 	 * Localized stage marker shown after the feature name ("[ALPHA]", "[BETA]"),
 	 * empty for release features. Takes the stage so callers that already resolved
 	 * it (see GetReleaseStage) avoid a redundant lookup.
@@ -201,19 +218,33 @@ public:
 	 * hub and the feature panel are two views of one state. The hub draws the section
 	 * header (with a jump link to the feature's panel); overrides render controls only.
 	 */
-	virtual void DrawVRPerformanceSettings() {}
+	virtual void DrawPerformanceSettings() {}
+
+	/** @brief Feature-specific preset controls (e.g. LightLimitFix's own
+	 *  Quality/Balanced/Performance shadow-impact-cull buttons) drawn directly
+	 *  under the hub's section header, outside the collapsed Advanced tree.
+	 *  Default empty: most features rely solely on the hub's global 3-profile
+	 *  buttons and have nothing to add here. Raw sliders/knobs belong in
+	 *  DrawPerformanceSettings instead, where they're collapsed by default. */
+	virtual void DrawPerformancePresets() {}
+
+	/** @brief True when DrawPerformanceSettings() draws ONLY VR-specific controls;
+	 *         the hub then skips this feature's whole section outside VR. Default
+	 *         false -- mixed-content features should self-gate the VR-only parts
+	 *         internally instead (see Upscaling::DrawFoveationControls). */
+	virtual bool PerformanceSectionRequiresVR() const { return false; }
 
 	/** @brief Section label the Performance hub draws (as a jump link to this
 	 *         feature's panel) above this feature's controls. Override alongside
-	 *         DrawVRPerformanceSettings; empty (default) draws no header. */
-	virtual std::string GetVRPerformanceSectionLabel() { return ""; }
+	 *         DrawPerformanceSettings; empty (default) draws no header. */
+	virtual std::string GetPerformanceSectionLabel() { return ""; }
 
 	/** @brief Sort key for the Performance hub (lower draws first); default puts
 	 *         unranked features last so the order reflects perf impact, not registration. */
-	virtual int GetVRPerformanceOrder() const { return 1000; }
+	virtual int GetPerformanceOrder() const { return 1000; }
 
 	/** @brief Named VR performance profiles broadcast from the Performance hub. */
-	enum class VRPerfProfile
+	enum class PerfProfile
 	{
 		Performance,  ///< Maximum framerate: lowest render res, all perf features on.
 		Balanced,     ///< Middle ground.
@@ -222,24 +253,29 @@ public:
 
 	/** @brief Shared profile convention: every VR reprojection feature enables reproject
 	 *         except on Quality (max fidelity). One source so apply/match can't drift. */
-	static constexpr bool VRProfileEnablesReproject(VRPerfProfile profile) { return profile != VRPerfProfile::Quality; }
+	static constexpr bool ProfileEnablesReproject(PerfProfile profile) { return profile != PerfProfile::Quality; }
 
 	/**
 	 * @brief Applies a VR performance profile to this feature's settings. Default empty:
 	 * each feature maps the profile to its own settings (decoupled: the hub broadcasts
 	 * one profile to every feature, none needs to know about the others). Restart-gated
 	 * fields changed here surface their pending-restart banners as usual.
+	 *
+	 * Implement alongside MatchesPerformanceProfile by deriving both from the same pure
+	 * profile -> value(s) function (see ProfileEnablesReproject above for a single-value
+	 * example, LightLimitFix::GetImpactCullPreset for a multi-value one) so the two can't
+	 * drift apart -- never hardcode the mapping separately in each override.
 	 */
-	virtual void ApplyVRPerformanceProfile(VRPerfProfile /*profile*/) {}
+	virtual void ApplyPerformanceProfile(PerfProfile /*profile*/) {}
 
-	/** @brief True when this feature's settings already equal what ApplyVRPerformanceProfile
+	/** @brief True when this feature's settings already equal what ApplyPerformanceProfile
 	 *         would set for @p profile. The hub uses it to show the active profile (or Custom).
 	 *         Default true so features without perf profiles don't veto the match. */
-	virtual bool MatchesVRPerformanceProfile(VRPerfProfile /*profile*/) const { return true; }
+	virtual bool MatchesPerformanceProfile(PerfProfile /*profile*/) const { return true; }
 
 	/** @brief Broadcasts a profile to every loaded feature. The hub button and the devbench
 	 *         handler share this so the loaded-guard rule lives in exactly one place. */
-	static void ApplyVRPerformanceProfileToAll(VRPerfProfile profile);
+	static void ApplyPerformanceProfileToAll(PerfProfile profile);
 
 	/** @brief Draws the UI shown when this feature failed to load. */
 	virtual void DrawUnloadedUI();
@@ -271,6 +307,9 @@ public:
 	/** @brief Called after all game data files have been loaded. */
 	virtual void DataLoaded() {}
 
+	/** @brief Called after loading an existing save. */
+	virtual void GameLoaded() {}
+
 	/** @brief Called after all SKSE plugins have finished PostLoad. */
 	virtual void PostPostLoad() {}
 
@@ -295,6 +334,23 @@ public:
 	 * @return An empty object by default; override to report feature-specific state.
 	 */
 	virtual json GetDiagnostics() { return json::object(); }
+
+	/**
+	 * @brief Live runtime-only debug flags (e.g. an instrumentation toggle
+	 * deliberately excluded from SaveSettings so a shipped SettingsUser.json
+	 * never silently pays for the extra cost). Exposed generically via
+	 * devbench's openshaders.feature action=runtimeGet/runtimeSet; override
+	 * both to add a flag without adding new DevBenchBridge dispatch code.
+	 * @return An empty object by default; override to report {name: bool}.
+	 */
+	virtual json GetRuntimeFlags() { return json::object(); }
+
+	/**
+	 * @brief Sets a named runtime-only debug flag from GetRuntimeFlags.
+	 * Never touches SaveSettings/SettingsUser.json.
+	 * @return false if this feature has no runtime flag by that name.
+	 */
+	virtual bool SetRuntimeFlag(std::string_view /*name*/, bool /*value*/) { return false; }
 
 	/**
 	 * @brief Toggles the "disabled at boot" state for this feature.
@@ -367,6 +423,12 @@ public:
 	/** @brief Invalidates any cached compiled shaders owned by this feature. */
 	virtual void ClearShaderCache() {}
 
+	/** @brief Invalidates this feature's shader cache during a scene-scoped ("smart")
+	 *  clear. Defaults to the same eager ClearShaderCache() used by a full clear;
+	 *  override this only if the feature can do something cheaper/smarter (e.g. a
+	 *  lazy release without an immediate synchronous recompile). */
+	virtual void ClearShaderCacheScoped() { ClearShaderCache(); }
+
 	static const std::vector<Feature*>& GetFeatureList();
 
 	/**
@@ -385,6 +447,14 @@ public:
 	 * @return Pointer to the feature if found and loaded, nullptr otherwise.
 	 */
 	static Feature* FindFeatureByShortName(const std::string& shortName);
+
+	/**
+	 * @brief Finds any registered feature by short name, ignoring VR filtering and loaded state.
+	 *
+	 * @param shortName The short name to search for.
+	 * @return Pointer to the feature if registered, nullptr otherwise.
+	 */
+	static Feature* FindRegisteredFeatureByShortName(const std::string& shortName);
 
 	/**
 	 * @brief Gets sorted short names of all loaded features that appear in the menu.

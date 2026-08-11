@@ -1,10 +1,14 @@
 #include "Skylighting.h"
 
+#include "Deferred.h"
 #include "GpuPass.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
+
+#include <cmath>
+#include <numbers>
 
 #define I18N_KEY_PREFIX "feature.skylighting."
 
@@ -32,8 +36,17 @@ void Skylighting::RestoreDefaultSettings()
 void Skylighting::ResetSkylighting()
 {
 	auto context = globals::d3d::context;
+
+	const float unitSH[4] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0.0f, 0.0f, 0.0f };
+	context->ClearUnorderedAccessViewFloat(texProbeArray->uav.get(), unitSH);
+
 	UINT clr[1] = { 0 };
 	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
+	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), clr);
+
+	float clrf[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	context->ClearUnorderedAccessViewFloat(texShadowVisibility->uav.get(), clrf);
+
 	queuedResetSkylighting = false;
 }
 
@@ -114,7 +127,21 @@ void Skylighting::SetupResources()
 		texAccumFramesArray = new Texture3D(texDesc, "Skylighting::AccumFramesArray");
 		texAccumFramesArray->CreateSRV(srvDesc);
 		texAccumFramesArray->CreateUAV(uavDesc);
+
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32_UINT;
+
+		texShadowBitmask = new Texture3D(texDesc, "Skylighting::ShadowBitmask");
+		texShadowBitmask->CreateSRV(srvDesc);
+		texShadowBitmask->CreateUAV(uavDesc);
+
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R8_UNORM;
+
+		texShadowVisibility = new Texture3D(texDesc, "Skylighting::ShadowVisibility");
+		texShadowVisibility->CreateSRV(srvDesc);
+		texShadowVisibility->CreateUAV(uavDesc);
 	}
+
+	ResetSkylighting();
 
 	{
 		D3D11_SAMPLER_DESC samplerDesc = {};
@@ -216,14 +243,29 @@ void Skylighting::Prepass()
 	if (interior)
 		return;
 
-	CS_GPU_PASS("Skylighting::ProbeUpdate");
-
 	auto context = globals::d3d::context;
 
-	{
-		std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
-		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texProbeArray->uav.get(), texAccumFramesArray->uav.get() };
-		std::array<ID3D11SamplerState*, 1> samplers = { comparisonSampler.get() };
+	if (probeUpdateCompute) {
+		CS_GPU_PASS("Skylighting::ProbeUpdate");
+
+		auto renderer = globals::game::renderer;
+		auto& cascadeDepthStencil = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGET_DEPTHSTENCIL::kSHADOWMAPS_ESRAM];
+
+		std::array<ID3D11ShaderResourceView*, 4> srvs = {
+			texOcclusion->srv.get(),
+			nullptr,
+			globals::deferred->directionalShadowLights->srv.get(),
+			cascadeDepthStencil.depthSRV
+		};
+		std::array<ID3D11UnorderedAccessView*, 4> uavs = {
+			texProbeArray->uav.get(),
+			texAccumFramesArray->uav.get(),
+			texShadowBitmask->uav.get(),
+			texShadowVisibility->uav.get()
+		};
+		std::array<ID3D11SamplerState*, 1> samplers = {
+			comparisonSampler.get()
+		};
 
 		// Update probe array
 		{
@@ -251,6 +293,9 @@ void Skylighting::Prepass()
 	{
 		ID3D11ShaderResourceView* srv = texProbeArray->srv.get();
 		context->PSSetShaderResources(50, 1, &srv);
+
+		srv = texShadowVisibility->srv.get();
+		context->PSSetShaderResources(53, 1, &srv);
 	}
 }
 

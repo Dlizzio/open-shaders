@@ -1,8 +1,13 @@
 #include "TerrainShadows.h"
 
+#include <bit>
+#include <cctype>
+#include <ranges>
+
 #include <DirectXTex.h>
 #include <pystring/pystring.h>
 
+#include "Globals.h"
 #include "GpuPass.h"
 #include "I18n/I18n.h"
 #include "State.h"
@@ -10,9 +15,207 @@
 
 #define I18N_KEY_PREFIX "feature.terrain_shadows."
 
+namespace
+{
+	RE::BSTEventSource<RE::BGSActorCellEvent>* GetPlayerCellEventSource(RE::PlayerCharacter* a_player)
+	{
+		if (!a_player)
+			return nullptr;
+
+		static REL::Relocation<void*> playerType{ RE::PlayerCharacter::RTTI };
+		static REL::Relocation<void*> cellEventSourceType{ RE::RTTI_BSTEventSource_BGSActorCellEvent_ };
+		if (!playerType.get() || !cellEventSourceType.get())
+			return nullptr;
+
+		return static_cast<RE::BSTEventSource<RE::BGSActorCellEvent>*>(
+			RE::RTDynamicCast(a_player, 0, playerType.get(), cellEventSourceType.get(), false));
+	}
+
+	void RequestTimeJumpSynchronization()
+	{
+		Util::RequestTimeJumpTransition();
+	}
+
+	class TimeJumpEventHandler :
+		public RE::BSTEventSink<RE::TESWaitStopEvent>,
+		public RE::BSTEventSink<RE::TESSleepStopEvent>,
+		public RE::BSTEventSink<RE::TESFastTravelEndEvent>,
+		public RE::BSTEventSink<RE::BGSActorCellEvent>
+	{
+	public:
+		RE::BSEventNotifyControl ProcessEvent(const RE::TESWaitStopEvent*, RE::BSTEventSource<RE::TESWaitStopEvent>*) override
+		{
+			RequestTimeJumpSynchronization();
+			return RE::BSEventNotifyControl::kContinue;
+		}
+
+		RE::BSEventNotifyControl ProcessEvent(const RE::TESSleepStopEvent*, RE::BSTEventSource<RE::TESSleepStopEvent>*) override
+		{
+			RequestTimeJumpSynchronization();
+			return RE::BSEventNotifyControl::kContinue;
+		}
+
+		RE::BSEventNotifyControl ProcessEvent(const RE::TESFastTravelEndEvent*, RE::BSTEventSource<RE::TESFastTravelEndEvent>*) override
+		{
+			RequestTimeJumpSynchronization();
+			return RE::BSEventNotifyControl::kContinue;
+		}
+
+		RE::BSEventNotifyControl ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*) override
+		{
+			if (!a_event || a_event->flags != RE::BGSActorCellEvent::CellFlag::kLeave)
+				return RE::BSEventNotifyControl::kContinue;
+
+			const auto cell = RE::TESForm::LookupByID<RE::TESObjectCELL>(a_event->cellID);
+			if (cell && cell->IsInteriorCell())
+				RequestTimeJumpSynchronization();
+			return RE::BSEventNotifyControl::kContinue;
+		}
+	};
+
+	struct ConsoleCommandHook
+	{
+		static bool IsGameHourSetCommand(std::string_view a_command) noexcept
+		{
+			auto consumeToken = [&](std::string_view a_token) {
+				while (!a_command.empty() && std::isspace(static_cast<unsigned char>(a_command.front())))
+					a_command.remove_prefix(1);
+
+				const auto tokenEnd = a_command.find_first_of(" \t\r\n");
+				const auto token = a_command.substr(0, tokenEnd);
+				if (!std::ranges::equal(token, a_token, [](char a_lhs, char a_rhs) {
+						return std::tolower(static_cast<unsigned char>(a_lhs)) == std::tolower(static_cast<unsigned char>(a_rhs));
+					})) {
+					return false;
+				}
+
+				a_command.remove_prefix(token.size());
+				return true;
+			};
+
+			if (!consumeToken("set") || !consumeToken("gamehour") || !consumeToken("to"))
+				return false;
+
+			while (!a_command.empty() && std::isspace(static_cast<unsigned char>(a_command.front())))
+				a_command.remove_prefix(1);
+			return !a_command.empty();
+		}
+
+		static void thunk(RE::FxDelegateArgs* a_args)
+		{
+			bool changesGameHour = false;
+			if (a_args && a_args->GetArgCount() > 0) {
+				const auto& commandValue = (*a_args)[0];
+				if (commandValue.IsString()) {
+					const auto command = commandValue.GetString();
+					changesGameHour = command && IsGameHourSetCommand(command);
+				}
+			}
+
+			func(a_args);
+			if (changesGameHour)
+				RequestTimeJumpSynchronization();
+		}
+
+		static void Install()
+		{
+			const auto result = stl::detour_thunk<ConsoleCommandHook>(REL::RelocationID(50157, 51084));
+			if (result == NO_ERROR)
+				logger::info("[Terrain Shadows] Installed console time-change hook");
+			else
+				logger::error("[Terrain Shadows] Failed to install console time-change hook: {}", result);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct VRFastTravelHook
+	{
+		static std::uintptr_t thunk(std::uintptr_t a_player, std::uintptr_t a_destination, bool a_unk)
+		{
+			const auto result = func(a_player, a_destination, a_unk);
+			RequestTimeJumpSynchronization();
+			return result;
+		}
+
+		static void Install()
+		{
+			if (!globals::game::isVR)
+				return;
+
+			const auto result = stl::detour_thunk<VRFastTravelHook>(REL::RelocationID(39373, 40445));
+			if (result == NO_ERROR)
+				logger::info("[Terrain Shadows] Installed VR fast-travel completion hook");
+			else
+				logger::error("[Terrain Shadows] Failed to install VR fast-travel completion hook: {}", result);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct PapyrusSetGlobalValueHook
+	{
+		static void thunk(RE::BSScript::IVirtualMachine* a_vm, RE::VMStackID a_stackID, RE::TESGlobal* a_global, float a_value)
+		{
+			const auto calendar = globals::game::calendar;
+			const bool changesGameHour = calendar && a_global == calendar->gameHour;
+			const float previousValue = changesGameHour ? a_global->value : 0.0f;
+
+			func(a_vm, a_stackID, a_global, a_value);
+			if (changesGameHour && a_global->value != previousValue)
+				RequestTimeJumpSynchronization();
+		}
+
+		static void Install()
+		{
+			const auto result = stl::detour_thunk<PapyrusSetGlobalValueHook>(REL::RelocationID(55352, 55923));
+			if (result == NO_ERROR)
+				logger::info("[Terrain Shadows] Installed Papyrus GameHour change hook");
+			else
+				logger::error("[Terrain Shadows] Failed to install Papyrus GameHour change hook: {}", result);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainShadows::Settings,
 	EnableTerrainShadow)
+
+void TerrainShadows::PostPostLoad()
+{
+	ConsoleCommandHook::Install();
+	VRFastTravelHook::Install();
+	PapyrusSetGlobalValueHook::Install();
+}
+
+void TerrainShadows::DataLoaded()
+{
+	const auto eventSourceHolder = RE::ScriptEventSourceHolder::GetSingleton();
+	if (!eventSourceHolder) {
+		logger::error("[Terrain Shadows] Script event source holder not found");
+		return;
+	}
+
+	static TimeJumpEventHandler eventHandler;
+	if (const auto waitEvents = eventSourceHolder->GetEventSource<RE::TESWaitStopEvent>())
+		waitEvents->AddEventSink(&eventHandler);
+	if (const auto sleepEvents = eventSourceHolder->GetEventSource<RE::TESSleepStopEvent>())
+		sleepEvents->AddEventSink(&eventHandler);
+	if (const auto fastTravelEvents = eventSourceHolder->GetEventSource<RE::TESFastTravelEndEvent>())
+		fastTravelEvents->AddEventSink(&eventHandler);
+
+	if (const auto cellEvents = GetPlayerCellEventSource(RE::PlayerCharacter::GetSingleton()))
+		cellEvents->AddEventSink(&eventHandler);
+	else
+		logger::warn("[Terrain Shadows] Player cell event source not found");
+}
+
+void TerrainShadows::GameLoaded()
+{
+	Util::RequestGameLoadTransition();
+}
 
 void TerrainShadows::LoadSettings(json& o_json)
 {
@@ -315,12 +518,12 @@ void TerrainShadows::Precompute()
 	needPrecompute = false;
 }
 
-void TerrainShadows::UpdateShadow()
+bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 {
 	ZoneScoped;
 
 	if (!IsHeightMapReady())
-		return;
+		return false;
 
 	// don't forget to change NTHREADS in shader!
 	constexpr uint updateLength = 128u;
@@ -337,10 +540,13 @@ void TerrainShadows::UpdateShadow()
 	auto accumulator = *globals::game::currentAccumulator.get();
 	auto shadowSceneNode = accumulator->GetRuntimeData().activeShadowSceneNode;
 	if (!shadowSceneNode)
-		return;
+		return false;
 	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
 	if (!sunLight)
-		return;
+		return false;
+
+	const auto worldDirection = sunLight->GetWorldDirection();
+	const float3 currentSunDirection = { worldDirection.x, worldDirection.y, worldDirection.z };
 
 	/* ---- UPDATE CB ---- */
 	uint width = texHeightMap->desc.Width;
@@ -350,9 +556,10 @@ void TerrainShadows::UpdateShadow()
 	static uint edgePxCoord;
 	static int signDir;
 	static uint maxUpdates;
+	if (a_refreshImmediately)
+		shadowUpdateIdx = 0;
 	if (shadowUpdateIdx == 0) {
-		auto direction = sunLight->GetWorldDirection();
-		float3 dirLightDir = { direction.x, direction.y, direction.z };
+		float3 dirLightDir = currentSunDirection;
 		if (dirLightDir.z > 0)
 			dirLightDir = -dirLightDir;
 
@@ -389,15 +596,10 @@ void TerrainShadows::UpdateShadow()
 		shadowUpdateCBData.LightDeltaZ = -(lenUV / invScale.z * stepMult) * float2{ std::tan(upperAngle), std::tan(lowerAngle) };
 	}
 
-	shadowUpdateCBData.StartPxCoord = edgePxCoord + signDir * shadowUpdateIdx * updateLength;
 	shadowUpdateCBData.PxSize = { 1.f / texHeightMap->desc.Width, 1.f / texHeightMap->desc.Height };
-
 	shadowUpdateCBData.PosRange = { cachedHeightmap->pos0.z, cachedHeightmap->pos1.z };
 	shadowUpdateCBData.ZRange = cachedHeightmap->zRange;
-
-	shadowUpdateCB->Update(shadowUpdateCBData);
-
-	shadowUpdateIdx = (shadowUpdateIdx + 1) % maxUpdates;
+	shadowUpdateCBData.BlendWeight = a_refreshImmediately ? 1.0f : 0.5f;
 
 	/* ---- BACKUP ---- */
 	struct ShaderState
@@ -420,7 +622,13 @@ void TerrainShadows::UpdateShadow()
 	context->CSSetShader(shadowUpdateProgram.get(), nullptr, 0);
 	{
 		CS_GPU_PASS("TerrainShadows::ShadowUpdate");
-		context->Dispatch(abs(shadowUpdateCBData.LightPxDir.x) >= abs(shadowUpdateCBData.LightPxDir.y) ? height : width, 1, 1);
+		const uint updateCount = a_refreshImmediately ? maxUpdates : 1u;
+		for (uint update = 0; update < updateCount; ++update) {
+			shadowUpdateCBData.StartPxCoord = edgePxCoord + signDir * shadowUpdateIdx * updateLength;
+			shadowUpdateCB->Update(shadowUpdateCBData);
+			context->Dispatch(abs(shadowUpdateCBData.LightPxDir.x) >= abs(shadowUpdateCBData.LightPxDir.y) ? height : width, 1, 1);
+			shadowUpdateIdx = (shadowUpdateIdx + 1) % maxUpdates;
+		}
 	}
 
 	/* ---- RESTORE ---- */
@@ -428,6 +636,7 @@ void TerrainShadows::UpdateShadow()
 	context->CSSetShader(old.shader, nullptr, 0);
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(old.uavs), old.uavs, nullptr);
 	context->CSSetConstantBuffers(0, 1, &old.buffer);
+	return true;
 }
 
 void TerrainShadows::ReflectionsPrepass()
@@ -445,13 +654,17 @@ void TerrainShadows::EarlyPrepass()
 {
 	LoadHeightmap();
 
+	const auto requestedRefreshGeneration = Util::GetCompletedCelestialTransitionGeneration();
+	const bool timeJumpRefresh = requestedRefreshGeneration != handledTimeJumpRefreshGeneration;
 	if (!settings.EnableTerrainShadow)
 		return;
 
+	const bool refreshImmediately = needPrecompute || timeJumpRefresh;
 	if (needPrecompute)
 		Precompute();
 
-	UpdateShadow();
+	if (UpdateShadow(refreshImmediately) && timeJumpRefresh)
+		handledTimeJumpRefreshGeneration = requestedRefreshGeneration;
 
 	if (texShadowHeight) {
 		auto context = globals::d3d::context;
