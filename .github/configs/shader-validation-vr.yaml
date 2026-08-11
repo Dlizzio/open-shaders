@@ -15998,7 +15998,6 @@ shaders:
           PSHADER:
               common_defines:
                   - CLOUD_SHADOWS
-                  - CLOUD_RELIGHT
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS
@@ -16071,6 +16070,7 @@ shaders:
           PSHADER:
               common_defines:
                   - CLOUD_SHADOWS
+                  - CLOUD_RELIGHT
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS

@@ -177,7 +177,7 @@ void CloudShadows::SkyShaderHacks()
 
 	context->CopyResource(texSelfShadowCopy->resource.get(), texCloudShadowLayers[layer]->resource.get());
 
-	if (layer > 0) {
+	if (layer > 0 && sourceLayer < layer) {
 		context->CopySubresourceRegion(
 			texCloudShadowLayers[layer]->resource.get(), subresource, 0, 0, 0,
 			texCloudShadowLayers[sourceLayer]->resource.get(), subresource, nullptr);
