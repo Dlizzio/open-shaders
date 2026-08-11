@@ -8,7 +8,7 @@ struct CloudRelight : Feature
 	{
 		uint enabled = false;
 		float cloudRelightMix = 1.0f;
-		float cloudOriginalMix = 0.5f;
+		float cloudOriginalMix = 0.68f;
 		float silverLiningMix = 1.0f;
 
 		float silverLiningSpread = 0.0f;
