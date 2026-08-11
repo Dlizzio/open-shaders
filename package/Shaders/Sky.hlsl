@@ -260,8 +260,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(CR_CLOUDS)
 	if (SharedData::cloudRelightSettings.enabled) {
 		float3 viewDir = normalize(input.WorldPosition.xyz);
-		if (CloudShadows::IntersectCloudDist(float3(0, 0, 0), viewDir) >= 0.0)
-			baseColor.rgb = CloudRelight::RelightCloud(baseColor, viewDir, SampBaseSampler);
+		baseColor.rgb = CloudRelight::RelightCloud(baseColor, viewDir, SampBaseSampler);
 	}
 #		endif
 

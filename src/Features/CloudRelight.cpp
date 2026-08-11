@@ -1,6 +1,9 @@
 #include "CloudRelight.h"
 
+#include "../I18n/I18n.h"
 #include "CloudShadows.h"
+
+#define I18N_KEY_PREFIX "feature.cloud_relight."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudRelight::Settings,
@@ -24,36 +27,38 @@ namespace
 void CloudRelight::DrawSettings()
 {
 	bool enable = settings.enabled != 0;
-	if (ImGui::Checkbox("Enabled", &enable))
+	if (ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &enable))
 		settings.enabled = enable;
 
-	ImGui::SeparatorText("Cloud Relighting");
+	ImGui::SeparatorText(T(TKEY("cloud_relighting"), "Cloud Relighting"));
 
-	ImGui::SliderFloat("Vanilla Mix", &settings.cloudOriginalMix, 0.0f, 2.0f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("vanilla_mix"), "Vanilla Mix"), &settings.cloudOriginalMix, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Multiplier on the original vanilla cloud color before relighting is applied.");
+		ImGui::Text("%s", T(TKEY("vanilla_mix_tooltip"), "Multiplier on the original vanilla cloud color before relighting is applied."));
 
-	ImGui::SliderFloat("Relight Mix", &settings.cloudRelightMix, 0.0f, 2.0f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("relight_mix"), "Relight Mix"), &settings.cloudRelightMix, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Multiplier on the directional light contribution added to clouds.");
+		ImGui::Text("%s", T(TKEY("relight_mix_tooltip"), "Multiplier on the directional light contribution added to clouds."));
 
-	ImGui::SeparatorText("Silver Lining");
+	ImGui::SeparatorText(T(TKEY("silver_lining"), "Silver Lining"));
 
-	ImGui::SliderFloat("Silver Lining Accent", &settings.silverLiningMix, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("silver_lining_accent"), "Silver Lining Accent"), &settings.silverLiningMix, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Blend between flat isotropic phase and sharp silver-lining phase lighting.");
+		ImGui::Text("%s", T(TKEY("silver_lining_accent_tooltip"), "Blend between flat isotropic phase and sharp silver-lining phase lighting."));
 
-	ImGui::SliderFloat("Silver Lining Spread", &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("silver_lining_spread"), "Silver Lining Spread"), &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(
-			"Positive: silver lining appears only on thin cloud edges.\n"
-			"Negative: silver lining bleeds into thick cloud areas.");
+		ImGui::Text("%s", T(TKEY("silver_lining_spread_tooltip"),
+							  "Positive: silver lining spreads into thicker cloud areas.\n"
+							  "Negative: silver lining is confined to thinner cloud edges."));
 
 	if (!globals::features::cloudShadows.loaded) {
 		ImGui::Spacing();
-		ImGui::TextWrapped("Cloud self-shadowing requires Cloud Shadows to be installed and enabled.");
+		ImGui::TextWrapped("%s", T(TKEY("cloud_shadows_required"), "Cloud self-shadowing requires Cloud Shadows to be installed and enabled."));
 	}
 }
+
+#undef I18N_KEY_PREFIX
 
 void CloudRelight::LoadSettings(json& o_json)
 {

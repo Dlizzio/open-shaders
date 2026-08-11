@@ -214,6 +214,7 @@ file_common_defines:
         CSHADER: *id002
         PSHADER: &id005
             - CLOUD_SHADOWS
+            - CLOUD_RELIGHT
             - DYNAMIC_CUBEMAPS
             - EXP_HEIGHT_FOG
             - HDR_OUTPUT
@@ -15997,6 +15998,7 @@ shaders:
           PSHADER:
               common_defines:
                   - CLOUD_SHADOWS
+                  - CLOUD_RELIGHT
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS

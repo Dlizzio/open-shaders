@@ -1,6 +1,7 @@
 #ifndef CLOUD_RELIGHT_HLSLI
 #define CLOUD_RELIGHT_HLSLI
 
+#include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 
@@ -20,46 +21,6 @@ namespace CloudRelight
 
 	namespace Phase
 	{
-		float SmoothstepUnchecked(float x)
-		{
-			return (x * x) * (3.0 - x * 2.0);
-		}
-
-		float SmoothBump(float center, float radius, float x)
-		{
-			return 1.0 - SmoothstepUnchecked(min(abs(x - center), radius) / radius);
-		}
-
-		float PowerfulSCurve(float x, float p1, float p2)
-		{
-			return pow(1.0 - pow(1.0 - saturate(x), p2), p1);
-		}
-
-		float3 CloudFit(float cosTheta)
-		{
-			float x = acos(cosTheta);
-			float x2 = max(0.0, x - 2.45) / (Math::PI - 2.15);
-			float x3 = max(0.0, x - 2.95) / (Math::PI - 2.95);
-			float y =
-				exp(-max(x * 1.5, 0.0) * 30.0) +
-				smoothstep(1.7, 0.0, x) * 0.45 * 0.8 +
-				SmoothBump(0.4, 0.5, cosTheta) * 0.02 -
-				smoothstep(1.0, 0.2, x) * 0.06 +
-				SmoothBump(2.18, 0.20, x) * 0.06 +
-				smoothstep(2.28, 2.45, x) * 0.18 -
-				PowerfulSCurve(x2 * 4.0, 3.5, 8.0) * 0.04 +
-				x2 * -0.085 +
-				x3 * x3 * 0.1;
-
-			float3 result = y;
-			result = lerp(result, result + 0.008 * 2.0, smoothstep(0.94, 1.0, cosTheta) * sin(x * 10.0 * float3(8, 4, 2)));
-			result = lerp(result, result - 0.008 * 2.0, SmoothBump(-0.7, 0.14, cosTheta) * sin(x * 20.0 * float3(8, 4, 2)));
-			result = lerp(result, result - 0.008 * 5.0, smoothstep(-0.994, -1.0, cosTheta) * sin(x * 30.0 * float3(3, 4, 2)));
-
-			result += 0.13 * 1.4;
-			return result * 3.9 * 0.25 * Math::INV_PI;
-		}
-
 		float ThomasSchander(float cosTheta)
 		{
 			float bestParams[10];
@@ -82,11 +43,12 @@ namespace CloudRelight
 	}
 
 #if defined(CLOUD_SHADOWS)
-	float GetInnerShadow(float3 viewDir, float3 dirLightDir, SamplerState textureSampler)
+	float GetInnerShadow(float3 viewDir, float3 dirLightDir, float cloudDensity, SamplerState textureSampler)
 	{
 		static const float kRayStep = 1.0 / 32.0;
 		float rayPos = kRayStep * 0.5;
-		float4 rayShadow = 0.0;
+		float4 raySelfShadow = 0.0;
+		float4 rayCompletedShadow = 0.0;
 
 		static const float3 kPoissonDisc[4] = {
 			float3(0.460921f, 0.615192f, 0.887539f),
@@ -100,15 +62,20 @@ namespace CloudRelight
 			float3 raySample = normalize(lerp(viewDir, dirLightDir, rayPos));
 			raySample += (kPoissonDisc[i] * 2.0 - 1.0) * 0.01;
 
-			if (raySample.z < 0.0)
-				rayShadow[i] += -raySample.z;
-			else
-				rayShadow[i] = max(rayShadow[i], CloudShadows::CloudSelfShadowTexture.SampleLevel(textureSampler, raySample, 0).x);
+			if (raySample.z < 0.0) {
+				raySelfShadow[i] += -raySample.z;
+				rayCompletedShadow[i] += -raySample.z;
+			} else {
+				raySelfShadow[i] = max(raySelfShadow[i], CloudShadows::CloudSelfShadowTexture.SampleLevel(textureSampler, raySample, 0).x);
+				rayCompletedShadow[i] = max(rayCompletedShadow[i], CloudShadows::CloudShadowsTexture.SampleLevel(textureSampler, raySample, 0).x);
+			}
 
 			rayPos += kRayStep;
 		}
 
-		return 1.0 - saturate(dot(rayShadow, 0.25));
+		float selfShadowLight = 1.0 - saturate(dot(raySelfShadow, 0.25));
+		float completedShadowLight = 1.0 - saturate(dot(rayCompletedShadow, 0.25));
+		return lerp(selfShadowLight, max(selfShadowLight, completedShadowLight), saturate(cloudDensity));
 	}
 
 	float3 RelightCloud(float4 baseColor, float3 viewDir, SamplerState textureSampler)
@@ -119,24 +86,29 @@ namespace CloudRelight
 		SharedData::CloudRelightSettings data = SharedData::cloudRelightSettings;
 
 		float3 dirLightDir = normalize(SharedData::DirLightDirection.xyz);
-		float3 dirLightColor = SharedData::DirLightColor.rgb;
+		float linearLightingDirLightMultiplier =
+			(SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0;
+		float3 dirLightColor =
+			Color::DirectionalLight(SharedData::DirLightColor.rgb / max(linearLightingDirLightMultiplier, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * linearLightingDirLightMultiplier * Color::VanillaNormalization();
 		float cosTheta = dot(viewDir, dirLightDir);
+		float isotropicPhase = 0.25 * Math::INV_PI;
+		float silverLiningPhase = max(isotropicPhase, Phase::ThomasSchander(cosTheta));
 
 		float phaseCloud =
 			Remap(
 				baseColor.w,
 				data.silverLiningSpread > 0.0 ? data.silverLiningSpread : 0.0,
 				data.silverLiningSpread < 0.0 ? 1.0 + data.silverLiningSpread : 1.0,
-				lerp(0.25 * Math::INV_PI, Phase::ThomasSchander(cosTheta), data.silverLiningMix),
-				0.25 * Math::INV_PI) *
+				lerp(isotropicPhase, silverLiningPhase, data.silverLiningMix),
+				isotropicPhase) *
 			Math::TAU * data.cloudRelightMix;
 		phaseCloud = min(phaseCloud, 2.0);
 
-		float sunIntensity = saturate(dot(dirLightColor, float3(0.2126, 0.7152, 0.0722)));
-		float vanillaMix = lerp(1.0, data.cloudOriginalMix, sunIntensity);
+		float directionalLightIntensity = saturate(Color::RGBToLuminance(dirLightColor));
+		float vanillaMix = lerp(1.0, data.cloudOriginalMix, directionalLightIntensity);
 		float3 cloudColor = baseColor.rgb * vanillaMix;
 
-		float3 relitColor = baseColor.a * baseColor.rgb * phaseCloud * GetInnerShadow(viewDir, dirLightDir, textureSampler) * dirLightColor;
+		float3 relitColor = baseColor.a * baseColor.rgb * phaseCloud * GetInnerShadow(viewDir, dirLightDir, baseColor.a, textureSampler) * dirLightColor;
 		cloudColor += relitColor;
 
 		return cloudColor;

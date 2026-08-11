@@ -280,6 +280,7 @@ void CloudShadows::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	auto context = globals::d3d::context;
 
 	{
 		auto reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
@@ -293,6 +294,7 @@ void CloudShadows::SetupResources()
 
 		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R8_UNORM;
 		cubemapMipLevels = texDesc.MipLevels;
+		const float transparentBlack[4] = {};
 
 		for (int layer = 0; layer < kMaxCloudLayers; ++layer) {
 			char name[64];
@@ -305,6 +307,7 @@ void CloudShadows::SetupResources()
 				rtvDesc.Format = texDesc.Format;
 				DX::ThrowIfFailed(device->CreateRenderTargetView(texCloudShadowLayers[layer]->resource.get(), &rtvDesc, &cloudShadowLayerRTVs[layer][face]));
 				Util::SetResourceName(cloudShadowLayerRTVs[layer][face], "CloudShadows::Layer[%d] RTV[%d]", layer, face);
+				context->ClearRenderTargetView(cloudShadowLayerRTVs[layer][face], transparentBlack);
 			}
 		}
 

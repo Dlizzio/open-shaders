@@ -12,18 +12,6 @@ namespace CloudShadows
 	const static float PlanetRadius = (6371e3f / GAME_UNIT_TO_M);
 	const static float RcpHPlusR = (1.0 / (CloudHeight + PlanetRadius));
 
-	float IntersectCloudDist(float3 rel_pos, float3 dir)
-	{
-		float r = PlanetRadius;
-		float3 p = (rel_pos + float3(0, 0, r)) * RcpHPlusR;
-		float dotprod = dot(p, dir);
-		float lengthsqr = dot(p, p);
-		if (lengthsqr > 1.0)
-			return -1.0;
-
-		return (-dotprod + sqrt(dotprod * dotprod - lengthsqr + 1.0)) * (r + CloudHeight);
-	}
-
 	float3 GetCloudShadowSampleDir(float3 rel_pos, float3 eye_to_sun)
 	{
 		float r = PlanetRadius;
