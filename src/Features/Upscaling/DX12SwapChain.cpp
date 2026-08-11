@@ -127,6 +127,10 @@ void DX12SwapChain::CreateInterop()
 	// UI buffer uses R8G8B8A8_UNORM - vanilla UI is SDR and 8-bit precision
 	texDesc11.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	uiBufferWrapped = new WrappedResource(texDesc11, d3d11Device.get(), d3d12Device.get(), "DX12SwapChain::UIBuffer");
+
+	const float clearColor[4]{};
+	d3d11Context->ClearRenderTargetView(swapChainBufferWrapped->rtv, clearColor);
+	d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv, clearColor);
 }
 
 DXGISwapChainProxy* DX12SwapChain::GetSwapChainProxy()
@@ -213,6 +217,7 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	frameIndex = swapChain->GetCurrentBackBufferIndex();
 
 	float clearColor[4]{ 0, 0, 0, 0 };
+	d3d11Context->ClearRenderTargetView(swapChainBufferWrapped->rtv, clearColor);
 	d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv, clearColor);
 
 	// If VSync is disabled, use frame limiter to prevent tearing and optimise pacing
