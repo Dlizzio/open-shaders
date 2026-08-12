@@ -21,6 +21,7 @@ namespace CloudRelight
 
 	namespace Phase
 	{
+		// Numerical fit for the silver-lining phase function: https://www.shadertoy.com/view/4sjBDG
 		float ThomasSchander(float cosTheta)
 		{
 			float bestParams[10];
