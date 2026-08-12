@@ -19,13 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Covers the Draine phase function evaluation in CloudRelight.hlsli, adapted
-from the authors' reference implementation accompanying:
-
-Johannes Jendersie and Eugene d'Eon. 2023. An Approximate Mie Scattering
-Function for Fog and Cloud Rendering. In Special Interest Group on Computer
-Graphics and Interactive Techniques Conference Talks (SIGGRAPH '23 Talks).
-ACM, New York, NY, USA. https://doi.org/10.1145/3587421.3595409

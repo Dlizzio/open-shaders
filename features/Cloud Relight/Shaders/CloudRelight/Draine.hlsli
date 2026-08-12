@@ -27,6 +27,7 @@
 // [Jendersie and d'Eon 2023]
 //   SIGGRAPH 2023 Talks
 //   https://doi.org/10.1145/3587421.3595409
+//   https://research.nvidia.com/labs/rtr/approximate-mie/
 
 // EVAL for the Draine (and therefore Cornette-Shanks) phase function
 //   g = HG shape parameter
