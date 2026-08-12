@@ -1,6 +1,7 @@
 #ifndef CLOUD_RELIGHT_HLSLI
 #define CLOUD_RELIGHT_HLSLI
 
+#include "CloudRelight/Draine.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
@@ -21,25 +22,15 @@ namespace CloudRelight
 
 	namespace Phase
 	{
-		// Numerical fit for the silver-lining phase function: https://www.shadertoy.com/view/4sjBDG
-		float ThomasSchander(float cosTheta)
+		// HG+Draine blend (see Draine.hlsli), parameters least-squares fit to this feature's
+		// original silver-lining shape over the forward-scattering hemisphere.
+		float SilverLining(float cosTheta)
 		{
-			float bestParams[10];
-			bestParams[0] = 9.805233e-06;
-			bestParams[1] = -6.500000e+01;
-			bestParams[2] = -5.500000e+01;
-			bestParams[3] = 8.194068e-01;
-			bestParams[4] = 1.388198e-01;
-			bestParams[5] = -8.370334e+01;
-			bestParams[6] = 7.810083e+00;
-			bestParams[7] = 2.054747e-03;
-			bestParams[8] = 2.600563e-02;
-			bestParams[9] = -4.552125e-12;
-
-			float p1 = cosTheta + bestParams[3];
-			float4 expValues = exp(float4(bestParams[1] * cosTheta + bestParams[2], bestParams[5] * p1 * p1, bestParams[6] * cosTheta, bestParams[9] * cosTheta));
-			float4 expValWeight = float4(bestParams[0], bestParams[4], bestParams[7], bestParams[8]);
-			return dot(expValues, expValWeight) * 0.25;
+			static const float kGHG = -0.151765;
+			static const float kGD = 0.611521;
+			static const float kAlpha = 60.0;
+			static const float kWeightD = 0.923579;
+			return (1.0 - kWeightD) * evalDraine(cosTheta, kGHG, 0.0) + kWeightD * evalDraine(cosTheta, kGD, kAlpha);
 		}
 	}
 
@@ -93,7 +84,7 @@ namespace CloudRelight
 			Color::DirectionalLight(SharedData::DirLightColor.rgb / max(linearLightingDirLightMultiplier, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * linearLightingDirLightMultiplier * Color::VanillaNormalization();
 		float cosTheta = dot(viewDir, dirLightDir);
 		float isotropicPhase = 0.25 * Math::INV_PI;
-		float silverLiningPhase = max(isotropicPhase, Phase::ThomasSchander(cosTheta));
+		float silverLiningPhase = max(isotropicPhase, Phase::SilverLining(cosTheta));
 
 		float phaseCloud =
 			Remap(
