@@ -336,20 +336,24 @@ static std::string GetConfigPath(State::ConfigMode a_configMode)
 	}
 }
 
-static bool WriteConfigAtomically(const std::filesystem::path& a_configPath, std::string_view a_contents)
+static bool WriteConfigFile(const std::filesystem::path& a_configPath, std::string_view a_contents)
 {
-	auto temporaryPath = a_configPath;
-	temporaryPath += std::format(".{}.{}.tmp", GetCurrentProcessId(), GetCurrentThreadId());
-
-	std::ofstream output{ temporaryPath, std::ios::binary | std::ios::trunc };
+	std::ofstream output{ a_configPath, std::ios::binary | std::ios::trunc };
 	if (!output.is_open()) {
-		logger::warn("Failed to open temporary config file for saving: {}", temporaryPath.string());
 		return false;
 	}
 
 	output.write(a_contents.data(), static_cast<std::streamsize>(a_contents.size()));
 	output.close();
-	if (output.fail()) {
+	return !output.fail();
+}
+
+static bool WriteConfigAtomically(const std::filesystem::path& a_configPath, std::string_view a_contents)
+{
+	auto temporaryPath = a_configPath;
+	temporaryPath += std::format(".{}.{}.tmp", GetCurrentProcessId(), GetCurrentThreadId());
+
+	if (!WriteConfigFile(temporaryPath, a_contents)) {
 		logger::warn("Failed to write temporary config file: {}", temporaryPath.string());
 		std::error_code cleanupError;
 		std::filesystem::remove(temporaryPath, cleanupError);
@@ -358,10 +362,16 @@ static bool WriteConfigAtomically(const std::filesystem::path& a_configPath, std
 
 	if (!MoveFileExW(temporaryPath.c_str(), a_configPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
 		const auto error = GetLastError();
-		logger::warn("Failed to replace config file {}: Windows error {}", a_configPath.string(), error);
+		logger::warn("Failed to replace config file {}: Windows error {}; retrying with a direct write", a_configPath.string(), error);
 		std::error_code cleanupError;
 		std::filesystem::remove(temporaryPath, cleanupError);
-		return false;
+
+		// Virtual filesystems can reject replacement while still allowing direct writes.
+		if (!WriteConfigFile(a_configPath, a_contents)) {
+			logger::warn("Failed to write config file directly: {}", a_configPath.string());
+			return false;
+		}
+		logger::info("Saved config directly after atomic replacement failed: {}", a_configPath.string());
 	}
 
 	return true;
