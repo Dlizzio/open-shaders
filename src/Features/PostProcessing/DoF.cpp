@@ -1,7 +1,6 @@
 ﻿#include "DoF.h"
 
 #include "Features/PostProcessing.h"
-#include "GpuPass.h"
 #include "Menu.h"
 #include "State.h"
 #include "Util.h"
@@ -28,6 +27,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PetzvalStrength,
 	HighlightShape,
 	HighlightShapeRotationAngle,
+	MaxNearCoCRadius,
+	MaxFarCoCRadius,
 	targetFocus,
 	targetFocusFocalLength,
 	consoleSelection)
@@ -37,7 +38,7 @@ void DoF::DrawSettings()
 	ImGui::Checkbox(T("feature.post_processing.do_f.auto_focus", "Auto Focus"), &settings.AutoFocus);
 
 	if (settings.AutoFocus) {
-		ImGui::SliderFloat2(T("feature.post_processing.do_f.focus_point_xy", "Focus Point X/Y"), &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat2(T("feature.post_processing.do_f.focus_point", "Focus Point"), &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 	ImGui::SliderFloat(T("feature.post_processing.do_f.transition_speed", "Transition Speed"), &settings.TransitionSpeed, 0.1f, 1.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.manual_focus", "Manual Focus"), &settings.ManualFocusPlane, 0.1f, 150.0f, "%.2f m");
@@ -45,8 +46,14 @@ void DoF::DrawSettings()
 	ImGui::SliderFloat(T("feature.post_processing.do_f.f_number", "F-Number"), &settings.FNumber, 1.0f, 22.0f, "f/%.1f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.far_plane_max_blur", "Far Plane Max Blur"), &settings.FarPlaneMaxBlur, 0.0f, 8.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.near_plane_max_blur", "Near Plane Max Blur"), &settings.NearPlaneMaxBlur, 0.0f, 4.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.post_processing.do_f.max_far_coc_radius", "Max Far Blur Radius"), &settings.MaxFarCoCRadius, 0.001f, 0.1f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.do_f.max_far_coc_radius_desc", "Upper bound of the far field blur disc radius, as a fraction of the screen width. Caps how expensive/undersampled the gather can get."));
+	ImGui::SliderFloat(T("feature.post_processing.do_f.max_near_coc_radius", "Max Near Blur Radius"), &settings.MaxNearCoCRadius, 0.001f, 0.1f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.do_f.max_near_coc_radius_desc", "Upper bound of the near field blur disc radius, as a fraction of the screen width."));
 	ImGui::SliderFloat(T("feature.post_processing.do_f.blur_quality", "Blur Quality"), &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
-	ImGui::SliderFloat(T("feature.post_processing.do_f.near_far_plane_distance_compensation", "Near-Far Plane Distance Compensation"), &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.post_processing.do_f.near_far_plane_distance_compenation", "Near-Far Plane Distance Compenation"), &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.bokeh_busy_factor", "Bokeh Busy Factor"), &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.petzval_strength", "Petzval Strength"), &settings.PetzvalStrength, 0.0f, 2.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.highlight_boost", "Highlight Boost"), &settings.HighlightBoost, 0.0f, 1.0f, "%.2f");
@@ -61,31 +68,28 @@ void DoF::DrawSettings()
 	}
 
 	if (ImGui::CollapsingHeader(T("feature.post_processing.do_f.debug", "Debug"))) {
-		const float uiScale = Util::GetUIScale();
-		const float focusPreviewScale = 64.0f * uiScale;
 		static float debugRescale = .3f;
-		const float debugTextureScale = debugRescale * uiScale;
 		ImGui::Text(T("feature.post_processing.do_f.debug_distance", "Debug Distance: %f"), debugDistance);
 		ImGui::Text(T("feature.post_processing.do_f.debug_focus_plane", "Debug Focus Plane: %f"), debugFocusPlane);
 		ImGui::SliderFloat(T("feature.post_processing.do_f.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
 
-		BUFFER_VIEWER_NODE(texFocus, focusPreviewScale)
-		BUFFER_VIEWER_NODE(texPreFocus, focusPreviewScale)
+		BUFFER_VIEWER_NODE(texFocus, 64.0f)
+		BUFFER_VIEWER_NODE(texPreFocus, 64.0f)
 
-		BUFFER_VIEWER_NODE(texCoC, debugTextureScale)
-		BUFFER_VIEWER_NODE(texCoCTileTmp, debugTextureScale)
-		BUFFER_VIEWER_NODE(texCoCTileTmp2, debugTextureScale)
-		BUFFER_VIEWER_NODE(texCoCTileNeighbor, debugTextureScale)
-		BUFFER_VIEWER_NODE(texCoCBlur1, debugTextureScale)
-		BUFFER_VIEWER_NODE(texCoCBlur2, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoC, debugRescale)
+		BUFFER_VIEWER_NODE(texCoCTileTmp, debugRescale)
+		BUFFER_VIEWER_NODE(texCoCTileTmp2, debugRescale)
+		BUFFER_VIEWER_NODE(texCoCTileNeighbor, debugRescale)
+		BUFFER_VIEWER_NODE(texCoCBlur1, debugRescale)
+		BUFFER_VIEWER_NODE(texCoCBlur2, debugRescale)
 
-		BUFFER_VIEWER_NODE(texPreBlurred, debugTextureScale)
-		BUFFER_VIEWER_NODE(texFarBlurred, debugTextureScale)
-		BUFFER_VIEWER_NODE(texNearBlurred, debugTextureScale)
+		BUFFER_VIEWER_NODE(texPreBlurred, debugRescale)
+		BUFFER_VIEWER_NODE(texFarBlurred, debugRescale)
+		BUFFER_VIEWER_NODE(texNearBlurred, debugRescale)
 
-		BUFFER_VIEWER_NODE(texBlurredFiltered, debugTextureScale)
-		BUFFER_VIEWER_NODE(texPostSmooth, debugTextureScale)
-		BUFFER_VIEWER_NODE(texPostSmooth2, debugTextureScale)
+		BUFFER_VIEWER_NODE(texBlurredFiltered, debugRescale)
+		BUFFER_VIEWER_NODE(texPostSmooth, debugRescale)
+		BUFFER_VIEWER_NODE(texPostSmooth2, debugRescale)
 	}
 }
 
@@ -111,7 +115,7 @@ void DoF::SetupResources()
 
 	logger::debug("Creating buffers...");
 	{
-		dofCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<DoFCB>(), "Post Processing DoF CB");
+		dofCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<DoFCB>());
 	}
 
 	logger::debug("Creating 2D textures...");
@@ -137,19 +141,15 @@ void DoF::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.MiscFlags = 0;
 
-		texOutput = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF Output");
+		texOutput = eastl::make_unique<Texture2D>(texDesc);
 		texOutput->CreateSRV(srvDesc);
 		texOutput->CreateUAV(uavDesc);
 
-		texBlurredFull = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF Full Blur");
-		texBlurredFull->CreateSRV(srvDesc);
-		texBlurredFull->CreateUAV(uavDesc);
-
-		texPostSmooth = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF Post Smooth");
+		texPostSmooth = eastl::make_unique<Texture2D>(texDesc);
 		texPostSmooth->CreateSRV(srvDesc);
 		texPostSmooth->CreateUAV(uavDesc);
 
-		texPostSmooth2 = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF Post Smooth 2");
+		texPostSmooth2 = eastl::make_unique<Texture2D>(texDesc);
 		texPostSmooth2->CreateSRV(srvDesc);
 		texPostSmooth2->CreateUAV(uavDesc);
 
@@ -157,19 +157,19 @@ void DoF::SetupResources()
 		texDescHalf.Width /= 2;
 		texDescHalf.Height /= 2;
 
-		texPreBlurred = eastl::make_unique<Texture2D>(texDescHalf, "Post Processing DoF Pre Blur");
+		texPreBlurred = eastl::make_unique<Texture2D>(texDescHalf);
 		texPreBlurred->CreateSRV(srvDesc);
 		texPreBlurred->CreateUAV(uavDesc);
 
-		texFarBlurred = eastl::make_unique<Texture2D>(texDescHalf, "Post Processing DoF Far Blur");
+		texFarBlurred = eastl::make_unique<Texture2D>(texDescHalf);
 		texFarBlurred->CreateSRV(srvDesc);
 		texFarBlurred->CreateUAV(uavDesc);
 
-		texNearBlurred = eastl::make_unique<Texture2D>(texDescHalf, "Post Processing DoF Near Blur");
+		texNearBlurred = eastl::make_unique<Texture2D>(texDescHalf);
 		texNearBlurred->CreateSRV(srvDesc);
 		texNearBlurred->CreateUAV(uavDesc);
 
-		texBlurredFiltered = eastl::make_unique<Texture2D>(texDescHalf, "Post Processing DoF Filtered Blur");
+		texBlurredFiltered = eastl::make_unique<Texture2D>(texDescHalf);
 		texBlurredFiltered->CreateSRV(srvDesc);
 		texBlurredFiltered->CreateUAV(uavDesc);
 
@@ -178,38 +178,38 @@ void DoF::SetupResources()
 		srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
 
-		texCoC = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF CoC");
+		texCoC = eastl::make_unique<Texture2D>(texDesc);
 		texCoC->CreateSRV(srvDesc);
 		texCoC->CreateUAV(uavDesc);
 
-		texCoCTileTmp = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF CoC Tile");
+		texCoCTileTmp = eastl::make_unique<Texture2D>(texDesc);
 		texCoCTileTmp->CreateSRV(srvDesc);
 		texCoCTileTmp->CreateUAV(uavDesc);
 
-		texCoCTileTmp2 = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF CoC Tile 2");
+		texCoCTileTmp2 = eastl::make_unique<Texture2D>(texDesc);
 		texCoCTileTmp2->CreateSRV(srvDesc);
 		texCoCTileTmp2->CreateUAV(uavDesc);
 
-		texCoCTileNeighbor = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF CoC Tile Neighbor");
+		texCoCTileNeighbor = eastl::make_unique<Texture2D>(texDesc);
 		texCoCTileNeighbor->CreateSRV(srvDesc);
 		texCoCTileNeighbor->CreateUAV(uavDesc);
 
-		texCoCBlur1 = eastl::make_unique<Texture2D>(texDescHalf, "Post Processing DoF CoC Blur 1");
+		texCoCBlur1 = eastl::make_unique<Texture2D>(texDescHalf);
 		texCoCBlur1->CreateSRV(srvDesc);
 		texCoCBlur1->CreateUAV(uavDesc);
 
-		texCoCBlur2 = eastl::make_unique<Texture2D>(texDescHalf, "Post Processing DoF CoC Blur 2");
+		texCoCBlur2 = eastl::make_unique<Texture2D>(texDescHalf);
 		texCoCBlur2->CreateSRV(srvDesc);
 		texCoCBlur2->CreateUAV(uavDesc);
 
 		texDesc.Width = 1;
 		texDesc.Height = 1;
 
-		texFocus = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF Focus");
+		texFocus = eastl::make_unique<Texture2D>(texDesc);
 		texFocus->CreateSRV(srvDesc);
 		texFocus->CreateUAV(uavDesc);
 
-		texPreFocus = eastl::make_unique<Texture2D>(texDesc, "Post Processing DoF Previous Focus");
+		texPreFocus = eastl::make_unique<Texture2D>(texDesc);
 		texPreFocus->CreateSRV(srvDesc);
 		texPreFocus->CreateUAV(uavDesc);
 
@@ -230,7 +230,6 @@ void DoF::SetupResources()
 			.MaxLOD = D3D11_FLOAT32_MAX
 		};
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, linearSampler.put()));
-		Util::SetResourceName(linearSampler.get(), "Post Processing DoF Linear Sampler");
 	}
 
 	CompileComputeShaders();
@@ -302,22 +301,13 @@ void DoF::CompileComputeShaders()
 // Thanks Ershin!
 RE::NiPoint3 DoF::GetCameraPos()
 {
-	auto player = globals::game::player;
-	auto playerCamera = globals::game::playerCamera;
+	auto player = RE::PlayerCharacter::GetSingleton();
+	auto playerCamera = RE::PlayerCamera::GetSingleton();
 	RE::NiPoint3 ret;
 
-	// GetRuntimeData() and GetVRRuntimeData() return differently-laid-out structs
-	// (VR_RUNTIME_DATA shifts cameraStates by 8 bytes), and VR's CameraStates enum
-	// inserts kVR before kThirdPerson/kMount, shifting their VR-equivalent values
-	// to kVRThirdPerson/kVRMount -- both the struct and the indices must match runtime.
-	const auto isVehicleOrBodyCamera = [&](const auto& runtimeData, RE::CameraState thirdPersonState, RE::CameraState mountState) {
-		return playerCamera->currentState == runtimeData.cameraStates[RE::CameraStates::kFirstPerson] ||
-		       playerCamera->currentState == runtimeData.cameraStates[thirdPersonState] ||
-		       playerCamera->currentState == runtimeData.cameraStates[mountState];
-	};
-	if (globals::game::isVR ?
-			isVehicleOrBodyCamera(*playerCamera->GetVRRuntimeData(), RE::CameraStates::kVRThirdPerson, RE::CameraStates::kVRMount) :
-			isVehicleOrBodyCamera(playerCamera->GetRuntimeData(), RE::CameraStates::kThirdPerson, RE::CameraStates::kMount)) {
+	if (playerCamera->currentState == playerCamera->GetRuntimeData().cameraStates[RE::CameraStates::kFirstPerson] ||
+		playerCamera->currentState == playerCamera->GetRuntimeData().cameraStates[RE::CameraStates::kThirdPerson] ||
+		playerCamera->currentState == playerCamera->GetRuntimeData().cameraStates[RE::CameraStates::kMount]) {
 		RE::NiNode* root = playerCamera->cameraRoot.get();
 		if (root) {
 			ret.x = root->world.translate.x;
@@ -439,7 +429,9 @@ void DoF::Draw(TextureInfo& inout_tex)
 		.HighlightShape = (uint)settings.HighlightShape,
 		.HighlightShapeRotationAngle = settings.HighlightShapeRotationAngle,
 		.PetzvalStrength = settings.PetzvalStrength,
-		.AutoFocus = autoFocus
+		.AutoFocus = autoFocus,
+		.MaxNearCoCRadius = std::max(settings.MaxNearCoCRadius, 1e-4f),
+		.MaxFarCoCRadius = std::max(settings.MaxFarCoCRadius, 1e-4f)
 	};
 	dofCB->Update(dofData);
 
@@ -481,7 +473,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	// Calculate CoC
 	{
-		CS_GPU_PASS("PostProcessing::DoF::CoC");
+		globals::profiler->BeginPass("PostProcessing::DoF::CoC");
 		state->BeginPerfEvent("Calculate CoC");
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(1) = texPreFocus->srv.get();
@@ -494,13 +486,14 @@ void DoF::Draw(TextureInfo& inout_tex)
 		context->CSSetShader(CalculateCoCCS.get(), nullptr, 0);
 		context->Dispatch(dispatchWidth, dispatchHeight, 1);
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	resetViews();
 
 	// CoC Tile
 	{
-		CS_GPU_PASS("PostProcessing::DoF::CoCTile");
+		globals::profiler->BeginPass("PostProcessing::DoF::CoCTile");
 		state->BeginPerfEvent("CoC Tile");
 		srvs.at(3) = texCoC->srv.get();
 		uavs.at(2) = texCoCTileTmp->uav.get();
@@ -535,11 +528,12 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// CoC Gaussian Blur (coc uses srv3 and uav2)
 	{
-		CS_GPU_PASS("PostProcessing::DoF::CoCBlur");
+		globals::profiler->BeginPass("PostProcessing::DoF::CoCBlur");
 		state->BeginPerfEvent("CoC Gaussian Blur");
 		srvs.at(3) = texCoCTileNeighbor->srv.get();
 		uavs.at(2) = texCoCBlur1->uav.get();
@@ -563,72 +557,70 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// Blur
 	{
-		{
-			CS_GPU_PASS("PostProcessing::DoF::PreBlur");
-			state->BeginPerfEvent("Pre Blur");
-			srvs.at(0) = inout_tex.srv;
-			srvs.at(3) = texCoC->srv.get();
-			srvs.at(4) = texCoCBlur2->srv.get();
-			uavs.at(0) = texPreBlurred->uav.get();
+		globals::profiler->BeginPass("PostProcessing::DoF::PreBlur");
+		state->BeginPerfEvent("Pre Blur");
+		srvs.at(0) = inout_tex.srv;
+		srvs.at(3) = texCoC->srv.get();
+		srvs.at(4) = texCoCBlur2->srv.get();
+		uavs.at(0) = texPreBlurred->uav.get();
 
-			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-			context->CSSetShader(BlurCS.get(), nullptr, 0);
-			context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
+		context->CSSetShader(BlurCS.get(), nullptr, 0);
+		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
-			resetViews();
-			state->EndPerfEvent();
-		}
+		resetViews();
+		state->EndPerfEvent();
+		globals::profiler->EndPass();
 
-		{
-			CS_GPU_PASS("PostProcessing::DoF::FarBlur");
-			state->BeginPerfEvent("Far Blur");
-			srvs.at(0) = texPreBlurred->srv.get();
-			srvs.at(3) = texCoC->srv.get();
-			srvs.at(4) = texCoCBlur2->srv.get();
-			if (owner)
-				srvs.at(8) = owner->bokehResources.GetShapeSRV(std::clamp(settings.HighlightShape - 1, 0, BokehResources::NUM_BUILTIN_SHAPES - 1));
-			uavs.at(0) = texFarBlurred->uav.get();
+		globals::profiler->BeginPass("PostProcessing::DoF::FarBlur");
+		state->BeginPerfEvent("Far Blur");
+		srvs.at(0) = texPreBlurred->srv.get();
+		srvs.at(3) = texCoC->srv.get();
+		srvs.at(4) = texCoCBlur2->srv.get();
+		if (owner)
+			srvs.at(8) = owner->bokehResources.GetShapeSRV(std::clamp(settings.HighlightShape - 1, 0, BokehResources::NUM_BUILTIN_SHAPES - 1));
+		uavs.at(0) = texFarBlurred->uav.get();
 
-			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-			context->CSSetShader(FarBlurCS.get(), nullptr, 0);
-			context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
+		context->CSSetShader(FarBlurCS.get(), nullptr, 0);
+		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
-			resetViews();
-			state->EndPerfEvent();
-		}
+		resetViews();
+		state->EndPerfEvent();
+		globals::profiler->EndPass();
 
-		{
-			CS_GPU_PASS("PostProcessing::DoF::NearBlur");
-			state->BeginPerfEvent("Near Blur");
-			srvs.at(0) = texFarBlurred->srv.get();
-			srvs.at(3) = texCoCTileNeighbor->srv.get();
-			srvs.at(4) = texCoCBlur2->srv.get();
-			if (owner)
-				srvs.at(8) = owner->bokehResources.GetShapeSRV(std::clamp(settings.HighlightShape - 1, 0, BokehResources::NUM_BUILTIN_SHAPES - 1));
-			uavs.at(0) = texNearBlurred->uav.get();
+		globals::profiler->BeginPass("PostProcessing::DoF::NearBlur");
+		state->BeginPerfEvent("Near Blur");
+		srvs.at(0) = texFarBlurred->srv.get();
+		srvs.at(3) = texCoCTileNeighbor->srv.get();
+		srvs.at(4) = texCoCBlur2->srv.get();
+		if (owner)
+			srvs.at(8) = owner->bokehResources.GetShapeSRV(std::clamp(settings.HighlightShape - 1, 0, BokehResources::NUM_BUILTIN_SHAPES - 1));
+		uavs.at(0) = texNearBlurred->uav.get();
 
-			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-			context->CSSetShader(NearBlurCS.get(), nullptr, 0);
-			context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
+		context->CSSetShader(NearBlurCS.get(), nullptr, 0);
+		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
-			resetViews();
-			state->EndPerfEvent();
-		}
+		resetViews();
+		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// Tent Filter
 	{
-		CS_GPU_PASS("PostProcessing::DoF::TentFilter");
+		globals::profiler->BeginPass("PostProcessing::DoF::TentFilter");
 		state->BeginPerfEvent("Tent Filter");
 		srvs.at(0) = texFarBlurred->srv.get();
 		uavs.at(0) = texBlurredFiltered->uav.get();
@@ -641,17 +633,22 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
+
+	// Post Smoothing only touches out of focus highlights; when it's disabled the combiner can write
+	// straight into the output and we save two full res passes.
+	const bool doPostSmoothing = settings.PostBlurSmoothing >= 0.01f;
 
 	// Combiner
 	{
-		CS_GPU_PASS("PostProcessing::DoF::Combiner");
+		globals::profiler->BeginPass("PostProcessing::DoF::Combiner");
 		state->BeginPerfEvent("Combiner");
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(3) = texCoC->srv.get();
 		srvs.at(5) = texBlurredFiltered->srv.get();
 		srvs.at(6) = texNearBlurred->srv.get();
-		uavs.at(0) = texPostSmooth->uav.get();
+		uavs.at(0) = doPostSmoothing ? texPostSmooth->uav.get() : texOutput->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
@@ -661,11 +658,12 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	// Post Smooth
-	{
-		CS_GPU_PASS("PostProcessing::DoF::PostSmooth");
+	if (doPostSmoothing) {
+		globals::profiler->BeginPass("PostProcessing::DoF::PostSmooth");
 		state->BeginPerfEvent("Post Smooth");
 		srvs.at(0) = texPostSmooth->srv.get();
 		srvs.at(3) = texCoC->srv.get();
@@ -692,6 +690,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 		state->EndPerfEvent();
+		globals::profiler->EndPass();
 	}
 
 	samplers.fill(nullptr);
