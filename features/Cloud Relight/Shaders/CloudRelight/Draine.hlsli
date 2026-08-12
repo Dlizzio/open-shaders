@@ -29,19 +29,46 @@
 //   https://doi.org/10.1145/3587421.3595409
 //   https://research.nvidia.com/labs/rtr/approximate-mie/
 
-// EVAL for the Draine (and therefore Cornette-Shanks) phase function
+// EVAL and SAMPLE for the Draine (and therefore Cornette-Shanks) phase function
 //   g = HG shape parameter
 //   a = "alpha" shape parameter
 
-// Warning: this function doesn't special case isotropic scattering and can numerically fail for certain inputs
+// Warning: these functions don't special case isotropic scattering and can numerically fail for certain inputs
 
 #include "Common/Math.hlsli"
+static const float c_pi = Math::PI;
 
 // eval:
 //   u = dot(prev_dir, next_dir)
 float evalDraine(in float u, in float g, in float a)
 {
-	return ((1 - g * g) * (1 + a * u * u)) / (4. * (1 + (a * (1 + 2 * g * g)) / 3.) * Math::PI * pow(1 + g * g - 2 * g * u, 1.5));
+	return ((1 - g * g) * (1 + a * u * u)) / (4. * (1 + (a * (1 + 2 * g * g)) / 3.) * c_pi * pow(1 + g * g - 2 * g * u, 1.5));
+}
+
+// sample: (sample an exact deflection cosine)
+//   xi = a uniform random real in [0,1]
+float sampleDraineCos(in float xi, in float g, in float a)
+{
+	const float g2 = g * g;
+	const float g3 = g * g2;
+	const float g4 = g2 * g2;
+	const float g6 = g2 * g4;
+	const float pgp1_2 = (1 + g2) * (1 + g2);
+	const float T1 = (-1 + g2) * (4 * g2 + a * pgp1_2);
+	const float T1a = -a + a * g4;
+	const float T1a3 = T1a * T1a * T1a;
+	const float T2 = -1296 * (-1 + g2) * (a - a * g2) * (T1a) * (4 * g2 + a * pgp1_2);
+	const float T3 = 3 * g2 * (1 + g * (-1 + 2 * xi)) + a * (2 + g2 + g3 * (1 + 2 * g2) * (-1 + 2 * xi));
+	const float T4a = 432 * T1a3 + T2 + 432 * (a - a * g2) * T3 * T3;
+	const float T4b = -144 * a * g2 + 288 * a * g4 - 144 * a * g6;
+	const float T4b3 = T4b * T4b * T4b;
+	const float T4 = T4a + sqrt(-4 * T4b3 + T4a * T4a);
+	const float T4p3 = pow(T4, 1.0 / 3.0);
+	const float T6 = (2 * T1a + (48 * pow(2, 1.0 / 3.0) * (-(a * g2) + 2 * a * g4 - a * g6)) / T4p3 +
+						 T4p3 / (3. * pow(2, 1.0 / 3.0))) /
+	                 (a - a * g2);
+	const float T5 = 6 * (1 + g2) + T6;
+	return (1 + g2 - pow(-0.5 * sqrt(T5) + sqrt(6 * (1 + g2) - (8 * T3) / (a * (-1 + g2) * sqrt(T5)) - T6) / 2., 2)) / (2. * g);
 }
 
 #endif
