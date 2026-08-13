@@ -135,77 +135,85 @@ void CloudShadows::PropagateToCompletion(int side)
 
 void CloudShadows::SkyShaderHacks()
 {
-	if (overrideSky) {
-		auto renderer = globals::game::renderer;
-		auto context = globals::d3d::context;
+	if (!overrideSky)
+		return;
 
-		auto reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
 
-		// render targets
-		ID3D11RenderTargetView* rtvs[4];
-		ID3D11DepthStencilView* dsv;
-		context->OMGetRenderTargets(3, rtvs, &dsv);
+	auto reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
 
-		int side = -1;
-		for (int i = 0; i < 6; ++i)
-			if (rtvs[0] == reflections.cubeSideRTV[i]) {
-				side = i;
-				break;
-			}
-		if (side == -1)
-			return;
+	ID3D11RenderTargetView* rtvs[4];
+	ID3D11DepthStencilView* dsv;
+	context->OMGetRenderTargets(3, rtvs, &dsv);
 
-		CheckResourcesSide(side);
-
-		int layer = currentLayerForDraw;
-
-		unsigned long highBit;
-		int prevLayer = _BitScanReverse(&highBit, renderedLayersMask[side]) ? static_cast<int>(highBit) : -1;
-
-		UINT subresource = D3D11CalcSubresource(0, side, cubemapMipLevels);
-
-		int fromLayer = std::max(prevLayer, 0);
-
-		context->CopyResource(texSelfShadowCopy->resource.get(), texCloudShadowLayers[layer]->resource.get());
-
-		if (layer > 0) {
-			context->CopySubresourceRegion(
-				texCloudShadowLayers[layer]->resource.get(), subresource, 0, 0, 0,
-				texCloudShadowLayers[fromLayer]->resource.get(), subresource, nullptr);
+	int side = -1;
+	for (int i = 0; i < 6; ++i) {
+		if (rtvs[0] == reflections.cubeSideRTV[i]) {
+			side = i;
+			break;
 		}
+	}
 
-		ID3D11ShaderResourceView* selfShadowSrv = texSelfShadowCopy->srv.get();
-		context->PSSetShaderResources(26, 1, &selfShadowSrv);
-
-		rtvs[3] = cloudShadowLayerRTVs[layer][side];
-		context->OMSetRenderTargets(4, rtvs, nullptr);
-
-		float blendFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-		UINT sampleMask = 0xffffffff;
-
-		context->OMSetBlendState(cloudShadowBlendState, blendFactor, sampleMask);
-
-		auto cubemapDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kCUBEMAP_REFLECTIONS];
-		context->PSSetShaderResources(17, 1, &cubemapDepth.depthSRV);
-
-		// Release COM objects to prevent memory leaks
+	if (side == -1) {
 		for (int i = 0; i < 3; ++i) {
 			if (rtvs[i])
 				rtvs[i]->Release();
 		}
 		if (dsv)
 			dsv->Release();
-
-		renderedLayersMask[side] |= (1u << layer);
-
 		overrideSky = false;
+		return;
 	}
+
+	CheckResourcesSide(side);
+
+	int layer = currentLayerForDraw;
+
+	unsigned long highBit;
+	int previousLayer = _BitScanReverse(&highBit, renderedLayersMask[side]) ? static_cast<int>(highBit) : -1;
+	int sourceLayer = std::max(previousLayer, 0);
+	UINT subresource = D3D11CalcSubresource(0, side, cubemapMipLevels);
+
+	context->CopyResource(texSelfShadowCopy->resource.get(), texCloudShadowLayers[layer]->resource.get());
+
+	if (layer > 0 && sourceLayer < layer) {
+		context->CopySubresourceRegion(
+			texCloudShadowLayers[layer]->resource.get(), subresource, 0, 0, 0,
+			texCloudShadowLayers[sourceLayer]->resource.get(), subresource, nullptr);
+	}
+
+	ID3D11ShaderResourceView* selfShadowSrv = texSelfShadowCopy->srv.get();
+	context->PSSetShaderResources(26, 1, &selfShadowSrv);
+
+	rtvs[3] = cloudShadowLayerRTVs[layer][side];
+
+	context->OMSetRenderTargets(4, rtvs, nullptr);
+
+	float blendFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	UINT sampleMask = 0xffffffff;
+
+	context->OMSetBlendState(cloudShadowBlendState, blendFactor, sampleMask);
+
+	auto cubemapDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kCUBEMAP_REFLECTIONS];
+	context->PSSetShaderResources(17, 1, &cubemapDepth.depthSRV);
+
+	for (int i = 0; i < 3; ++i) {
+		if (rtvs[i])
+			rtvs[i]->Release();
+	}
+	if (dsv)
+		dsv->Release();
+
+	renderedLayersMask[side] |= 1u << layer;
+
+	overrideSky = false;
 }
 
 int CloudShadows::FindCloudLayer(RE::BSRenderPass* Pass)
 {
 	auto sky = globals::game::sky;
-	if (!sky || !sky->clouds)
+	if (!Pass || !sky || !sky->clouds)
 		return -1;
 
 	for (int i = 0; i < kMaxCloudLayers; i++) {
@@ -220,12 +228,13 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 	auto shadowState = globals::game::shadowState;
 
 	GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState);
+	if (!Pass || !Pass->shaderProperty)
+		return;
 
 	auto skyProperty = static_cast<const RE::BSSkyShaderProperty*>(Pass->shaderProperty);
 
 	if (skyProperty->uiSkyObjectType != RE::BSSkyShaderProperty::SkyObject::SO_CLOUDS)
 		return;
-
 	int layer = FindCloudLayer(Pass);
 	if (layer < 0)
 		return;
@@ -271,6 +280,7 @@ void CloudShadows::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	auto context = globals::d3d::context;
 
 	{
 		auto reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
@@ -284,6 +294,7 @@ void CloudShadows::SetupResources()
 
 		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R8_UNORM;
 		cubemapMipLevels = texDesc.MipLevels;
+		const float transparentBlack[4] = {};
 
 		for (int layer = 0; layer < kMaxCloudLayers; ++layer) {
 			char name[64];
@@ -296,6 +307,7 @@ void CloudShadows::SetupResources()
 				rtvDesc.Format = texDesc.Format;
 				DX::ThrowIfFailed(device->CreateRenderTargetView(texCloudShadowLayers[layer]->resource.get(), &rtvDesc, &cloudShadowLayerRTVs[layer][face]));
 				Util::SetResourceName(cloudShadowLayerRTVs[layer][face], "CloudShadows::Layer[%d] RTV[%d]", layer, face);
+				context->ClearRenderTargetView(cloudShadowLayerRTVs[layer][face], transparentBlack);
 			}
 		}
 

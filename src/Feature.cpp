@@ -4,6 +4,7 @@
 #include "FeatureVersions.h"
 #include "Features/CSEditor.h"
 #include "Features/CSUtility.h"
+#include "Features/CloudRelight.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #if defined(ENABLE_EFFECTS11)
@@ -243,6 +244,7 @@ namespace
 			&globals::features::lightLimitFix,
 			&globals::features::dynamicCubemaps,
 			&globals::features::cloudShadows,
+			&globals::features::cloudRelight,
 			&globals::features::waterEffects,
 			&globals::features::performanceOverlay,
 			&globals::features::subsurfaceScattering,

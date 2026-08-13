@@ -164,6 +164,17 @@ namespace SharedData
 		float3 pad0;
 	};
 
+	struct CloudRelightSettings
+	{
+		uint enabled;
+		float cloudRelightMix;
+		float cloudOriginalMix;
+		float silverLiningMix;
+
+		float silverLiningSpread;
+		float3 pad;
+	};
+
 	struct LODBlendingSettings
 	{
 		float LODTerrainBrightness;
@@ -428,6 +439,7 @@ namespace SharedData
 		WetnessEffectsSettings wetnessEffectsSettings;
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
+		CloudRelightSettings cloudRelightSettings;
 		LODBlendingSettings lodBlendingSettings;
 		HairSpecularSettings hairSpecularSettings;
 		TerrainVariationSettings terrainVariationSettings;
