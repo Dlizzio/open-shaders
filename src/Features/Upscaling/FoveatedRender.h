@@ -18,6 +18,7 @@
 //
 // ============================================================================
 
+#include "../../Utils/BootSnapshot.h"
 #include "../../Utils/Subrect.h"
 
 struct FoveatedRender
@@ -75,6 +76,11 @@ struct FoveatedRender
 		float subrectFeatherWidth = 64.0f;
 		float subrectDitherStrength = 1.0f;
 	};
+
+	inline static constexpr Util::Settings::RestartTable<Settings, 1> kRestartFields{ {
+		UTIL_RESTART_FIELD(Settings, enabled, "Foveated DLSS"),
+	} };
+	Util::Settings::BootSnapshot<Settings> bootSnapshot{ kRestartFields };
 
 	Settings settings;
 	Util::Subrect::Controller subrectController;
