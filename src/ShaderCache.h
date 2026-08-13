@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <deque>
 #include <efsw/efsw.hpp>
 #include <unordered_set>
 #include <vector>
@@ -652,6 +653,29 @@ namespace SIE
 		 * entries whose status is `ShaderCompilationTask::Status::Failed`.
 		 */
 		uint64_t GetCurrentFailedCount();
+		/// One shader compile failure: `key` is GetShaderString's cache key (shader class +
+		/// merged feature defines, plus a filename that is fxpFilename even for ImageSpace
+		/// shaders), identifying the technique/permutation without a separate descriptor
+		/// lookup; `path` is the actual source file compiled (originalShaderName for
+		/// ImageSpace shaders), which can differ from the filename embedded in `key`.
+		struct CompileFailure
+		{
+			std::string key;
+			std::string path;
+			std::string error;
+			uint64_t epoch = 0;
+			uint32_t frame = 0;
+		};
+		/// Records a compile failure (bounded ring, newest last). Thread-safe; called from
+		/// whichever thread ran the failed compile.
+		void RecordCompileFailure(std::string a_key, std::string a_path, std::string a_error);
+		/// Most recent compile failures, oldest first. Returned by value: devbench's listener
+		/// thread reads this while compiles run concurrently on other threads.
+		std::vector<CompileFailure> GetRecentCompileFailures() const
+		{
+			std::lock_guard lock{ compileFailuresMutex };
+			return { recentCompileFailures.begin(), recentCompileFailures.end() };
+		}
 		uint64_t GetTotalTasks();
 		uint64_t GetDiskHitTasks();
 		uint64_t GetDigestComputeCount();
@@ -1056,6 +1080,11 @@ namespace SIE
 		mutable std::mutex mismatchesMutex;
 		std::vector<CacheMismatch> cacheMismatches;
 		std::vector<CacheMismatch> previousCacheMismatches;
+		// Guards recentCompileFailures: appended from whichever thread runs a failed compile,
+		// read from devbench's listener thread via GetRecentCompileFailures.
+		static constexpr size_t kMaxRecentCompileFailures = 32;
+		mutable std::mutex compileFailuresMutex;
+		std::deque<CompileFailure> recentCompileFailures;
 		std::vector<std::string> heldMismatchDefines;
 		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
 		bool isAsync = true;
