@@ -42,11 +42,15 @@ namespace SceneSettingsUI
 	constexpr float kSceneFlyoutBackgroundAlpha = 0.95f;
 	constexpr float kChannelSelectorWidthEm = 4.0f;
 	constexpr float kStringEditorMaxWidthEm = 16.0f;
+	constexpr float kLocationTransitionColumnWidthEm = 11.0f;
+	constexpr float kLocationTransitionSliderMaxSeconds = 30.0f;
 	constexpr float kTableBorderWidth = 1.0f;
 	constexpr const char* kEllipsis = "...";
 	constexpr const char* kNumericWidthSample = "-000.000";
 	constexpr std::string_view kDisplaySeparator = " / ";
 	static int s_addDialogFrame = -1;
+	static AddSettingState* s_activeAddDialog = nullptr;
+	static std::uint64_t s_transientGeneration = 1;
 	using SettingEntry = SceneSettingsManager::SettingEntry;
 
 	static size_t PreviousUtf8CodepointBoundary(std::string_view text, size_t offset)
@@ -85,6 +89,21 @@ namespace SceneSettingsUI
 	static float GetSceneActionButtonSize()
 	{
 		return ImGui::GetFrameHeight() * C::FLYOUT_BUTTON_SCALE;
+	}
+
+	static bool DrawSceneAddButton(const char* id, float size)
+	{
+		const bool pressed = ImGui::InvisibleButton(id, ImVec2(size, size));
+		const auto minimum = ImGui::GetItemRectMin();
+		const auto maximum = ImGui::GetItemRectMax();
+		const bool held = ImGui::IsItemActive();
+		const bool hovered = ImGui::IsItemHovered();
+		const auto color = ImGui::GetColorU32(
+			held ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
+		ImGui::RenderFrame(minimum, maximum, color, true, ImGui::GetStyle().FrameRounding);
+
+		ImGui::RenderTextClipped(minimum, maximum, "+", nullptr, nullptr, ImVec2(0.5f, 0.5f));
+		return pressed;
 	}
 
 	static Util::FlyoutStyle GetSceneFlyoutStyle()
@@ -230,7 +249,7 @@ namespace SceneSettingsUI
 	}
 
 	SourceGroup BuildSourceGroup(const std::vector<SceneSettingsManager::SettingEntry>& entries,
-		EntrySource sourceFilter, bool filterBySource, bool transitionOnly)
+		EntrySource sourceFilter, bool filterBySource, bool transitionOnly, bool multiColumn)
 	{
 		SourceGroup group;
 		std::vector<SettingId> order;
@@ -268,6 +287,10 @@ namespace SceneSettingsUI
 			SceneSettingsManager::SettingControlInfo info;
 			if (!SceneSettingsManager::GetSettingControlInfo(entry, info) ||
 				info.controlType == SceneSettingControlType::Scalar || info.componentCount < 2)
+				continue;
+			if (multiColumn &&
+				info.aggregatePresentation == SceneSettingsManager::AggregatePresentation::Components &&
+				info.unifiedEditMode == SceneSettingsManager::UnifiedEditMode::None)
 				continue;
 			auto [candidateIt, inserted] = candidates.try_emplace(AggregateKey{
 				entry.featureShortName, info.settingPath, info.settingKey,
@@ -548,6 +571,7 @@ namespace SceneSettingsUI
 		state.selectedMembers.assign(state.cachedSettings.size(), -1);
 		state.cachedAddedMembers.clear();
 		state.addedMembersCached = false;
+		state.cachedAddedRevision = 0;
 		for (size_t index = 0; index < state.cachedSettings.size(); ++index) {
 			const auto& descriptor = state.cachedSettings[index];
 			const auto storedAll = GetStoredAllMemberIndex(descriptor);
@@ -630,9 +654,13 @@ namespace SceneSettingsUI
 				width = std::max(ImGui::GetFrameHeight(), width - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
 			ImGui::SetNextItemWidth(width);
 			ImGui::PushID(static_cast<int>(level));
-			if (ImGui::BeginCombo("##SubFeatureSelect", label.c_str())) {
+			if (Util::BeginSearchableCombo("##SubFeatureSelect", label.c_str())) {
 				int i = 0;
 				for (const auto& [name, _] : node->children) {
+					if (!Util::SearchableComboMatches(name)) {
+						++i;
+						continue;
+					}
 					if (ImGui::Selectable(name.c_str(), i == selectedIdx)) {
 						if (state.selectedSubFeaturePath.size() <= level)
 							state.selectedSubFeaturePath.resize(level + 1, kNoSubFeatureSelection);
@@ -645,7 +673,7 @@ namespace SceneSettingsUI
 						ImGui::SetItemDefaultFocus();
 					++i;
 				}
-				ImGui::EndCombo();
+				Util::EndSearchableCombo();
 			}
 			ImGui::PopID();
 
@@ -685,31 +713,214 @@ namespace SceneSettingsUI
 
 	// --- Shared Drawing ---
 
-	void OpenAddDialog(SceneType type, AddSettingState& state)
+	static void OpenAddDialogWithFeatures(AddSettingState& state, std::vector<std::string> features)
 	{
+		if (s_activeAddDialog && s_activeAddDialog != &state)
+			s_activeAddDialog->Reset();
 		state.Reset();
 		state.dialogOpen = true;
-		state.cachedFeatureNames = GetFeatureNamesForType(type);
+		state.cachedFeatureNames = std::move(features);
+		s_activeAddDialog = &state;
+		++s_transientGeneration;
+	}
+
+	void OpenAddDialog(SceneType type, AddSettingState& state)
+	{
+		OpenAddDialogWithFeatures(state, GetFeatureNamesForType(type));
 	}
 
 	void OpenWeatherAddDialog(RE::FormID /*weatherId*/, AddSettingState& state)
 	{
-		state.Reset();
-		state.dialogOpen = true;
-		state.cachedFeatureNames = SceneSettingsManager::GetExteriorRelevantFeatureNames();
+		OpenAddDialogWithFeatures(state, SceneSettingsManager::GetExteriorRelevantFeatureNames());
+	}
+
+	static bool DrawSearchableStringPicker(const char* label, const char* emptyPreview,
+		int& selectedIndex, const std::vector<std::string>& labels, std::uint64_t revision)
+	{
+		const char* preview = selectedIndex >= 0 && selectedIndex < static_cast<int>(labels.size()) ?
+		                          labels[selectedIndex].c_str() : emptyPreview;
+		if (!Util::BeginSearchableCombo(label, preview, ImGuiComboFlags_None, &selectedIndex))
+			return false;
+
+		const auto getter = [](const void* data, int index) -> const char* {
+			const auto& items = *static_cast<const std::vector<std::string>*>(data);
+			return index >= 0 && index < static_cast<int>(items.size()) ? items[index].c_str() : nullptr;
+		};
+		bool changed = false;
+		Util::SearchableComboClipper clipper;
+		clipper.Begin(static_cast<int>(labels.size()), getter, &labels, revision);
+		clipper.IncludeItemByIndex(selectedIndex);
+		while (clipper.Step()) {
+			for (int displayIndex = clipper.GetDisplayStart(); displayIndex < clipper.GetDisplayEnd();
+				displayIndex++) {
+				const int itemIndex = clipper.GetItemIndex(displayIndex);
+				if (itemIndex < 0 || itemIndex >= static_cast<int>(labels.size()))
+					continue;
+				const bool selected = itemIndex == selectedIndex;
+				ImGui::PushID(itemIndex);
+				if (ImGui::Selectable(labels[itemIndex].c_str(), selected)) {
+					selectedIndex = itemIndex;
+					changed = true;
+				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+				ImGui::PopID();
+			}
+		}
+		Util::EndSearchableCombo();
+		return changed;
+	}
+
+	static std::string GetCopySourceLabel(const SceneSettingsManager::CopySource& source)
+	{
+		switch (source.context.type) {
+		case SceneSettingsManager::SceneContextType::TimeOfDay:
+			return std::format("{} / {}",
+				T("feature.scene_manager.tab.time_of_day", "Time of Day"), source.displayName);
+		case SceneSettingsManager::SceneContextType::Weather:
+			return std::format("{} / {}",
+				T("feature.scene_manager.copy.weather", "Weather"), source.displayName);
+		case SceneSettingsManager::SceneContextType::Location:
+			return source.displayName;
+		default:
+			return source.displayName;
+		}
+	}
+
+	static void RefreshCopyCandidates(AddSettingState& state,
+		const SceneSettingsManager::SceneContextId& destination)
+	{
+		state.copy.candidates.clear();
+		state.copy.candidateLabels.clear();
+		state.copy.selectedCandidate = 0;
+		if (state.copy.selectedSource < 0 ||
+			state.copy.selectedSource >= static_cast<int>(state.copy.sources.size()))
+			return;
+
+		auto* manager = SceneSettingsManager::GetSingleton();
+		auto candidates = manager->GetCopyCandidates(
+			state.copy.sources[state.copy.selectedSource].context, destination);
+		for (auto& candidate : candidates)
+			if (candidate.compatible)
+				state.copy.candidates.push_back(std::move(candidate));
+		state.copy.candidateLabels.reserve(state.copy.candidates.size() + 1);
+		const auto candidateCount = state.copy.candidates.size();
+		state.copy.candidateLabels.push_back(std::vformat(
+			T("feature.scene_manager.copy.all_compatible", "All compatible settings ({0})"),
+			std::make_format_args(candidateCount)));
+		for (const auto& candidate : state.copy.candidates)
+			state.copy.candidateLabels.push_back(candidate.displayName);
+	}
+
+	static void RefreshCopySources(AddSettingState& state,
+		const SceneSettingsManager::SceneContextId& destination)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto revision = manager->GetEntryPresentationRevision();
+		if (state.copy.destination && *state.copy.destination == destination &&
+			state.copy.revision == revision)
+			return;
+
+		state.copy.Reset();
+		state.copy.destination = destination;
+		state.copy.revision = revision;
+		state.copy.sources = manager->GetCopySources(destination);
+		state.copy.sourceLabels.reserve(state.copy.sources.size());
+		for (const auto& source : state.copy.sources)
+			state.copy.sourceLabels.push_back(GetCopySourceLabel(source));
+	}
+
+	static void DrawCopySettingsSection(AddSettingState& state,
+		const SceneSettingsManager::SceneContextId& destination)
+	{
+		RefreshCopySources(state, destination);
+		if (state.copy.sources.empty())
+			return;
+
+		if (!ImGui::CollapsingHeader(T("feature.scene_manager.copy.from", "Copy from...")))
+			return;
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		if (DrawSearchableStringPicker("##CopySource",
+				T("feature.scene_manager.copy.select_source", "Select a source..."),
+				state.copy.selectedSource, state.copy.sourceLabels, state.copy.revision))
+			RefreshCopyCandidates(state, destination);
+		if (state.copy.selectedSource < 0 || state.copy.candidates.empty())
+			return;
+
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		DrawSearchableStringPicker("##CopySetting", "",
+			state.copy.selectedCandidate, state.copy.candidateLabels, state.copy.revision);
+		const bool copyAll = state.copy.selectedCandidate <= 0;
+		const auto selectedCandidateIndex = static_cast<size_t>(
+			std::max(state.copy.selectedCandidate - 1, 0));
+		std::optional<SceneSettingsManager::SettingIdentity> selectedSetting;
+		if (!copyAll && selectedCandidateIndex < state.copy.candidates.size())
+			selectedSetting = state.copy.candidates[selectedCandidateIndex].setting;
+		const auto scope = copyAll ? SceneSettingsManager::CopyScope::EntireContext :
+		                           SceneSettingsManager::CopyScope::Setting;
+		const auto& source = state.copy.sources[state.copy.selectedSource].context;
+
+		auto performCopy = [&](SceneSettingsManager::CopyConflictPolicy policy) {
+			auto result = SceneSettingsManager::GetSingleton()->CopySettings(
+				source, destination, policy, scope, selectedSetting);
+			if (result.Changed())
+				state.dialogOpen = false;
+		};
+		const auto copyButtonLabel = copyAll ?
+			T("feature.scene_manager.copy.copy_all", "Copy All Compatible Settings") :
+			T("feature.scene_manager.copy.copy_setting", "Copy Setting");
+		const auto conflictPopupId = std::format("{}##{:x}",
+			T("feature.scene_manager.copy.conflicts_title", "Existing Settings"),
+			reinterpret_cast<uintptr_t>(&state));
+		if (ImGui::Button(copyButtonLabel, ImVec2(-FLT_MIN, 0))) {
+			const auto proposed = SceneSettingsManager::GetSingleton()->GetCopyCandidates(
+				source, destination, scope, selectedSetting);
+			const bool hasConflicts = std::any_of(proposed.begin(), proposed.end(),
+				[](const auto& candidate) { return candidate.compatible && candidate.conflicts; });
+			if (hasConflicts) {
+				state.copy.conflictPromptOpen = true;
+				ImGui::OpenPopup(conflictPopupId.c_str());
+			} else {
+				performCopy(SceneSettingsManager::CopyConflictPolicy::SkipExisting);
+			}
+		}
+
+		if (ImGui::BeginPopupModal(conflictPopupId.c_str(), &state.copy.conflictPromptOpen,
+				ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::TextWrapped("%s", T("feature.scene_manager.copy.conflicts_message",
+				"Some settings already exist here. Choose how to handle them."));
+			if (ImGui::Button(T("feature.scene_manager.copy.skip_existing", "Skip Existing"))) {
+				performCopy(SceneSettingsManager::CopyConflictPolicy::SkipExisting);
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button(T("feature.scene_manager.copy.overwrite_existing", "Overwrite Existing"))) {
+				performCopy(SceneSettingsManager::CopyConflictPolicy::OverwriteExisting);
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button(T("feature.scene_manager.action.cancel", "Cancel"))) {
+				state.copy.conflictPromptOpen = false;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndPopup();
+		}
 	}
 
 	// Core add-setting dialog: renders UI and delegates data ops to callbacks.
 	static void DrawAddDialogCore(AddSettingState& state, Period period, bool addToAllPeriods,
-		bool selectAggregateMember,
+		bool selectAggregateMember, const SceneSettingsManager::SceneContextId* copyDestination,
 		std::function<std::vector<SceneSettingDescriptor>(const std::string&)> settingsFn,
 		std::function<std::set<OverrideKey>()> addedEntriesFn,
 		std::function<bool(const std::string&, const std::vector<std::string>&, const std::string&, Period)> isAddedFn,
 		std::function<bool(const std::string&, const std::vector<std::string>&, const std::string&, const json&, Period)> addFn,
 		std::function<void()> commitFn)
 	{
-		if (!state.dialogOpen)
+		if (!state.dialogOpen) {
+			if (s_activeAddDialog == &state)
+				s_activeAddDialog = nullptr;
 			return;
+		}
 		s_addDialogFrame = ImGui::GetFrameCount();
 
 		ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
@@ -724,6 +935,8 @@ namespace SceneSettingsUI
 		}
 		if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
 			ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+		if (copyDestination)
+			DrawCopySettingsSection(state, *copyDestination);
 
 		auto displayName = (state.selectedFeatureIdx >= 0 &&
 							   state.selectedFeatureIdx < static_cast<int>(state.cachedFeatureNames.size())) ?
@@ -731,9 +944,11 @@ namespace SceneSettingsUI
 		                       std::string(T("feature.scene_manager.select_feature", "Select Feature..."));
 
 		ImGui::SetNextItemWidth(-FLT_MIN);
-		if (ImGui::BeginCombo("##FeatureSelect", displayName.c_str())) {
+		if (Util::BeginSearchableCombo("##FeatureSelect", displayName.c_str())) {
 			for (int i = 0; i < static_cast<int>(state.cachedFeatureNames.size()); ++i) {
 				auto itemLabel = SceneSettingsManager::GetFeatureDisplayName(state.cachedFeatureNames[i]);
+				if (!Util::SearchableComboMatches(itemLabel))
+					continue;
 				if (ImGui::Selectable(itemLabel.c_str(), i == state.selectedFeatureIdx)) {
 					state.selectedFeatureIdx = i;
 					CacheSettings(state, settingsFn(state.cachedFeatureNames[i]));
@@ -741,13 +956,16 @@ namespace SceneSettingsUI
 				if (i == state.selectedFeatureIdx)
 					ImGui::SetItemDefaultFocus();
 			}
-			ImGui::EndCombo();
+			Util::EndSearchableCombo();
 		}
 
 		const AddSettingNode* visibleNode = nullptr;
 		if (!state.cachedSettings.empty())
 			visibleNode = !state.settingTree.children.empty() ? DrawSubFeatureSelectors(state) : &state.settingTree;
-		if (!state.addedMembersCached && state.selectedFeatureIdx >= 0 &&
+		const auto presentationRevision =
+			SceneSettingsManager::GetSingleton()->GetEntryPresentationRevision();
+		if ((!state.addedMembersCached || state.cachedAddedRevision != presentationRevision) &&
+			state.selectedFeatureIdx >= 0 &&
 			state.selectedFeatureIdx < static_cast<int>(state.cachedFeatureNames.size())) {
 			const auto& featureName = state.cachedFeatureNames[state.selectedFeatureIdx];
 			const auto addedEntries = addedEntriesFn();
@@ -755,7 +973,7 @@ namespace SceneSettingsUI
 				return addedEntries.contains(OverrideKey{
 					featureName, member.settingPath, member.key, static_cast<int>(targetPeriod) });
 			};
-			state.cachedAddedMembers.resize(state.cachedSettings.size());
+			state.cachedAddedMembers.assign(state.cachedSettings.size(), {});
 			for (size_t settingIndex = 0; settingIndex < state.cachedSettings.size(); ++settingIndex) {
 				const auto& descriptor = state.cachedSettings[settingIndex];
 				auto& addedMembers = state.cachedAddedMembers[settingIndex];
@@ -771,6 +989,7 @@ namespace SceneSettingsUI
 				}
 			}
 			state.addedMembersCached = true;
+			state.cachedAddedRevision = presentationRevision;
 		}
 		const auto selectionAlreadyAdded = [&](size_t settingIndex, int selectedMember) {
 			if (settingIndex >= state.cachedAddedMembers.size())
@@ -843,9 +1062,10 @@ namespace SceneSettingsUI
 							const auto preview = state.selectedMembers[i] < 0 ?
 							                         std::string(T("feature.scene_manager.channel.all", "All")) :
 							                         GetDescriptorMemberName(descriptor, state.selectedMembers[i]);
-							if (ImGui::BeginCombo("##Channel", preview.c_str())) {
+							if (Util::BeginSearchableCombo("##Channel", preview.c_str())) {
 								const bool allSelected = state.selectedMembers[i] < 0;
-								if (showSyntheticAll) {
+								if (showSyntheticAll && Util::SearchableComboMatches(
+									T("feature.scene_manager.channel.all", "All"))) {
 									if (ImGui::Selectable(T("feature.scene_manager.channel.all", "All"), allSelected))
 										state.selectedMembers[i] = -1;
 									if (allSelected)
@@ -853,13 +1073,15 @@ namespace SceneSettingsUI
 								}
 								for (size_t member = 0; member < descriptor.members.size(); ++member) {
 									auto memberName = GetDescriptorMemberName(descriptor, member);
+									if (!Util::SearchableComboMatches(memberName))
+										continue;
 									const bool selected = state.selectedMembers[i] == static_cast<int>(member);
 									if (ImGui::Selectable(memberName.c_str(), selected))
 										state.selectedMembers[i] = static_cast<int>(member);
 									if (selected)
 										ImGui::SetItemDefaultFocus();
 								}
-								ImGui::EndCombo();
+								Util::EndSearchableCombo();
 							}
 						}
 						ImGui::PopID();
@@ -893,10 +1115,7 @@ namespace SceneSettingsUI
 						const auto& descriptor = state.cachedSettings[i];
 						const int selectedMember = selectAggregateMember ? state.selectedMembers[i] : -1;
 						ForEachSelectedDescriptorMember(descriptor, selectedMember, [&](const auto& member) {
-							auto currentValue = SceneSettingsManager::GetFeatureSettingValue(
-								featureName, member.settingPath, member.key);
-							if (currentValue.is_null())
-								currentValue = member.value;
+							const auto& currentValue = member.value;
 							if (addToAllPeriods) {
 								for (int p = 0; p < kPeriodCount; ++p)
 									if (!isAddedFn(featureName, member.settingPath, member.key, static_cast<Period>(p)))
@@ -909,23 +1128,83 @@ namespace SceneSettingsUI
 					if (added)
 						commitFn();
 					state.dialogOpen = false;
+					if (s_activeAddDialog == &state)
+						s_activeAddDialog = nullptr;
 				}
 			}
 		}
 
 		ImGui::End();
+		if (!state.dialogOpen && s_activeAddDialog == &state)
+			s_activeAddDialog = nullptr;
 	}
 
 	void DrawAddSettingDialog(SceneType type, AddSettingState& state, Period period, bool addToAllPeriods)
 	{
+		if (!state.dialogOpen) {
+			if (s_activeAddDialog == &state)
+				s_activeAddDialog = nullptr;
+			return;
+		}
 		auto* manager = SceneSettingsManager::GetSingleton();
-		DrawAddDialogCore(state, period, addToAllPeriods, type == SceneType::TimeOfDay, [type](const std::string& feat) { return (type == SceneType::TimeOfDay) ? SceneSettingsManager::GetTransitionableSceneSettings(feat) : SceneSettingsManager::GetFeatureSceneSettings(feat); }, [=] { return BuildUserEntrySet(manager->GetEntries(type)); }, [type](const std::string& feat, const std::vector<std::string>& path, const std::string& key, Period p) { return IsAlreadyAdded(type, feat, path, key, p); }, [=](const std::string& feat, const std::vector<std::string>& path, const std::string& key, const json& val, Period p) { return manager->AddSetting(type, feat, path, key, val, p, true); }, [=]() { manager->CommitSceneSettingChanges(); });
+		std::optional<SceneSettingsManager::SceneContextId> copyDestination;
+		if (type == SceneType::TimeOfDay && !addToAllPeriods && period != Period::Count)
+			copyDestination = {
+				.type = SceneSettingsManager::SceneContextType::TimeOfDay,
+				.period = period,
+			};
+		DrawAddDialogCore(state, period, addToAllPeriods, type == SceneType::TimeOfDay,
+			copyDestination ? &*copyDestination : nullptr,
+			[type](const std::string& feature) {
+				return type == SceneType::TimeOfDay ?
+				           SceneSettingsManager::GetTransitionableSceneSettings(feature) :
+				           SceneSettingsManager::GetFeatureSceneSettings(type, feature);
+			},
+			[=] { return BuildUserEntrySet(manager->GetEntries(type)); },
+			[type](const std::string& feature, const std::vector<std::string>& path,
+				const std::string& key, Period targetPeriod) {
+				return IsAlreadyAdded(type, feature, path, key, targetPeriod);
+			},
+			[=](const std::string& feature, const std::vector<std::string>& path,
+				const std::string& key, const json& value, Period targetPeriod) {
+				return manager->AddSetting(
+					type, feature, path, key, value, targetPeriod, true);
+			},
+			[=] { manager->CommitSceneSettingChanges(); });
 	}
 
 	void DrawWeatherAddDialog(RE::FormID weatherId, AddSettingState& state, Period period, bool addToAllPeriods)
 	{
+		if (!state.dialogOpen) {
+			if (s_activeAddDialog == &state)
+				s_activeAddDialog = nullptr;
+			return;
+		}
 		auto* manager = SceneSettingsManager::GetSingleton();
-		DrawAddDialogCore(state, period, addToAllPeriods, true, [](const std::string& feat) { return SceneSettingsManager::GetTransitionableSceneSettings(feat); }, [=] { return BuildUserEntrySet(manager->GetWeatherConfig(weatherId).entries); }, [=](const std::string& feat, const std::vector<std::string>& path, const std::string& key, Period p) { return manager->HasWeatherEntryForPeriod(weatherId, feat, path, key, p, EntrySource::User); }, [=](const std::string& feat, const std::vector<std::string>& path, const std::string& key, const json&, Period p) { return manager->AddWeatherSetting(weatherId, feat, path, key, p, true); }, [=]() { manager->SaveAllUserSettings(); });
+		std::optional<SceneSettingsManager::SceneContextId> copyDestination;
+		if (!addToAllPeriods && period != Period::Count)
+			copyDestination = {
+				.type = SceneSettingsManager::SceneContextType::Weather,
+				.period = period,
+				.weatherId = weatherId,
+			};
+		DrawAddDialogCore(state, period, addToAllPeriods, true,
+			copyDestination ? &*copyDestination : nullptr,
+			[](const std::string& feature) {
+				return SceneSettingsManager::GetTransitionableSceneSettings(feature);
+			},
+			[=] { return BuildUserEntrySet(manager->GetWeatherConfig(weatherId).entries); },
+			[=](const std::string& feature, const std::vector<std::string>& path,
+				const std::string& key, Period targetPeriod) {
+				return manager->HasWeatherEntryForPeriod(
+					weatherId, feature, path, key, targetPeriod, EntrySource::User);
+			},
+			[=](const std::string& feature, const std::vector<std::string>& path,
+				const std::string& key, const json&, Period targetPeriod) {
+				return manager->AddWeatherSetting(
+					weatherId, feature, path, key, targetPeriod, true);
+			},
+			[=] { manager->CommitSceneSettingChanges(); });
 	}
 
 	FlyoutResult DrawFlyoutControls(bool paused, bool isGroup, bool isOverwrite)
@@ -977,7 +1256,8 @@ namespace SceneSettingsUI
 	}
 
 	// Core value editor: renders the catalog-approved widget and calls updateFn on change.
-	static void DrawValueEditorCore(const SettingEntry& entry, float inputWidth, bool readOnly,
+	static void DrawValueEditorCore(const SettingEntry& entry, float inputWidth,
+		bool useFullWidthSliders, bool readOnly,
 		std::function<void(const json&)> updateFn, std::function<void()> commitFn)
 	{
 		const auto& value = entry.value;
@@ -1028,13 +1308,15 @@ namespace SceneSettingsUI
 				}
 			}
 			ImGui::SetNextItemWidth(inputWidth);
-			const bool comboOpen = ImGui::BeginCombo("##val", preview.c_str());
-			const ImGuiLastItemData comboItem = GImGui->LastItemData;
+			const bool comboOpen = Util::BeginSearchableCombo("##val", preview.c_str(),
+				ImGuiComboFlags_None, &entry.value);
 			if (comboOpen) {
 				for (size_t choiceIndex = 0; choiceIndex < choiceCount; ++choiceIndex) {
 					std::int64_t choiceValue = 0;
 					std::string choiceName;
 					if (!SceneSettingsManager::GetSettingChoice(entry, choiceIndex, choiceValue, choiceName))
+						continue;
+					if (!Util::SearchableComboMatches(choiceName))
 						continue;
 					const bool selected = choiceValue == currentValue;
 					if (ImGui::Selectable(choiceName.c_str(), selected) && !readOnly) {
@@ -1044,8 +1326,7 @@ namespace SceneSettingsUI
 					if (selected)
 						ImGui::SetItemDefaultFocus();
 				}
-				ImGui::EndCombo();
-				GImGui->LastItemData = comboItem;
+				Util::EndSearchableCombo();
 			}
 		} else switch (settingType) {
 		case SceneSettingsManager::SettingType::Boolean:
@@ -1082,9 +1363,15 @@ namespace SceneSettingsUI
 				const float minimumValue = hasBounds ? static_cast<float>(minimumDisplayValue) : 0.0f;
 				const float maximumValue = hasBounds ? static_cast<float>(maximumDisplayValue) : 0.0f;
 				const float dragSpeed = static_cast<float>(kSceneFloatDragSpeed * displayScale);
+				const auto sliderFlags = SceneSettingsManager::IsNumericInputClamped(entry) ?
+				                             ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None;
 				ImGui::SetNextItemWidth(inputWidth);
-				if (ImGui::DragFloat("##val", &val, dragSpeed, minimumValue, maximumValue,
-						displayScale == 1.0 ? "%.3f" : "%.1f") && !readOnly) {
+				const bool changed = useFullWidthSliders && hasBounds ?
+					ImGui::SliderFloat("##val", &val, minimumValue, maximumValue,
+						displayScale == 1.0 ? "%.3f" : "%.1f", sliderFlags) :
+					ImGui::DragFloat("##val", &val, dragSpeed, minimumValue, maximumValue,
+						displayScale == 1.0 ? "%.3f" : "%.1f", sliderFlags);
+				if (changed && !readOnly) {
 					double storedValue = 0.0;
 					if (SceneSettingsManager::GetNumericStoredValue(entry, val, storedValue))
 						updateFn(json(storedValue));
@@ -1101,10 +1388,16 @@ namespace SceneSettingsUI
 				std::int64_t val = value.get<std::int64_t>();
 				const auto minimumValue = static_cast<std::int64_t>(minimum);
 				const auto maximumValue = static_cast<std::int64_t>(maximum);
+				const auto sliderFlags = SceneSettingsManager::IsNumericInputClamped(entry) ?
+				                             ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None;
 				ImGui::SetNextItemWidth(inputWidth);
-				if (ImGui::DragScalar("##val", ImGuiDataType_S64, &val, kSceneIntDragSpeed,
+				const bool changed = useFullWidthSliders && hasBounds ?
+					ImGui::SliderScalar("##val", ImGuiDataType_S64, &val,
+						&minimumValue, &maximumValue, "%lld", sliderFlags) :
+					ImGui::DragScalar("##val", ImGuiDataType_S64, &val, kSceneIntDragSpeed,
 						hasBounds ? &minimumValue : nullptr,
-						hasBounds ? &maximumValue : nullptr, "%lld") && !readOnly)
+						hasBounds ? &maximumValue : nullptr, "%lld", sliderFlags);
+				if (changed && !readOnly)
 					updateFn(json(val));
 				if (!readOnly && ImGui::IsItemDeactivatedAfterEdit())
 					commitFn();
@@ -1205,13 +1498,24 @@ namespace SceneSettingsUI
 		if (readOnly)
 			ImGui::BeginDisabled();
 		ImGui::BeginGroup();
-		ImGui::SetNextItemWidth(inputWidth);
 		bool changed = false;
 		bool editDeactivated = false;
 		const bool colorPicker =
 			first.aggregatePresentation == SceneSettingsManager::AggregatePresentation::ColorPicker;
 		if (colorPicker) {
-			auto flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR;
+			const float editorWidth = showExpandedAggregateControls ? inputWidth : ImGui::GetFrameHeight();
+			if (!showExpandedAggregateControls)
+				ImGui::SetCursorPosX(
+					ImGui::GetCursorPosX() + std::max(0.0f, (inputWidth - editorWidth) * 0.5f));
+			ImGui::SetNextItemWidth(editorWidth);
+			ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float;
+			if (std::any_of(orderedComponents.begin(),
+				orderedComponents.begin() + static_cast<std::ptrdiff_t>(components.size()),
+				[&](const Component* component) {
+					return SceneSettingsManager::IsHDRColorSetting(
+						entries[component->entryIndices.back()]);
+				}))
+				flags |= ImGuiColorEditFlags_HDR;
 			if (!showExpandedAggregateControls)
 				flags |= ImGuiColorEditFlags_NoInputs;
 			changed = components.size() == 3 ?
@@ -1249,13 +1553,20 @@ namespace SceneSettingsUI
 				unifiedValue = std::accumulate(values.begin(), values.begin() + components.size(), 0.0f) /
 				               static_cast<float>(components.size());
 			auto drawUnifiedEditor = [&](float width) {
+				const auto entryIndex = orderedComponents[0]->entryIndices.back();
+				const auto& entry = entries[entryIndex];
 				const float displayScale = static_cast<float>(displayScales[0]);
 				const float minimumValue = hasBounds[0] ? static_cast<float>(minimums[0]) : 0.0f;
 				const float maximumValue = hasBounds[0] ? static_cast<float>(maximums[0]) : 0.0f;
 				const float speed = static_cast<float>(kSceneFloatDragSpeed * displayScale);
+				const auto sliderFlags = SceneSettingsManager::IsNumericInputClamped(entry) ?
+				                             ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None;
 				ImGui::SetNextItemWidth(width);
-				const bool unifiedChanged = ImGui::DragFloat("##all", &unifiedValue, speed, minimumValue, maximumValue,
-					displayScale == 1.0 ? "%.3f" : "%.1f");
+				const bool unifiedChanged = showExpandedAggregateControls && hasBounds[0] ?
+					ImGui::SliderFloat("##all", &unifiedValue, minimumValue, maximumValue,
+						displayScale == 1.0 ? "%.3f" : "%.1f", sliderFlags) :
+					ImGui::DragFloat("##all", &unifiedValue, speed, minimumValue, maximumValue,
+						displayScale == 1.0 ? "%.3f" : "%.1f", sliderFlags);
 				changed |= unifiedChanged;
 				editDeactivated |= ImGui::IsItemDeactivatedAfterEdit();
 				if (unifiedChanged)
@@ -1268,6 +1579,8 @@ namespace SceneSettingsUI
 						static_cast<float>(components.size()),
 					1.0f);
 				for (size_t component = 0; component < components.size(); ++component) {
+					const auto entryIndex = orderedComponents[component]->entryIndices.back();
+					const auto& entry = entries[entryIndex];
 					const auto displayScale = displayScales[component];
 					const float minimumValue = hasBounds[component] ?
 					                               static_cast<float>(minimums[component]) :
@@ -1276,6 +1589,8 @@ namespace SceneSettingsUI
 					                               static_cast<float>(maximums[component]) :
 					                               0.0f;
 					const float speed = static_cast<float>(kSceneFloatDragSpeed * displayScale);
+					const auto sliderFlags = SceneSettingsManager::IsNumericInputClamped(entry) ?
+					                             ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None;
 					const char* valueFormat = displayScale == 1.0 ? "%.3f" : "%.1f";
 					if (component > 0)
 						ImGui::SameLine(0.0f, spacing);
@@ -1288,8 +1603,11 @@ namespace SceneSettingsUI
 							componentName.push_back('%');
 					}
 					const auto format = std::format("{} {}", valueFormat, componentName);
-					changed |= ImGui::DragFloat(
-						"##val", &values[component], speed, minimumValue, maximumValue, format.c_str());
+					changed |= showExpandedAggregateControls && hasBounds[component] ?
+						ImGui::SliderFloat("##val", &values[component], minimumValue,
+							maximumValue, format.c_str(), sliderFlags) :
+						ImGui::DragFloat("##val", &values[component], speed, minimumValue,
+							maximumValue, format.c_str(), sliderFlags);
 					editDeactivated |= ImGui::IsItemDeactivatedAfterEdit();
 					ImGui::PopID();
 				}
@@ -1321,10 +1639,8 @@ namespace SceneSettingsUI
 				const auto& componentEntries = orderedComponents[component]->entryIndices;
 				const auto& entry = entries[componentEntries.back()];
 				double storedValue = values[component];
-				const bool validValue = colorPicker ?
-				                            std::isfinite(storedValue) :
-				                            SceneSettingsManager::GetNumericStoredValue(
-												entry, values[component], storedValue);
+				const bool validValue = SceneSettingsManager::GetNumericStoredValue(
+					entry, values[component], storedValue);
 				if (validValue)
 					for (const auto entryIndex : orderedComponents[component]->entryIndices)
 						updates.push_back({ entryIndex, json(storedValue) });
@@ -1343,7 +1659,7 @@ namespace SceneSettingsUI
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto& entry = manager->GetEntries(type)[index];
-		DrawValueEditorCore(entry, inputWidth, readOnly,
+		DrawValueEditorCore(entry, inputWidth, type == SceneType::InteriorOnly, readOnly,
 			[=](const json& v) { manager->UpdateEntryValue(type, index, v, true); },
 			[=]() { manager->SaveAllUserSettings(); });
 	}
@@ -1364,7 +1680,7 @@ namespace SceneSettingsUI
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto& entry = manager->GetWeatherConfig(weatherId).entries[index];
-		DrawValueEditorCore(entry, inputWidth, readOnly,
+		DrawValueEditorCore(entry, inputWidth, false, readOnly,
 			[=](const json& v) { manager->UpdateWeatherEntryValue(weatherId, index, v, true); },
 			[=]() { manager->SaveAllUserSettings(); });
 	}
@@ -1378,7 +1694,7 @@ namespace SceneSettingsUI
 		if (DrawAggregateValueEditorCore(entries, indices, inputWidth, false, readOnly, [=](const auto& updates) { manager->UpdateWeatherEntryValues(weatherId, updates, true); }, [=] { manager->SaveAllUserSettings(); }))
 			return;
 		const auto& entry = entries[indices.back()];
-		DrawValueEditorCore(entry, inputWidth, readOnly,
+		DrawValueEditorCore(entry, inputWidth, false, readOnly,
 			[=](const json& value) {
 				std::vector<SceneSettingsManager::EntryValueUpdate> updates;
 				updates.reserve(indices.size());
@@ -1613,10 +1929,11 @@ namespace SceneSettingsUI
 
 	static SourceTableLayout GetSourceTableLayout(const SourceGroup& group,
 		const std::vector<SettingEntry>& entries, int numValueColumns,
-		bool showExpandedAggregateControls = false)
+		bool showExpandedAggregateControls = false, float auxiliaryColumnWidth = 0.0f)
 	{
 		SourceTableLayout layout;
 		layout.numValueColumns = std::clamp(numValueColumns, 1, kPeriodCount);
+		layout.auxiliaryColumnWidth = std::max(0.0f, auxiliaryColumnWidth);
 		const bool multiColumn = layout.numValueColumns > 1;
 		const float minimumWidth = GetMinimumValueColumnWidth(layout.numValueColumns);
 		std::fill_n(layout.valueColumnWidths.begin(), layout.numValueColumns, minimumWidth);
@@ -1627,10 +1944,14 @@ namespace SceneSettingsUI
 
 		auto& style = ImGui::GetStyle();
 		const bool inlineActions = HasInlineActionColumn(layout.numValueColumns);
-		const int totalColumns = 1 + layout.numValueColumns + (inlineActions ? 1 : 0);
+		const bool hasAuxiliaryColumn = layout.auxiliaryColumnWidth > 0.0f;
+		const int totalColumns = 1 + layout.numValueColumns + (hasAuxiliaryColumn ? 1 : 0) +
+		                         (inlineActions ? 1 : 0);
 		float columnWidth = C::Em(C::SCENE_TOD_PARAM_COL_EM);
 		for (int column = 0; column < layout.numValueColumns; ++column)
 			columnWidth += layout.valueColumnWidths[column];
+		if (hasAuxiliaryColumn)
+			columnWidth += layout.auxiliaryColumnWidth;
 		if (inlineActions)
 			columnWidth += GetActionsColumnWidth();
 		layout.sectionWidth = columnWidth + totalColumns * style.CellPadding.x * 2.0f +
@@ -1664,6 +1985,7 @@ namespace SceneSettingsUI
 		int numValueColumns = 0;
 		bool showExpandedAggregateControls = false;
 		bool transitionOnly = false;
+		float auxiliaryColumnWidth = 0.0f;
 		CachedSourceTable overwrite;
 		CachedSourceTable user;
 		std::vector<uint8_t> overriddenEntries;
@@ -1677,7 +1999,8 @@ namespace SceneSettingsUI
 
 	static void RefreshSourcePanelCache(SourcePanelCache& cache,
 		const std::vector<SettingEntry>& entries, int numValueColumns,
-		bool showExpandedAggregateControls = false, bool transitionOnly = false)
+		bool showExpandedAggregateControls = false, bool transitionOnly = false,
+		float auxiliaryColumnWidth = 0.0f)
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto revision = manager->GetEntryPresentationRevision();
@@ -1694,15 +2017,21 @@ namespace SceneSettingsUI
 			EqualStyleMetric(cache.cellPadding, style.CellPadding) &&
 			cache.numValueColumns == clampedColumns &&
 			cache.showExpandedAggregateControls == showExpandedAggregateControls &&
-			cache.transitionOnly == transitionOnly)
+			cache.transitionOnly == transitionOnly &&
+			cache.auxiliaryColumnWidth == auxiliaryColumnWidth)
 			return;
 
-		cache.overwrite.group = BuildSourceGroup(entries, EntrySource::Overwrite, true, transitionOnly);
-		cache.user.group = BuildSourceGroup(entries, EntrySource::User, true, transitionOnly);
+		const bool multiColumn = clampedColumns > 1;
+		cache.overwrite.group = BuildSourceGroup(
+			entries, EntrySource::Overwrite, true, transitionOnly, multiColumn);
+		cache.user.group = BuildSourceGroup(
+			entries, EntrySource::User, true, transitionOnly, multiColumn);
 		cache.overwrite.layout = GetSourceTableLayout(
-			cache.overwrite.group, entries, clampedColumns, showExpandedAggregateControls);
+			cache.overwrite.group, entries, clampedColumns, showExpandedAggregateControls,
+			auxiliaryColumnWidth);
 		cache.user.layout = GetSourceTableLayout(
-			cache.user.group, entries, clampedColumns, showExpandedAggregateControls);
+			cache.user.group, entries, clampedColumns, showExpandedAggregateControls,
+			auxiliaryColumnWidth);
 		cache.overwrite.indices.clear();
 		cache.user.indices.clear();
 		SplitBySource(entries, cache.overwrite.indices, cache.user.indices, transitionOnly);
@@ -1731,6 +2060,7 @@ namespace SceneSettingsUI
 		cache.numValueColumns = clampedColumns;
 		cache.showExpandedAggregateControls = showExpandedAggregateControls;
 		cache.transitionOnly = transitionOnly;
+		cache.auxiliaryColumnWidth = auxiliaryColumnWidth;
 	}
 
 	static void CenterCursorY(float rowContentHeight, float itemHeight)
@@ -1764,16 +2094,29 @@ namespace SceneSettingsUI
 		bool isOverwrite = source == EntrySource::Overwrite;
 		bool multiColumn = numValueColumns > 1;
 		bool inlineActions = HasInlineActionColumn(numValueColumns);
+		const bool hasAuxiliaryColumn = layout.auxiliaryColumnWidth > 0.0f &&
+		                                cb.auxiliaryColumnLabel && cb.drawAuxiliary;
+		if (flyout.transientGeneration != s_transientGeneration) {
+			Util::CloseFlyout(flyout.cell);
+			Util::CloseFlyout(flyout.row);
+			Util::CloseFlyout(flyout.col);
+			flyout.cellSourceRow = SIZE_MAX;
+			flyout.rowSourceRow = SIZE_MAX;
+			flyout.transientGeneration = s_transientGeneration;
+		}
 		const bool suppressFlyouts = s_addDialogFrame == ImGui::GetFrameCount();
 		if (suppressFlyouts) {
 			Util::CloseFlyout(flyout.cell);
 			Util::CloseFlyout(flyout.row);
 			Util::CloseFlyout(flyout.col);
+			flyout.cellSourceRow = SIZE_MAX;
+			flyout.rowSourceRow = SIZE_MAX;
 		}
 		const auto flyoutStyle = GetSceneFlyoutStyle();
 		constexpr int kSettingColumn = 0;
 		constexpr int kFirstValueColumn = 1;
-		const int actionsColumn = kFirstValueColumn + numValueColumns;
+		const int auxiliaryColumn = kFirstValueColumn + numValueColumns;
+		const int actionsColumn = auxiliaryColumn + (hasAuxiliaryColumn ? 1 : 0);
 		int totalCols = actionsColumn + (inlineActions ? 1 : 0);
 		struct PendingAddPeriod
 		{
@@ -1812,17 +2155,24 @@ namespace SceneSettingsUI
 			ImGui::TableSetupColumn(T("feature.scene_manager.column.value", "Value"), ImGuiTableColumnFlags_WidthFixed,
 				layout.valueColumnWidths[0]);
 		}
+		if (hasAuxiliaryColumn)
+			ImGui::TableSetupColumn(cb.auxiliaryColumnLabel,
+				ImGuiTableColumnFlags_WidthFixed, layout.auxiliaryColumnWidth);
 		if (inlineActions)
 			ImGui::TableSetupColumn(T("feature.scene_manager.column.actions", "Actions"),
 				ImGuiTableColumnFlags_WidthFixed, GetActionsColumnWidth());
 
-		if (multiColumn) {
+		if (multiColumn || hasAuxiliaryColumn) {
 			// Header row
 			ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
 			ImGui::TableSetColumnIndex(kSettingColumn);
 			ImGui::TableHeader(T("feature.scene_manager.column.setting", "Setting"));
 
-			for (int i = 0; i < numValueColumns; ++i) {
+			if (!multiColumn) {
+				ImGui::TableSetColumnIndex(kFirstValueColumn);
+				ImGui::TableHeader(T("feature.scene_manager.column.value", "Value"));
+			}
+			for (int i = 0; multiColumn && i < numValueColumns; ++i) {
 				const bool columnVisible = ImGui::TableSetColumnIndex(kFirstValueColumn + i);
 				if (!columnVisible && !flyout.col.isOpen)
 					continue;
@@ -1849,13 +2199,21 @@ namespace SceneSettingsUI
 					ImGui::PopID();
 				}
 			}
+			if (hasAuxiliaryColumn) {
+				ImGui::TableSetColumnIndex(auxiliaryColumn);
+				ImGui::TableHeader(cb.auxiliaryColumnLabel);
+			}
+			if (inlineActions) {
+				ImGui::TableSetColumnIndex(actionsColumn);
+				ImGui::TableHeader(T("feature.scene_manager.column.actions", "Actions"));
+			}
 		}
 
 		auto& theme = globals::menu->GetSettings().Theme;
 		const auto isOverridden = [&](size_t index) {
 			return index < overriddenEntries.size() && overriddenEntries[index] != 0;
 		};
-		const auto drawRow = [&](const SourceRow& row) {
+		const auto drawRow = [&](const SourceRow& row, size_t rowIndex) {
 			const auto& sid = row.setting;
 			const auto& rowIndices = row.indices;
 
@@ -1889,6 +2247,8 @@ namespace SceneSettingsUI
 				{
 					Util::FlyoutScope flyoutScope(
 						flyout.row, flyoutSource.id, flyoutSource.pressed, flyoutStyle);
+					if (flyout.row.isOpen && flyout.row.activeId == flyoutSource.id)
+						flyout.rowSourceRow = rowIndex;
 					if (flyoutScope) {
 						bool allPaused = AreAllPaused(rowIndices, entries);
 						auto result = DrawFlyoutControls(allPaused, true, isOverwrite);
@@ -1909,7 +2269,7 @@ namespace SceneSettingsUI
 					if (!columnVisible) {
 						bool ownsActiveFlyout = false;
 						if (flyout.cell.isOpen && !cellIndices.empty()) {
-							ImGui::PushID(static_cast<int>(cellIndices.front()));
+							ImGui::PushID(p);
 							ownsActiveFlyout = flyout.cell.activeId == ImGui::GetID("##cellFlyout");
 							ImGui::PopID();
 						}
@@ -1926,8 +2286,7 @@ namespace SceneSettingsUI
 							ImGui::SetCursorPos(ImVec2(
 								ImGui::GetCursorPosX() + std::max(0.f, (cellW - btnSz) * 0.5f),
 								ImGui::GetCursorPosY() + std::max(0.f, (visualH - btnSz) * 0.5f)));
-							ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 0.f));
-							if (ImGui::Button("+", ImVec2(btnSz, btnSz))) {
+							if (DrawSceneAddButton("##addPeriod", btnSz)) {
 								for (const auto sourceIndex : row.addPeriodSourceIndices) {
 									if (sourceIndex >= entries.size())
 										continue;
@@ -1937,7 +2296,6 @@ namespace SceneSettingsUI
 										sourceEntry.settingKey, p);
 								}
 							}
-							ImGui::PopStyleVar();
 							ImGui::PopID();
 						} else {
 							ImGui::TextDisabled("--");
@@ -1947,7 +2305,7 @@ namespace SceneSettingsUI
 
 					const auto entryIndex = cellIndices.front();
 					const auto& entry = entries[entryIndex];
-					ImGui::PushID(static_cast<int>(entryIndex));
+					ImGui::PushID(p);
 					const bool allPaused = AreAllPaused(cellIndices, entries);
 
 					if (allPaused)
@@ -1981,6 +2339,8 @@ namespace SceneSettingsUI
 					if (!suppressFlyouts) {
 						Util::FlyoutScope flyoutScope(
 							flyout.cell, cellId, sourcePressed, flyoutStyle);
+						if (flyout.cell.isOpen && flyout.cell.activeId == cellId)
+							flyout.cellSourceRow = rowIndex;
 						if (flyoutScope) {
 							auto result = DrawFlyoutControls(allPaused, cellIndices.size() > 1, isOverwrite);
 
@@ -2023,6 +2383,11 @@ namespace SceneSettingsUI
 
 				if (rowIndices.empty()) {
 					ImGui::TextDisabled("--");
+					if (hasAuxiliaryColumn) {
+						ImGui::TableSetColumnIndex(auxiliaryColumn);
+						CenterCursorY(labelVisualH, ImGui::GetFrameHeight());
+						ImGui::TextDisabled("--");
+					}
 					if (inlineActions) {
 						ImGui::TableSetColumnIndex(actionsColumn);
 						CenterCursorY(labelVisualH, ImGui::GetFrameHeight());
@@ -2058,6 +2423,18 @@ namespace SceneSettingsUI
 					if (anyPaused)
 						ImGui::EndDisabled();
 
+					if (hasAuxiliaryColumn) {
+						ImGui::TableSetColumnIndex(auxiliaryColumn);
+						CenterCursorY(labelVisualH, ImGui::GetFrameHeight());
+						const bool auxiliaryDisabled = anyPaused && !isOverwrite;
+						if (auxiliaryDisabled)
+							ImGui::BeginDisabled();
+						deferredCallbacks.drawAuxiliary(
+							rowIndices, ImGui::GetContentRegionAvail().x, isOverwrite);
+						if (auxiliaryDisabled)
+							ImGui::EndDisabled();
+					}
+
 					if (inlineActions) {
 						ImGui::TableSetColumnIndex(actionsColumn);
 						CenterCursorY(labelVisualH, ImGui::GetFrameHeight());
@@ -2080,46 +2457,14 @@ namespace SceneSettingsUI
 		};
 
 		constexpr auto kNoActiveFlyoutSource = std::numeric_limits<size_t>::max();
-		size_t activeCellFlyoutSourceRow = kNoActiveFlyoutSource;
-		size_t activeRowFlyoutSourceRow = kNoActiveFlyoutSource;
-		if (multiColumn && (flyout.cell.isOpen || flyout.row.isOpen)) {
-			for (size_t rowIndex = 0; rowIndex < group.rows.size(); ++rowIndex) {
-				const auto& row = group.rows[rowIndex];
-				const auto& sid = row.setting;
-				ImGui::PushID(sid.key.c_str());
-				ImGui::PushID(static_cast<int>(sid.componentStart));
-				for (const auto& part : sid.path)
-					ImGui::PushID(part.c_str());
-				ImGui::PushID(sid.feature.c_str());
-
-				if (activeRowFlyoutSourceRow == kNoActiveFlyoutSource && flyout.row.isOpen &&
-					flyout.row.activeId == ImGui::GetID("##rowFlyout"))
-					activeRowFlyoutSourceRow = rowIndex;
-				if (activeCellFlyoutSourceRow == kNoActiveFlyoutSource && flyout.cell.isOpen) {
-					for (int period = 0; period < numValueColumns; ++period) {
-						const auto& cellIndices = row.cells[period];
-						if (cellIndices.empty())
-							continue;
-						ImGui::PushID(static_cast<int>(cellIndices.front()));
-						const bool ownsActiveFlyout = flyout.cell.activeId == ImGui::GetID("##cellFlyout");
-						ImGui::PopID();
-						if (ownsActiveFlyout) {
-							activeCellFlyoutSourceRow = rowIndex;
-							break;
-						}
-					}
-				}
-
-				ImGui::PopID();
-				for (size_t i = 0; i < sid.path.size(); ++i)
-					ImGui::PopID();
-				ImGui::PopID();
-				ImGui::PopID();
-				if ((!flyout.cell.isOpen || activeCellFlyoutSourceRow != kNoActiveFlyoutSource) &&
-					(!flyout.row.isOpen || activeRowFlyoutSourceRow != kNoActiveFlyoutSource))
-					break;
-			}
-		}
+		if (!flyout.cell.isOpen)
+			flyout.cellSourceRow = kNoActiveFlyoutSource;
+		if (!flyout.row.isOpen)
+			flyout.rowSourceRow = kNoActiveFlyoutSource;
+		const size_t activeCellFlyoutSourceRow =
+			flyout.cellSourceRow < group.rows.size() ? flyout.cellSourceRow : kNoActiveFlyoutSource;
+		const size_t activeRowFlyoutSourceRow =
+			flyout.rowSourceRow < group.rows.size() ? flyout.rowSourceRow : kNoActiveFlyoutSource;
 
 		float measuredSettingRowHeight = -1.0f;
 		for (const auto& category : group.categories) {
@@ -2144,8 +2489,10 @@ namespace SceneSettingsUI
 				activeRowFlyoutSourceRow >= category.begin && activeRowFlyoutSourceRow < category.end)
 				clipper.IncludeItemByIndex(static_cast<int>(activeRowFlyoutSourceRow - category.begin));
 			while (clipper.Step()) {
-				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
-					drawRow(group.rows[category.begin + static_cast<size_t>(row)]);
+				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+					const size_t rowIndex = category.begin + static_cast<size_t>(row);
+					drawRow(group.rows[rowIndex], rowIndex);
+				}
 			}
 			if (measuredSettingRowHeight < 0.0f && clipper.ItemsHeight > 0.0f)
 				measuredSettingRowHeight = clipper.ItemsHeight;
@@ -2323,6 +2670,8 @@ namespace SceneSettingsUI
 
 	void DrawExportAllPopup(SceneType type, const std::vector<SceneSettingsManager::SettingEntry>& entries, ExportAllPopupState& state)
 	{
+		if (!state.dialogOpen)
+			return;
 		auto popupId = std::format("{}##scene", T("feature.scene_manager.export.title", "Export User Settings"));
 		DrawExportPopupCore(popupId.c_str(), entries, state,
 			[type](const std::string& modName, const std::vector<size_t>& indices) {
@@ -2332,6 +2681,8 @@ namespace SceneSettingsUI
 
 	void DrawWeatherExportAllPopup(RE::FormID weatherId, const std::vector<SceneSettingsManager::SettingEntry>& entries, ExportAllPopupState& state, bool showTod)
 	{
+		if (!state.dialogOpen)
+			return;
 		auto popupId = std::format("{}##wx{:08X}", T("feature.scene_manager.export.title", "Export User Settings"), weatherId);
 		DrawExportPopupCore(popupId.c_str(), entries, state,
 			[weatherId](const std::string& modName, const std::vector<size_t>& indices) {
@@ -2539,9 +2890,16 @@ namespace SceneSettingsUI
 
 	static const char* GetLocationTargetTypeName(LocationTargetType type)
 	{
-		return type == LocationTargetType::Cell ?
-			T("feature.scene_manager.location.target_cell", "Cell") :
-			T("feature.scene_manager.location.target_location", "Location");
+		switch (type) {
+		case LocationTargetType::Category:
+			return T("feature.scene_manager.location.target_category", "Category");
+		case LocationTargetType::Location:
+			return T("feature.scene_manager.location.target_location", "Location");
+		case LocationTargetType::Cell:
+			return T("feature.scene_manager.location.target_cell", "Cell");
+		default:
+			return "";
+		}
 	}
 
 	static std::string GetLocationTargetLabel(const LocationTarget& target)
@@ -2580,6 +2938,16 @@ namespace SceneSettingsUI
 		return &*selected;
 	}
 
+	static void UpdateLocationTargetSnapshot(LocationPanelState& state, const LocationTarget& target)
+	{
+		if (!state.hasTargetSnapshot || state.targetSnapshot.type != target.type ||
+			state.targetSnapshot.formKey != target.formKey || state.targetSnapshot.name != target.name ||
+			state.targetSnapshot.cocCode != target.cocCode) {
+			state.targetSnapshot = target;
+			state.hasTargetSnapshot = true;
+		}
+	}
+
 	static bool IsLocationPopupOpen(const PopupState& popups)
 	{
 		return popups.deleteAllOverwrites.IsOpen() || popups.deleteSingleOverwrite.IsOpen() ||
@@ -2588,30 +2956,140 @@ namespace SceneSettingsUI
 
 	static void DrawLocationAddDialog(const LocationTarget& target, AddSettingState& state)
 	{
+		if (!state.dialogOpen) {
+			if (s_activeAddDialog == &state)
+				s_activeAddDialog = nullptr;
+			return;
+		}
 		auto* manager = SceneSettingsManager::GetSingleton();
-		DrawAddDialogCore(state, Period::Count, false, false, [](const std::string& feature) { return SceneSettingsManager::GetFeatureSceneSettings(feature); }, [=] { return BuildUserEntrySet(manager->GetLocationConfig(target.type, target.formKey).entries); }, [=](const std::string& feature, const std::vector<std::string>& path, const std::string& key, Period) { return manager->HasLocationEntry(target.type, target.formKey, feature, path, key, EntrySource::User); }, [=](const std::string& feature, const std::vector<std::string>& path, const std::string& key, const json&, Period) { return manager->AddLocationSetting(target.type, target.formKey, target.name, target.cocCode,
-																																																																																																																																																			   feature, path, key, true); }, [=] { manager->CommitSceneSettingChanges(); });
+		const SceneSettingsManager::SceneContextId copyDestination{
+			.type = SceneSettingsManager::SceneContextType::Location,
+			.locationType = target.type,
+			.locationFormKey = target.formKey
+		};
+		const auto getSettings = [](const std::string& feature) {
+			return SceneSettingsManager::GetFeatureSceneSettings(SceneType::Location, feature);
+		};
+		const auto getUserEntries = [&] {
+			return BuildUserEntrySet(manager->GetLocationConfig(target.type, target.formKey).entries);
+		};
+		const auto hasEntry = [&](const std::string& feature, const std::vector<std::string>& path,
+			const std::string& key, Period) {
+			return manager->HasLocationEntry(
+				target.type, target.formKey, feature, path, key, EntrySource::User);
+		};
+		const auto addEntry = [&](const std::string& feature, const std::vector<std::string>& path,
+			const std::string& key, const json&, Period) {
+			return manager->AddLocationSetting(target.type, target.formKey, target.name, target.cocCode,
+				feature, path, key, true);
+		};
+		const auto commit = [manager] { manager->CommitSceneSettingChanges(); };
+		DrawAddDialogCore(state, Period::Count, false, false, &copyDestination,
+			getSettings, getUserEntries, hasEntry, addEntry, commit);
 	}
 
-	static void DrawLocationValueEditor(const LocationTarget& target, size_t index, float inputWidth, bool readOnly)
+	static void DrawLocationValueEditor(const LocationTarget& target, const std::vector<SettingEntry>& entries,
+		size_t index, float inputWidth, bool readOnly)
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
-		const auto& entry = manager->GetLocationConfig(target.type, target.formKey).entries[index];
-		DrawValueEditorCore(entry, inputWidth, readOnly,
-			[=](const json& value) { manager->UpdateLocationEntryValue(target.type, target.formKey, index, value, true); },
-			[=] { manager->CommitSceneSettingChanges(); });
+		const auto& entry = entries[index];
+		DrawValueEditorCore(entry, inputWidth, true, readOnly,
+			[manager, &target, index](const json& value) {
+				manager->UpdateLocationEntryValue(target.type, target.formKey, index, value, true);
+			},
+			[manager] { manager->CommitSceneSettingChanges(); });
 	}
 
-	static void DrawLocationValueEditor(const LocationTarget& target,
+	static void DrawLocationValueEditor(const LocationTarget& target, const std::vector<SettingEntry>& entries,
 		const std::vector<size_t>& indices, float inputWidth, bool readOnly)
 	{
 		if (indices.empty())
 			return;
 		auto* manager = SceneSettingsManager::GetSingleton();
-		const auto& entries = manager->GetLocationConfig(target.type, target.formKey).entries;
-		if (DrawAggregateValueEditorCore(entries, indices, inputWidth, true, readOnly, [=](const auto& updates) { manager->UpdateLocationEntryValues(target.type, target.formKey, updates, true); }, [=] { manager->CommitSceneSettingChanges(); }))
+		if (DrawAggregateValueEditorCore(entries, indices, inputWidth, true, readOnly,
+				[manager, &target](const auto& updates) { manager->UpdateLocationEntryValues(target.type, target.formKey, updates, true); },
+				[manager] { manager->CommitSceneSettingChanges(); }))
 			return;
-		DrawLocationValueEditor(target, indices.back(), inputWidth, readOnly);
+		DrawLocationValueEditor(target, entries, indices.back(), inputWidth, readOnly);
+	}
+
+	static std::string GetLocationTransitionText(std::optional<float> seconds, float globalSeconds)
+	{
+		return seconds ?
+		       std::vformat(T("feature.scene_manager.location.transition.seconds", "{0:.1f} s"),
+				   std::make_format_args(*seconds)) :
+		       std::vformat(T("feature.scene_manager.location.transition.global_value", "Global ({0:.1f} s)"),
+				   std::make_format_args(globalSeconds));
+	}
+
+	static void DrawLocationTransitionEditor(const LocationTarget& target,
+		const std::vector<SettingEntry>& entries, const std::vector<size_t>& indices,
+		float inputWidth, bool readOnly)
+	{
+		if (indices.empty())
+			return;
+
+		for (const auto index : indices) {
+			if (index >= entries.size() || !IsTransitionEntry(entries[index])) {
+				ImGui::TextDisabled("%s", T("feature.scene_manager.location.transition.immediate", "Immediate"));
+				return;
+			}
+		}
+
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const float globalSeconds = manager->GetLocationTransitionSeconds();
+		const auto firstOverride = entries[indices.front()].transitionSeconds;
+		const bool mixed = std::any_of(std::next(indices.begin()), indices.end(), [&](const size_t index) {
+			return entries[index].transitionSeconds != firstOverride;
+		});
+
+		if (readOnly) {
+			if (mixed) {
+				ImGui::TextDisabled("%s", T("feature.scene_manager.location.transition.mixed", "Mixed"));
+			} else {
+				const auto label = GetLocationTransitionText(firstOverride, globalSeconds);
+				ImGui::TextDisabled("%s", label.c_str());
+			}
+			return;
+		}
+
+		bool hasOverride = !mixed && firstOverride.has_value();
+		if (mixed)
+			ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
+		const bool overrideChanged = ImGui::Checkbox("##locationTransitionOverride", &hasOverride);
+		if (mixed)
+			ImGui::PopItemFlag();
+		if (auto tooltip = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T("feature.scene_manager.location.transition.override_tooltip",
+				"Use a transition duration for this setting instead of the global duration."));
+		}
+
+		const std::array<size_t, 1> selectedIndex{ indices.front() };
+		if (overrideChanged) {
+			manager->SetLocationEntryTransitionSeconds(target.type, target.formKey, selectedIndex,
+				hasOverride ? std::optional{ globalSeconds } : std::nullopt, true);
+		}
+
+		const float transitionSpacing = ImGui::GetStyle().ItemInnerSpacing.x;
+		ImGui::SameLine(0.0f, transitionSpacing);
+		const float remainingWidth = std::max(1.0f,
+			inputWidth - ImGui::GetFrameHeight() - transitionSpacing);
+		ImGui::SetNextItemWidth(remainingWidth);
+		if (mixed && !overrideChanged) {
+			ImGui::TextDisabled("%s", T("feature.scene_manager.location.transition.mixed", "Mixed"));
+		} else if (!hasOverride) {
+			const auto label = GetLocationTransitionText(std::nullopt, globalSeconds);
+			ImGui::TextDisabled("%s", label.c_str());
+		} else {
+			float seconds = overrideChanged ? globalSeconds : firstOverride.value_or(globalSeconds);
+			if (ImGui::SliderFloat("##locationTransitionSeconds", &seconds, 0.0f,
+					kLocationTransitionSliderMaxSeconds, "%.1f s")) {
+				seconds = std::clamp(seconds, 0.0f,
+					SceneSettingsManager::kMaxLocationTransitionSeconds);
+				manager->SetLocationEntryTransitionSeconds(
+					target.type, target.formKey, selectedIndex, seconds, true);
+			}
+		}
 	}
 
 	static void DrawLocationPopups(const LocationTarget& target, PopupState& popups)
@@ -2653,6 +3131,8 @@ namespace SceneSettingsUI
 	static void DrawLocationExportPopup(const LocationTarget& target,
 		const std::vector<SettingEntry>& entries, ExportAllPopupState& state)
 	{
+		if (!state.dialogOpen)
+			return;
 		auto popupId = std::format("{}##location{}:{}",
 			T("feature.scene_manager.export.title", "Export User Settings"),
 			static_cast<int>(target.type), target.formKey);
@@ -2666,7 +3146,7 @@ namespace SceneSettingsUI
 	void DrawLocationPanel()
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
-		auto targets = manager->GetCurrentLocationTargets();
+		const auto& targets = manager->GetCurrentLocationTargets();
 		auto& theme = globals::menu->GetSettings().Theme;
 
 		ImGui::TextUnformatted(T("feature.scene_manager.location.title", "Location Settings"));
@@ -2679,10 +3159,12 @@ namespace SceneSettingsUI
 
 		bool lockTargetSelection = s_locationState.addState.dialogOpen || s_locationState.exportState.dialogOpen ||
 		                           IsLocationPopupOpen(s_locationState.popups);
-		LocationTarget target;
+		const LocationTarget* target = nullptr;
 		if (lockTargetSelection && s_locationState.hasTargetSnapshot) {
-			target = s_locationState.targetSnapshot;
+			target = &s_locationState.targetSnapshot;
 		} else if (targets.empty()) {
+			if (s_activeAddDialog == &s_locationState.addState)
+				s_activeAddDialog = nullptr;
 			s_locationState.addState.Reset();
 			s_locationState.exportState.dialogOpen = false;
 			s_locationState.hasTargetSnapshot = false;
@@ -2695,18 +3177,21 @@ namespace SceneSettingsUI
 			const auto* selectedTarget = ResolveSelectedLocationTarget(targets, s_locationState);
 			if (!selectedTarget)
 				return;
-			target = *selectedTarget;
-			s_locationState.targetSnapshot = target;
-			s_locationState.hasTargetSnapshot = true;
+			target = selectedTarget;
+			UpdateLocationTargetSnapshot(s_locationState, *target);
 		}
 
 		ImGui::BeginDisabled(lockTargetSelection);
 		ImGui::SetNextItemWidth(-FLT_MIN);
-		auto preview = GetLocationTargetLabel(target);
-		if (ImGui::BeginCombo(T("feature.scene_manager.location.target", "Target"), preview.c_str())) {
+		auto preview = GetLocationTargetLabel(*target);
+		if (Util::BeginSearchableCombo(
+				T("feature.scene_manager.location.target", "Target"), preview.c_str())) {
 			for (const auto& candidate : targets) {
-				bool selected = candidate.type == target.type && candidate.formKey == target.formKey;
-				auto label = std::format("{}##{}:{}", GetLocationTargetLabel(candidate),
+				bool selected = candidate.type == target->type && candidate.formKey == target->formKey;
+				const auto visibleLabel = GetLocationTargetLabel(candidate);
+				if (!Util::SearchableComboMatches(visibleLabel))
+					continue;
+				auto label = std::format("{}##{}:{}", visibleLabel,
 					static_cast<int>(candidate.type), candidate.formKey);
 				if (ImGui::Selectable(label.c_str(), selected)) {
 					s_locationState.selectedType = candidate.type;
@@ -2716,7 +3201,7 @@ namespace SceneSettingsUI
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
-			ImGui::EndCombo();
+			Util::EndSearchableCombo();
 		}
 		ImGui::EndDisabled();
 
@@ -2724,20 +3209,28 @@ namespace SceneSettingsUI
 			const auto* selectedTarget = ResolveSelectedLocationTarget(targets, s_locationState);
 			if (!selectedTarget)
 				return;
-			target = *selectedTarget;
-			s_locationState.targetSnapshot = target;
+			target = selectedTarget;
+			UpdateLocationTargetSnapshot(s_locationState, *target);
 		}
+		const auto& selectedTarget = *target;
 
-		ImGui::TextDisabled("%s: %s", T("feature.scene_manager.location.spid_key", "SPID key"), target.formKey.c_str());
-		if (!target.cocCode.empty())
-			ImGui::TextDisabled("%s: %s", T("feature.scene_manager.location.coc_code", "COC code"), target.cocCode.c_str());
+		ImGui::TextDisabled("%s: %s", T("feature.scene_manager.location.spid_key", "SPID key"), selectedTarget.formKey.c_str());
+		if (!selectedTarget.cocCode.empty())
+			ImGui::TextDisabled("%s: %s", T("feature.scene_manager.location.coc_code", "COC code"), selectedTarget.cocCode.c_str());
+
+		float transitionSeconds = manager->GetLocationTransitionSeconds();
+		ImGui::SetNextItemWidth(std::min(C::Em(16.0f), ImGui::GetContentRegionAvail().x));
+		if (ImGui::SliderFloat(T("feature.scene_manager.location.transition.global", "Global Transition"),
+				&transitionSeconds, 0.0f, kLocationTransitionSliderMaxSeconds, "%.1f s")) {
+			manager->SetLocationTransitionSeconds(transitionSeconds, true);
+		}
 
 		if (ImGui::SmallButton(T("feature.scene_manager.action.add_setting", "Add Setting")))
 			OpenAddDialog(SceneType::Location, s_locationState.addState);
-		DrawLocationAddDialog(target, s_locationState.addState);
-		DrawLocationPopups(target, s_locationState.popups);
+		DrawLocationAddDialog(selectedTarget, s_locationState.addState);
+		DrawLocationPopups(selectedTarget, s_locationState.popups);
 
-		const auto& entries = manager->GetLocationConfig(target.type, target.formKey).entries;
+		const auto& entries = manager->GetLocationConfig(selectedTarget.type, selectedTarget.formKey).entries;
 		if (entries.empty()) {
 			ImGui::Spacing();
 			ImGui::TextColored(theme.StatusPalette.Disable, "%s",
@@ -2748,35 +3241,41 @@ namespace SceneSettingsUI
 		}
 
 		TableCallbacks callbacks{
-			[target](size_t index, float width, bool readOnly) { DrawLocationValueEditor(target, index, width, readOnly); },
-			[target](const std::vector<size_t>& indices, float width, bool readOnly) {
-				DrawLocationValueEditor(target, indices, width, readOnly);
+			[&selectedTarget, &entries](size_t index, float width, bool readOnly) { DrawLocationValueEditor(selectedTarget, entries, index, width, readOnly); },
+			[&selectedTarget, &entries](const std::vector<size_t>& indices, float width, bool readOnly) {
+				DrawLocationValueEditor(selectedTarget, entries, indices, width, readOnly);
 			},
-			[target](size_t index) { SceneSettingsManager::GetSingleton()->TogglePauseLocationEntry(target.type, target.formKey, index); },
-			[target](size_t index) { SceneSettingsManager::GetSingleton()->RevertLocationEntryToDefault(target.type, target.formKey, index); },
-			[target](size_t index) { SceneSettingsManager::GetSingleton()->RemoveLocationSetting(target.type, target.formKey, index); }
+			[&selectedTarget](size_t index) { SceneSettingsManager::GetSingleton()->TogglePauseLocationEntry(selectedTarget.type, selectedTarget.formKey, index); },
+			[&selectedTarget](size_t index) { SceneSettingsManager::GetSingleton()->RevertLocationEntryToDefault(selectedTarget.type, selectedTarget.formKey, index); },
+			[&selectedTarget](size_t index) { SceneSettingsManager::GetSingleton()->RemoveLocationSetting(selectedTarget.type, selectedTarget.formKey, index); }
+		};
+		callbacks.auxiliaryColumnLabel = T("feature.scene_manager.location.transition.column", "Transition");
+		callbacks.drawAuxiliary = [&selectedTarget, &entries](const std::vector<size_t>& indices,
+			float width, bool readOnly) {
+			DrawLocationTransitionEditor(selectedTarget, entries, indices, width, readOnly);
 		};
 
-		RefreshSourcePanelCache(s_locationState.tableCache, entries, 1, true);
+		RefreshSourcePanelCache(s_locationState.tableCache, entries, 1, true, false,
+			C::Em(kLocationTransitionColumnWidthEm));
 		auto& overwrite = s_locationState.tableCache.overwrite;
 		auto& user = s_locationState.tableCache.user;
 
 		if (!overwrite.indices.empty()) {
-			if (DrawSectionHeader(T("feature.scene_manager.section.overwrite_files", "Overwrite Files"), "##low", overwrite.allPaused, [&] { for (auto index : overwrite.indices) if (entries[index].paused == overwrite.allPaused) manager->TogglePauseLocationEntry(target.type, target.formKey, index); }, [&] { s_locationState.popups.deleteAllOverwrites.Request(); }, overwrite.layout))
+			if (DrawSectionHeader(T("feature.scene_manager.section.overwrite_files", "Overwrite Files"), "##low", overwrite.allPaused, [&] { manager->SetLocationEntriesPaused(selectedTarget.type, selectedTarget.formKey, overwrite.indices, !overwrite.allPaused); }, [&] { s_locationState.popups.deleteAllOverwrites.Request(); }, overwrite.layout))
 				DrawSourceTable(overwrite.group, entries, "##LocationOverwrite", EntrySource::Overwrite, overwrite.layout,
 					&s_locationState.popups, s_locationState.tableFlyout, callbacks);
 			EndSection();
 		}
 
 		if (!user.indices.empty()) {
-			if (DrawSectionHeader(T("feature.scene_manager.section.user_settings", "User Settings"), "##lusr", user.allPaused, [&] { for (auto index : user.indices) if (entries[index].paused == user.allPaused) manager->TogglePauseLocationEntry(target.type, target.formKey, index); }, [&] { s_locationState.popups.deleteAllUser.Request(); }, user.layout, [&] { s_locationState.exportState.Open(user.indices); }, s_locationState.tableCache.hasActiveOverrides))
+			if (DrawSectionHeader(T("feature.scene_manager.section.user_settings", "User Settings"), "##lusr", user.allPaused, [&] { manager->SetLocationEntriesPaused(selectedTarget.type, selectedTarget.formKey, user.indices, !user.allPaused); }, [&] { s_locationState.popups.deleteAllUser.Request(); }, user.layout, [&] { s_locationState.exportState.Open(user.indices); }, s_locationState.tableCache.hasActiveOverrides))
 				DrawSourceTable(user.group, entries, "##LocationUser", EntrySource::User, user.layout,
 					&s_locationState.popups, s_locationState.tableFlyout, callbacks,
 					s_locationState.tableCache.overriddenEntries);
 			EndSection();
 		}
 
-		DrawLocationExportPopup(target, entries, s_locationState.exportState);
+		DrawLocationExportPopup(selectedTarget, entries, s_locationState.exportState);
 	}
 
 	// --- Weather Scene Panel ---
@@ -2790,9 +3289,31 @@ namespace SceneSettingsUI
 		ExportAllPopupState exportState;
 		SourcePanelCache tableCache;
 	};
-	static std::map<RE::FormID, WeatherPanelState> s_weatherPanelStates;
+	static WeatherPanelState s_weatherPanelState;
+	static std::optional<RE::FormID> s_weatherPanelStateId;
 
-	static WeatherPanelState& GetWeatherState(RE::FormID id) { return s_weatherPanelStates[id]; }
+	static WeatherPanelState& GetWeatherState(RE::FormID id)
+	{
+		if (s_weatherPanelStateId && *s_weatherPanelStateId == id)
+			return s_weatherPanelState;
+
+		if (s_activeAddDialog == &s_weatherPanelState.allPeriodsAddState) {
+			s_activeAddDialog->Reset();
+			s_activeAddDialog = nullptr;
+		}
+		for (auto& addState : s_weatherPanelState.periodAddStates) {
+			if (s_activeAddDialog != &addState)
+				continue;
+			s_activeAddDialog->Reset();
+			s_activeAddDialog = nullptr;
+			break;
+		}
+
+		s_weatherPanelState = {};
+		s_weatherPanelStateId = id;
+		++s_transientGeneration;
+		return s_weatherPanelState;
+	}
 
 	static void DrawWeatherPopups(RE::FormID weatherId, PopupState& popups)
 	{
@@ -2869,19 +3390,18 @@ namespace SceneSettingsUI
 		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto& entries = manager->GetWeatherConfig(weatherId).entries;
 		auto cb = MakeWeatherCallbacks(weatherId);
-		RefreshSourcePanelCache(state.tableCache, entries, numValueColumns, false, true);
 		auto& overwrite = state.tableCache.overwrite;
 		auto& user = state.tableCache.user;
 
 		if (!overwrite.indices.empty()) {
-			if (DrawSectionHeader(T("feature.scene_manager.section.overwrite_files", "Overwrite Files"), "##wow", overwrite.allPaused, [&] { for (auto idx : overwrite.indices) if (entries[idx].paused == overwrite.allPaused) manager->TogglePauseWeatherEntry(weatherId, idx); }, [&] { state.popups.deleteAllOverwrites.Request(); }, overwrite.layout))
+			if (DrawSectionHeader(T("feature.scene_manager.section.overwrite_files", "Overwrite Files"), "##wow", overwrite.allPaused, [&] { manager->SetWeatherEntriesPaused(weatherId, overwrite.indices, !overwrite.allPaused); }, [&] { state.popups.deleteAllOverwrites.Request(); }, overwrite.layout))
 				DrawSourceTable(overwrite.group, entries, "##WxOverwrite", EntrySource::Overwrite,
 					overwrite.layout, &state.popups, state.tableFlyout, cb);
 			EndSection();
 		}
 
 		if (!user.indices.empty()) {
-			if (DrawSectionHeader(T("feature.scene_manager.section.user_settings", "User Settings"), "##wusr", user.allPaused, [&] { for (auto idx : user.indices) if (entries[idx].paused == user.allPaused) manager->TogglePauseWeatherEntry(weatherId, idx); }, [&] { state.popups.deleteAllUser.Request(); }, user.layout, [&] { state.exportState.Open(user.indices); }, state.tableCache.hasActiveOverrides))
+			if (DrawSectionHeader(T("feature.scene_manager.section.user_settings", "User Settings"), "##wusr", user.allPaused, [&] { manager->SetWeatherEntriesPaused(weatherId, user.indices, !user.allPaused); }, [&] { state.popups.deleteAllUser.Request(); }, user.layout, [&] { state.exportState.Open(user.indices); }, state.tableCache.hasActiveOverrides))
 				DrawSourceTable(user.group, entries, "##WxUser", EntrySource::User, user.layout,
 					nullptr, state.tableFlyout, cb, state.tableCache.overriddenEntries);
 			EndSection();

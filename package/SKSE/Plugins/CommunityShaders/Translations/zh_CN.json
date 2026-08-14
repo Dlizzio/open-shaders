@@ -2177,6 +2177,8 @@
     "menu.features.home": "主页",
     "menu.features.no_settings_available": "此功能没有可用设置。",
     "menu.features.ok_button": "确定",
+    "menu.features.pause_weather_overrides": "暂停天气覆盖",
+    "menu.features.pause_weather_tooltip": "临时禁用此功能的基于天气的设置调整。\n此状态不会被保存。",
     "menu.features.profiling": "性能分析",
     "menu.features.restore_defaults_tooltip": "恢复此功能的默认设置",
     "menu.features.restore_override_tooltip": "从模组文件恢复原始覆盖设置。\n这将丢弃您的自定义设置并恢复为\n模组作者的推荐设置。",
@@ -2571,7 +2573,5 @@
     "cs_editor.user_settings": "用户设置",
     "cs_editor.using_global_settings": "使用全局设置",
     "cs_editor.using_weather_specific_settings": "使用天气特定设置",
-    "cs_editor.weather_references_unloaded_feature": "天气配置'{}'包含该功能的相关设置，但此功能尚未加载。在安装并加载该功能前，所有天气专属参数将被忽略。",
-    "menu.features.pause_weather_overrides": "暂停天气覆盖",
-    "menu.features.pause_weather_tooltip": "临时禁用此功能的基于天气的设置调整。\n此状态不会被保存。"
+    "cs_editor.weather_references_unloaded_feature": "天气配置'{}'包含该功能的相关设置，但此功能尚未加载。在安装并加载该功能前，所有天气专属参数将被忽略。"
 }

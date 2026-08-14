@@ -3,6 +3,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <optional>
 #include <span>
 #include <tuple>
 
@@ -61,12 +62,14 @@ namespace SceneSettingsUI
 	{
 		int numValueColumns = 1;
 		std::array<float, kPeriodCount> valueColumnWidths{};
+		float auxiliaryColumnWidth = 0.0f;
 		float sectionWidth = 0.0f;
 	};
 
 	/// Build a SourceGroup from entries, optionally filtered to a single source.
 	SourceGroup BuildSourceGroup(const std::vector<SceneSettingsManager::SettingEntry>& entries,
-		EntrySource sourceFilter, bool filterBySource = true, bool transitionOnly = false);
+		EntrySource sourceFilter, bool filterBySource = true, bool transitionOnly = false,
+		bool multiColumn = false);
 
 	/// Split entry indices by source (Overwrite vs User).
 	void SplitBySource(const std::vector<SceneSettingsManager::SettingEntry>& entries,
@@ -82,6 +85,33 @@ namespace SceneSettingsUI
 		std::vector<size_t> settings;
 	};
 
+	/// Cached copy-picker data owned by one add-setting dialog.
+	struct CopySettingState
+	{
+		std::uint64_t revision = 0;
+		std::optional<SceneSettingsManager::SceneContextId> destination;
+		std::vector<SceneSettingsManager::CopySource> sources;
+		std::vector<std::string> sourceLabels;
+		int selectedSource = -1;
+		std::vector<SceneSettingsManager::CopyCandidate> candidates;
+		std::vector<std::string> candidateLabels;
+		int selectedCandidate = 0;
+		bool conflictPromptOpen = false;
+
+		void Reset()
+		{
+			revision = 0;
+			destination.reset();
+			sources.clear();
+			sourceLabels.clear();
+			selectedSource = -1;
+			candidates.clear();
+			candidateLabels.clear();
+			selectedCandidate = 0;
+			conflictPromptOpen = false;
+		}
+	};
+
 	/// Persistent state for the "+" add-setting dialog.
 	struct AddSettingState
 	{
@@ -95,7 +125,9 @@ namespace SceneSettingsUI
 		std::vector<int> selectedMembers;    // -1 selects every member of a logical control
 		std::vector<std::vector<uint8_t>> cachedAddedMembers;
 		bool addedMembersCached = false;
+		std::uint64_t cachedAddedRevision = 0;
 		bool shiftWasDown = false;
+		CopySettingState copy;
 
 		void Reset()
 		{
@@ -109,7 +141,9 @@ namespace SceneSettingsUI
 			selectedMembers.clear();
 			cachedAddedMembers.clear();
 			addedMembersCached = false;
+			cachedAddedRevision = 0;
 			shiftWasDown = false;
+			copy.Reset();
 		}
 	};
 
@@ -148,6 +182,9 @@ namespace SceneSettingsUI
 		Util::FlyoutState cell;  // Per-value-cell flyout
 		Util::FlyoutState row;   // Row-level flyout (setting name)
 		Util::FlyoutState col;   // Column-header flyout (period names)
+		size_t cellSourceRow = SIZE_MAX;
+		size_t rowSourceRow = SIZE_MAX;
+		std::uint64_t transientGeneration = 0;
 	};
 
 	/// Callbacks for the shared table renderer, abstracting manager operations.
@@ -160,6 +197,8 @@ namespace SceneSettingsUI
 		std::function<void(size_t idx)> remove;
 		// Optional: called when user clicks + in an empty period cell (multi-column only)
 		std::function<void(const std::string& feature, const std::vector<std::string>& path, const std::string& key, int period)> onAddPeriod;
+		const char* auxiliaryColumnLabel = nullptr;
+		std::function<void(const std::vector<size_t>& indices, float width, bool readOnly)> drawAuxiliary;
 	};
 
 	/// Draw flyout controls (toggle + revert + delete). Works for both single and group.

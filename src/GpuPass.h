@@ -8,6 +8,15 @@
 
 #include "Utils/Macros.h"
 
+namespace GpuPassCapabilities
+{
+	/** @brief Registers the feature prefix owned by a named GPU pass. */
+	bool Register(std::string_view passName);
+
+	/** @brief Checks whether an executed GPU pass declared this feature prefix. */
+	bool Contains(std::string_view featurePrefix);
+}
+
 /// RAII scope that fans a single pass name to all three instrumentation sinks:
 ///   1. Internal profiler (GPU timestamp + CPU QPC → Profiling table)
 ///   2. Tracy CPU zone (always-on when TRACY_ENABLE; not gated on frameAnnotations)
@@ -38,5 +47,7 @@ private:
 /// Drop a single-line GPU pass scope at render-pass entry.
 /// The variable name is mangled with __LINE__ so two CS_GPU_PASS calls in the
 /// same function cannot collide.
-#define CS_GPU_PASS(name) \
+#define CS_GPU_PASS(name)                                                                    \
+	[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability_, __LINE__) = \
+		GpuPassCapabilities::Register(name);                                                 \
 	ScopedGpuPass CS_DETAIL_CONCAT(cs_gpu_pass_, __LINE__) { name }

@@ -50,6 +50,7 @@ namespace
 	using BeginGroupFn = void (*)();
 	using EndGroupFn = void (*)();
 	using IsItemHoveredFn = bool (*)(ImGuiHoveredFlags);
+	using MarkItemEditedFn = void (*)(ImGuiID);
 
 	CheckboxFn g_checkbox = static_cast<CheckboxFn>(&ImGui::Checkbox);
 	ButtonFn g_button = static_cast<ButtonFn>(&ImGui::Button);
@@ -98,11 +99,13 @@ namespace
 	BeginGroupFn g_beginGroup = &ImGui::BeginGroup;
 	EndGroupFn g_endGroup = &ImGui::EndGroup;
 	IsItemHoveredFn g_isItemHovered = &ImGui::IsItemHovered;
+	MarkItemEditedFn g_markItemEdited = &ImGui::MarkItemEdited;
 
 	thread_local Feature* g_currentFeature = nullptr;
 	thread_local bool g_sceneSettingsActive = false;
 	thread_local bool g_allowSceneSettingTooltip = false;
 	thread_local unsigned int g_controlDetourDepth = 0;
+	thread_local bool g_featureSettingMutation = false;
 	struct ControlDetourScope
 	{
 		ControlDetourScope() { ++g_controlDetourDepth; }
@@ -121,6 +124,7 @@ namespace
 	{
 		ControlledItem item;
 		std::vector<bool> groups;
+		bool featureSettingMutation = false;
 	};
 	thread_local std::vector<SceneControlFrame> g_sceneControlFrames;
 	bool g_installed = false;
@@ -304,7 +308,7 @@ namespace
 				ImGui::Text(
 					"%s",
 					T("feature.scene_manager.controlled_tooltip",
-						"Disable Scene Specific Settings to edit this setting."));
+						"Disable scene-specific settings to edit this setting."));
 			}
 		}
 		g_allowSceneSettingTooltip = previousAllow;
@@ -321,6 +325,13 @@ namespace
 		DrawSceneSettingTooltip();
 	}
 
+	bool TrackFeatureSettingMutation(bool changed)
+	{
+		if (changed && g_currentFeature)
+			g_featureSettingMutation = true;
+		return changed;
+	}
+
 	template <class Draw>
 	bool DrawControl(const char* label, const void* valueAddress, Draw draw)
 	{
@@ -328,7 +339,7 @@ namespace
 			return draw();
 		ClearControlledItem();
 		if (!FindControlSetting(label, valueAddress))
-			return draw();
+			return TrackFeatureSettingMutation(draw());
 
 		ImGui::BeginDisabled();
 		{
@@ -368,6 +379,13 @@ namespace
 		return g_isItemHovered(flags);
 	}
 
+	void MarkItemEditedDetour(ImGuiID id)
+	{
+		g_markItemEdited(id);
+		if (g_controlDetourDepth == 0 && g_currentFeature)
+			g_featureSettingMutation = true;
+	}
+
 	template <class Target>
 	bool Attach(Target& target, Target detour)
 	{
@@ -385,7 +403,7 @@ namespace
 			return g_button(label, size);
 		ClearControlledItem();
 		if (!FindControlSetting(label, nullptr, true))
-			return g_button(label, size);
+			return TrackFeatureSettingMutation(g_button(label, size));
 
 		ImGui::BeginDisabled();
 		{
@@ -642,31 +660,38 @@ namespace
 
 namespace SceneSettingsUIHooks
 {
-	FeatureDrawGuard::FeatureDrawGuard(Feature* feature, bool enabled) :
+	FeatureDrawGuard::FeatureDrawGuard(Feature* feature, bool sceneControlled) :
 		previousFeature(g_currentFeature),
-		previousEnabled(g_sceneSettingsActive)
+		previousSceneControlled(g_sceneSettingsActive)
 	{
-		g_sceneControlFrames.push_back({ g_sceneControlledItem, std::move(g_sceneControlledGroupStack) });
+		g_sceneControlFrames.push_back({
+			g_sceneControlledItem,
+			std::move(g_sceneControlledGroupStack),
+			g_featureSettingMutation
+		});
 		g_sceneControlledGroupStack.clear();
-		g_currentFeature = enabled ? feature : nullptr;
-		g_sceneSettingsActive = enabled && feature != nullptr;
+		g_featureSettingMutation = false;
+		g_currentFeature = feature;
+		g_sceneSettingsActive = sceneControlled && feature != nullptr;
 		ClearControlledItem();
 	}
 
 	FeatureDrawGuard::~FeatureDrawGuard()
 	{
-		if (g_sceneSettingsActive && g_currentFeature)
+		if (g_currentFeature && g_featureSettingMutation)
 			SceneSettingsManager::GetSingleton()->CaptureExternalFeatureChanges(g_currentFeature);
 		if (!g_sceneControlFrames.empty()) {
 			g_sceneControlledItem = g_sceneControlFrames.back().item;
 			g_sceneControlledGroupStack = std::move(g_sceneControlFrames.back().groups);
+			g_featureSettingMutation = g_sceneControlFrames.back().featureSettingMutation;
 			g_sceneControlFrames.pop_back();
 		} else {
 			ClearControlledItem();
 			g_sceneControlledGroupStack.clear();
+			g_featureSettingMutation = false;
 		}
 		g_currentFeature = previousFeature;
-		g_sceneSettingsActive = previousEnabled;
+		g_sceneSettingsActive = previousSceneControlled;
 	}
 
 	void Install()
@@ -734,7 +759,8 @@ namespace SceneSettingsUIHooks
 			Attach(g_beginCombo, BeginComboDetour) &&
 			Attach(g_beginGroup, BeginGroupDetour) &&
 			Attach(g_endGroup, EndGroupDetour) &&
-			Attach(g_isItemHovered, IsItemHoveredDetour);
+			Attach(g_isItemHovered, IsItemHoveredDetour) &&
+			Attach(g_markItemEdited, MarkItemEditedDetour);
 
 		if (!attached) {
 			DetourTransactionAbort();

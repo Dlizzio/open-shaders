@@ -1485,6 +1485,140 @@ namespace Util
 
 	namespace detail
 	{
+		constexpr std::size_t kSearchableComboBufferSize = 256;
+		constexpr int kSearchableComboPruneIntervalFrames = 600;
+		constexpr int kSearchableComboStaleFrames = 3600;
+
+		struct SearchableComboState
+		{
+			std::array<char, kSearchableComboBufferSize> filter{};
+			std::uint64_t filterRevision = 0;
+			bool open = false;
+			int lastSeenFrame = 0;
+			int lastOpenFrame = -1;
+
+			const void* cachedUserData = nullptr;
+			SearchableComboLabelGetter cachedGetter = nullptr;
+			std::uint64_t cachedItemsRevision = 0;
+			std::uint64_t cachedFilterRevision = std::numeric_limits<std::uint64_t>::max();
+			int cachedItemCount = -1;
+			std::vector<int> filteredIndices;
+		};
+
+		struct SearchableComboFrame
+		{
+			SearchableComboState* state = nullptr;
+			ImGuiLastItemData openerItem;
+		};
+
+		struct SearchableComboStorage
+		{
+			ImGuiContext* context = nullptr;
+			std::unordered_map<ImGuiID, SearchableComboState> states;
+			std::vector<SearchableComboFrame> frames;
+			int lastPruneFrame = 0;
+		};
+
+		SearchableComboStorage& GetSearchableComboStorage()
+		{
+			static SearchableComboStorage storage;
+			if (storage.context != GImGui) {
+				storage = {};
+				storage.context = GImGui;
+			}
+			return storage;
+		}
+
+		SearchableComboState& GetSearchableComboState(ImGuiID id)
+		{
+			auto& storage = GetSearchableComboStorage();
+			const int frame = ImGui::GetFrameCount();
+			if (frame < storage.lastPruneFrame ||
+				frame - storage.lastPruneFrame >= kSearchableComboPruneIntervalFrames) {
+				std::erase_if(storage.states, [frame](const auto& entry) {
+					return frame >= entry.second.lastSeenFrame &&
+					       frame - entry.second.lastSeenFrame >= kSearchableComboStaleFrames;
+				});
+				storage.lastPruneFrame = frame;
+			}
+
+			auto& state = storage.states[id];
+			state.lastSeenFrame = frame;
+			return state;
+		}
+
+		void ClearSearchableComboFilter(SearchableComboState& state)
+		{
+			if (state.filter.front() == '\0')
+				return;
+			state.filter.front() = '\0';
+			++state.filterRevision;
+		}
+
+		constexpr unsigned char FoldAsciiCase(unsigned char value) noexcept
+		{
+			return value >= 'A' && value <= 'Z' ? static_cast<unsigned char>(value + ('a' - 'A')) : value;
+		}
+
+		bool ContainsCaseInsensitive(std::string_view text, std::string_view filter) noexcept
+		{
+			if (filter.empty())
+				return true;
+			if (filter.size() > text.size())
+				return false;
+			return std::search(text.begin(), text.end(), filter.begin(), filter.end(), [](char left, char right) {
+				return FoldAsciiCase(static_cast<unsigned char>(left)) ==
+				       FoldAsciiCase(static_cast<unsigned char>(right));
+			}) != text.end();
+		}
+
+		int GetSearchableComboMaxItemCount(ImGuiComboFlags flags) noexcept
+		{
+			if ((flags & ImGuiComboFlags_HeightSmall) != 0)
+				return 4;
+			if ((flags & ImGuiComboFlags_HeightLarge) != 0)
+				return 20;
+			if ((flags & ImGuiComboFlags_HeightLargest) != 0)
+				return -1;
+			return 8;
+		}
+
+		float GetSearchableComboPopupHeight(ImGuiComboFlags flags)
+		{
+			const int itemCount = GetSearchableComboMaxItemCount(flags);
+			if (itemCount < 0)
+				return FLT_MAX;
+
+			const auto& style = ImGui::GetStyle();
+			const float listHeight = ImGui::GetTextLineHeightWithSpacing() * itemCount - style.ItemSpacing.y;
+			const float searchHeight = ImGui::GetFrameHeightWithSpacing() + style.ItemSpacing.y;
+			return searchHeight + listHeight + style.WindowPadding.y * 2.0f;
+		}
+
+		void SetSearchableComboPopupConstraints(const char* previewValue, ImGuiComboFlags flags)
+		{
+			if ((GImGui->NextWindowData.HasFlags & ImGuiNextWindowDataFlags_HasSizeConstraint) != 0)
+				return;
+
+			const auto& style = ImGui::GetStyle();
+			float popupWidth = ImGui::CalcItemWidth();
+			if ((flags & ImGuiComboFlags_NoPreview) != 0) {
+				popupWidth = ImGui::GetFrameHeight();
+			} else if ((flags & ImGuiComboFlags_WidthFitPreview) != 0) {
+				const float arrowWidth = (flags & ImGuiComboFlags_NoArrowButton) != 0 ? 0.0f : ImGui::GetFrameHeight();
+				const float previewWidth = previewValue ? ImGui::CalcTextSize(previewValue, nullptr, true).x : 0.0f;
+				popupWidth = arrowWidth + previewWidth + style.FramePadding.x * 2.0f;
+			}
+
+			const float scale = GetSearchUIScale();
+			const float searchWidth = ImGui::CalcTextSize(T("ui.search", "Search...")).x +
+			                          ThemeManager::Constants::COMBO_SEARCH_ICON_SIZE * scale +
+			                          style.FramePadding.x * 4.0f;
+			popupWidth = std::max(popupWidth, searchWidth);
+			ImGui::SetNextWindowSizeConstraints(
+				ImVec2(popupWidth, 0.0f), ImVec2(popupWidth, GetSearchableComboPopupHeight(flags)));
+		}
+
 		struct ComboSearchState
 		{
 			char buffer[256] = {};
@@ -1496,6 +1630,206 @@ namespace Util
 			static std::unordered_map<std::string, ComboSearchState> states;
 			return states;
 		}
+	}
+
+	bool BeginSearchableCombo(
+		const char* label, const char* previewValue, ImGuiComboFlags flags, const void* storageAddress)
+	{
+		const ImGuiID id = ImGui::GetID(label);
+		auto& state = detail::GetSearchableComboState(id);
+		detail::SetSearchableComboPopupConstraints(previewValue, flags);
+
+		bool open = false;
+		if (storageAddress) {
+			ActiveControlStorageGuard storageGuard(storageAddress);
+			open = ImGui::BeginCombo(label, previewValue, flags);
+		} else {
+			open = ImGui::BeginCombo(label, previewValue, flags);
+		}
+		const ImGuiLastItemData openerItem = GImGui->LastItemData;
+		if (!open) {
+			if (state.open)
+				detail::ClearSearchableComboFilter(state);
+			state.open = false;
+			return false;
+		}
+
+		const int frame = ImGui::GetFrameCount();
+		const bool popupAppearing = ImGui::IsWindowAppearing();
+		const bool continuingOpen = state.open && state.lastOpenFrame == frame - 1 && !popupAppearing;
+		if (state.open && !continuingOpen)
+			detail::ClearSearchableComboFilter(state);
+		const bool focusSearch = !continuingOpen;
+		state.open = true;
+		state.lastOpenFrame = frame;
+		auto& comboStorage = detail::GetSearchableComboStorage();
+		comboStorage.frames.push_back({ &state, openerItem });
+
+		ImGui::PushID(id);
+		if (focusSearch)
+			ImGui::SetKeyboardFocusHere();
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		const float scale = GetSearchUIScale();
+		const float iconSize = ThemeManager::Constants::COMBO_SEARCH_ICON_SIZE * scale;
+		const float iconOffsetX = ThemeManager::Constants::COMBO_SEARCH_ICON_OFFSET_X * scale;
+		const float paddingLeft = ThemeManager::Constants::COMBO_SEARCH_PADDING_LEFT * scale;
+		ImGui::PushStyleVar(
+			ImGuiStyleVar_FramePadding, ImVec2(paddingLeft, ImGui::GetStyle().FramePadding.y));
+		bool filterChanged = false;
+		{
+			ActiveControlStorageGuard storageGuard(nullptr);
+			filterChanged = ImGui::InputTextWithHint("##search", T("ui.search", "Search..."),
+				state.filter.data(), state.filter.size());
+		}
+		ImGui::PopStyleVar();
+		if (filterChanged)
+			++state.filterRevision;
+
+		const ImVec2 iconPosition(
+			ImGui::GetItemRectMin().x + iconOffsetX,
+			ImGui::GetItemRectMin().y + (ImGui::GetItemRectSize().y - iconSize) * 0.5f);
+		DrawSearchIcon(iconPosition, iconSize, ThemeManager::Constants::COMBO_SEARCH_ICON_ALPHA);
+		ImGui::Separator();
+		ImGui::PopID();
+		GImGui->LastItemData = openerItem;
+		return true;
+	}
+
+	void EndSearchableCombo()
+	{
+		auto& storage = detail::GetSearchableComboStorage();
+		IM_ASSERT(!storage.frames.empty() && "EndSearchableCombo called without BeginSearchableCombo");
+		if (storage.frames.empty())
+			return;
+
+		const ImGuiLastItemData openerItem = storage.frames.back().openerItem;
+		storage.frames.pop_back();
+		ImGui::EndCombo();
+		GImGui->LastItemData = openerItem;
+	}
+
+	std::string_view GetSearchableComboFilter()
+	{
+		const auto& frames = detail::GetSearchableComboStorage().frames;
+		return frames.empty() ? std::string_view{} : std::string_view(frames.back().state->filter.data());
+	}
+
+	bool SearchableComboMatches(std::string_view text)
+	{
+		return detail::ContainsCaseInsensitive(text, GetSearchableComboFilter());
+	}
+
+	void SearchableComboClipper::Begin(int itemCount, SearchableComboLabelGetter getter,
+		const void* userData, std::uint64_t itemsRevision, float itemHeight)
+	{
+		filteredIndices = nullptr;
+		itemCount = std::max(itemCount, 0);
+		auto& frames = detail::GetSearchableComboStorage().frames;
+		if (frames.empty() || !getter || GetSearchableComboFilter().empty()) {
+			clipper.Begin(itemCount, itemHeight);
+			return;
+		}
+
+		auto& state = *frames.back().state;
+		if (state.cachedUserData != userData || state.cachedGetter != getter ||
+			state.cachedItemsRevision != itemsRevision || state.cachedItemCount != itemCount ||
+			state.cachedFilterRevision != state.filterRevision) {
+			state.filteredIndices.clear();
+			state.filteredIndices.reserve(static_cast<std::size_t>(itemCount));
+			const std::string_view filter(state.filter.data());
+			for (int itemIndex = 0; itemIndex < itemCount; ++itemIndex) {
+				const char* label = getter(userData, itemIndex);
+				if (label && detail::ContainsCaseInsensitive(label, filter))
+					state.filteredIndices.push_back(itemIndex);
+			}
+			state.cachedUserData = userData;
+			state.cachedGetter = getter;
+			state.cachedItemsRevision = itemsRevision;
+			state.cachedItemCount = itemCount;
+			state.cachedFilterRevision = state.filterRevision;
+		}
+
+		filteredIndices = &state.filteredIndices;
+		clipper.Begin(static_cast<int>(filteredIndices->size()), itemHeight);
+	}
+
+	void SearchableComboClipper::IncludeItemByIndex(int itemIndex)
+	{
+		if (!filteredIndices) {
+			if (itemIndex >= 0 && itemIndex < clipper.ItemsCount)
+				clipper.IncludeItemByIndex(itemIndex);
+			return;
+		}
+
+		const auto found = std::lower_bound(filteredIndices->begin(), filteredIndices->end(), itemIndex);
+		if (found != filteredIndices->end() && *found == itemIndex)
+			clipper.IncludeItemByIndex(static_cast<int>(found - filteredIndices->begin()));
+	}
+
+	bool SearchableComboClipper::Step()
+	{
+		return clipper.Step();
+	}
+
+	int SearchableComboClipper::GetDisplayStart() const noexcept
+	{
+		return clipper.DisplayStart;
+	}
+
+	int SearchableComboClipper::GetDisplayEnd() const noexcept
+	{
+		return clipper.DisplayEnd;
+	}
+
+	int SearchableComboClipper::GetItemIndex(int displayIndex) const noexcept
+	{
+		if (!filteredIndices)
+			return displayIndex;
+		if (displayIndex < 0 || displayIndex >= static_cast<int>(filteredIndices->size()))
+			return -1;
+		return (*filteredIndices)[displayIndex];
+	}
+
+	bool SearchableCombo(const char* label, int* currentItem, int itemCount,
+		SearchableComboLabelGetter getter, const void* userData,
+		ImGuiComboFlags flags, std::uint64_t itemsRevision)
+	{
+		if (!currentItem || !getter)
+			return false;
+
+		const char* previewValue = *currentItem >= 0 && *currentItem < itemCount ?
+		                               getter(userData, *currentItem) :
+		                               nullptr;
+		if (!BeginSearchableCombo(label, previewValue, flags, currentItem))
+			return false;
+
+		bool changed = false;
+		const bool scrollToSelection = ImGui::IsWindowAppearing() && GetSearchableComboFilter().empty();
+		SearchableComboClipper itemClipper;
+		itemClipper.Begin(itemCount, getter, userData, itemsRevision);
+		itemClipper.IncludeItemByIndex(*currentItem);
+		while (itemClipper.Step()) {
+			for (int displayIndex = itemClipper.GetDisplayStart();
+				displayIndex < itemClipper.GetDisplayEnd(); ++displayIndex) {
+				const int itemIndex = itemClipper.GetItemIndex(displayIndex);
+				const char* itemLabel = getter(userData, itemIndex);
+				if (!itemLabel)
+					continue;
+				const bool selected = itemIndex == *currentItem;
+				ImGui::PushID(itemIndex);
+				if (ImGui::Selectable(itemLabel, selected)) {
+					changed = !selected;
+					*currentItem = itemIndex;
+				}
+				if (selected && scrollToSelection)
+					ImGui::SetScrollHereY(0.5f);
+				ImGui::PopID();
+			}
+		}
+		EndSearchableCombo();
+		if (changed)
+			ImGui::MarkItemEdited(GImGui->LastItemData.ID);
+		return changed;
 	}
 
 	std::string DrawComboSearchInput(const char* id)

@@ -2,11 +2,13 @@
 #include <algorithm>
 #include <cfloat>  // For FLT_MAX
 #include <concepts>
+#include <cstdint>
 #include <cstdio>
 #include <functional>
 #include <imgui.h>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 #include <windows.h>  // For WPARAM and virtual key constants
@@ -904,6 +906,64 @@ namespace Util
 	 */
 	bool StringMatchesSearch(const std::string& text, const std::string& searchQuery);
 
+	/** @brief Allocation-free label accessor for indexed searchable combos. */
+	using SearchableComboLabelGetter = const char* (*)(const void* userData, int index);
+
+	/** @brief Begins a constrained combo with a focused search field. Call EndSearchableCombo when true. */
+	bool BeginSearchableCombo(const char* label, const char* previewValue,
+		ImGuiComboFlags flags = ImGuiComboFlags_None, const void* storageAddress = nullptr);
+
+	/** @brief Ends a combo opened by BeginSearchableCombo. */
+	void EndSearchableCombo();
+
+	/** @brief Returns the active searchable combo's filter, or an empty view outside one. */
+	std::string_view GetSearchableComboFilter();
+
+	/** @brief Tests text against the active filter with allocation-free ASCII case folding. */
+	bool SearchableComboMatches(std::string_view text);
+
+	/** @brief Maps ImGuiListClipper ranges back to source indices after combo filtering. */
+	class SearchableComboClipper
+	{
+	public:
+		SearchableComboClipper() = default;
+		SearchableComboClipper(const SearchableComboClipper&) = delete;
+		SearchableComboClipper& operator=(const SearchableComboClipper&) = delete;
+		SearchableComboClipper(SearchableComboClipper&&) = delete;
+		SearchableComboClipper& operator=(SearchableComboClipper&&) = delete;
+
+		/** @brief Begins a clipped list, rebuilding matches only when its source or filter changes. */
+		void Begin(int itemCount, SearchableComboLabelGetter getter, const void* userData,
+			std::uint64_t itemsRevision = 0, float itemHeight = -1.0f);
+
+		/** @brief Includes a source item even when it would otherwise be clipped. */
+		void IncludeItemByIndex(int itemIndex);
+
+		/** @brief Advances the underlying ImGui clipper. */
+		bool Step();
+
+		/** @brief Returns the first filtered display index for the current step. */
+		int GetDisplayStart() const noexcept;
+
+		/** @brief Returns the exclusive filtered display index for the current step. */
+		int GetDisplayEnd() const noexcept;
+
+		/** @brief Maps a filtered display index to its source item index. */
+		int GetItemIndex(int displayIndex) const noexcept;
+
+	private:
+		ImGuiListClipper clipper;
+		const std::vector<int>* filteredIndices = nullptr;
+	};
+
+	/**
+	 * @brief Draws an indexed searchable combo with cached filtering and list clipping.
+	 * @return True when currentItem changes.
+	 */
+	bool SearchableCombo(const char* label, int* currentItem, int itemCount,
+		SearchableComboLabelGetter getter, const void* userData,
+		ImGuiComboFlags flags = ImGuiComboFlags_None, std::uint64_t itemsRevision = 0);
+
 	/**
 	 * @brief Draws a search icon (magnifying glass) at the specified position.
 	 * @param position The screen position where the icon should be drawn
@@ -1285,23 +1345,21 @@ namespace Util
 	{
 		bool valueChanged = false;
 
-		if (ImGui::BeginCombo(label, selectedName.c_str())) {
-			auto searchText = DrawComboSearchInput(label);
-
+		if (BeginSearchableCombo(label, selectedName.c_str())) {
 			for (auto& [itemName, item] : itemMap) {
-				if (searchText.empty() || StringMatchesSearch(itemName, searchText)) {
-					if (ImGui::Selectable(itemName.c_str(), itemName == selectedName)) {
+				if (!SearchableComboMatches(itemName))
+					continue;
+				const bool selected = itemName == selectedName;
+				if (ImGui::Selectable(itemName.c_str(), selected)) {
+					valueChanged = !selected;
+					if (valueChanged)
 						selectedName = itemName;
-						valueChanged = true;
-						ClearComboSearch(label);
-						break;
-					}
+					break;
 				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
 			}
-
-			ImGui::EndCombo();
-		} else {
-			ClearComboSearch(label);
+			EndSearchableCombo();
 		}
 
 		return valueChanged;

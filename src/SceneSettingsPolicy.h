@@ -1,14 +1,13 @@
 #pragma once
 
-#include <array>
 #include <string_view>
 #include <vector>
 
 namespace SceneSettingsPolicy
 {
-	using SettingBlacklistPath = std::vector<std::string_view>;
+	using SettingPolicyPath = std::vector<std::string_view>;
 
-	inline const std::vector<SettingBlacklistPath> kSettingBlacklist = {
+	inline const std::vector<SettingPolicyPath> kSettingBlacklist = {
 		{ "CSUtility", "Scene Dof", "locked" },
 		{ "CSUtility", "Scene Dof", "baseline" },
 		{ "CSUtility", "Underwater Dof", "locked" },
@@ -16,34 +15,53 @@ namespace SceneSettingsPolicy
 		{ "CSUtility", "Underwater Dof", "values", "autoFocus" },
 		{ "CSUtility", "Underwater Dof", "values", "autoFocusSettings" },
 		{ "CSUtility", "Underwater Dof", "values", "mode" },
+		{ "ExponentialHeightFog", "volumetricGridPixelSize" },
+		{ "ExponentialHeightFog", "volumetricGridSizeZ" },
+		{ "ExponentialHeightFog", "volumetricShadowBias" },
+		{ "ExponentialHeightFog", "volumetricDepthDistributionScale" },
+		{ "ExponentialHeightFog", "volumetricHistoryWeight" },
+		{ "ExponentialHeightFog", "volumetricHistoryMissSampleCount" },
+		{ "ExponentialHeightFog", "volumetricSampleJitterMultiplier" },
+		{ "ExponentialHeightFog", "volumetricUpsampleJitterMultiplier" },
+		{ "LightLimitFix", "ShowShadowOverlay" },
 		{ "PostProcessing", "Border" },
 		{ "PostProcessing", "LUT" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "enableTonemap" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "useOpenDrt" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "currentTonemapper" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "tonemapParams" },
+		{ "ScreenSpaceGI", "DebugUseUnjitteredCameraReconstruction" },
 	};
 
-	inline constexpr std::array<std::string_view, 8> kLocationFeatureWhitelist = {
-		"CSUtility",
-		"ExponentialHeightFog",
-		"PostProcessing",
-		"ScreenSpaceGI",
-		"ScreenSpaceShadows",
-		"SubsurfaceScattering",
-		"ImageBasedLighting",
-		"VanillaFresnel",
+	inline const std::vector<SettingPolicyPath> kLocationFeatureWhitelist = {
+		{ "CSUtility" },
+		{ "ExponentialHeightFog" },
+		{ "LightLimitFix", "EnableContactShadows" },
+		{ "LightLimitFix", "EnableParticleContactShadows" },
+		{ "LightLimitFix", "ContactShadowMaxSteps" },
+		{ "LightLimitFix", "ContactShadowMaxDistance" },
+		{ "LightLimitFix", "ContactShadowStride" },
+		{ "LightLimitFix", "ContactShadowThickness" },
+		{ "LightLimitFix", "ContactShadowDepthFade" },
+		{ "LightLimitFix", "ContactShadowMinIntensity" },
+		{ "PostProcessing" },
+		{ "ScreenSpaceGI" },
+		{ "ScreenSpaceShadows" },
+		{ "SubsurfaceScattering" },
+		{ "ImageBasedLighting" },
+		{ "VanillaFresnel" },
 	};
 
-	inline constexpr std::array<std::string_view, 9> kTimeOfDayFeatureWhitelist = {
-		"CSUtility",
-		"CloudShadows",
-		"ExponentialHeightFog",
-		"GrassLighting",
-		"ImageBasedLighting",
-		"PostProcessing",
-		"Skylighting",
-		"SubsurfaceScattering",
-		"WetnessEffects",
+	inline const std::vector<SettingPolicyPath> kTimeOfDayFeatureWhitelist = {
+		{ "CSUtility" },
+		{ "CloudRelight" },
+		{ "CloudShadows" },
+		{ "ExponentialHeightFog" },
+		{ "GrassLighting" },
+		{ "ImageBasedLighting" },
+		{ "PostProcessing" },
+		{ "Skylighting" },
+		{ "SubsurfaceScattering" },
+		{ "WetnessEffects" },
 	};
 }

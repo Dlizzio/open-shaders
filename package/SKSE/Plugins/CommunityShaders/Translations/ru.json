@@ -1637,6 +1637,8 @@
     "menu.features.home": "Главная",
     "menu.features.no_settings_available": "Для этой функции нет доступных настроек.",
     "menu.features.ok_button": "OK",
+    "menu.features.pause_weather_overrides": "Приостановить погодные переопределения",
+    "menu.features.pause_weather_tooltip": "Временно отключить погодные корректировки настроек для этой функции.\nЭто состояние не сохраняется.",
     "menu.features.profiling": "Профилирование",
     "menu.features.restore_defaults_tooltip": "Восстановить настройки по умолчанию для этой функции",
     "menu.features.restore_override_tooltip": "Восстанавливает исходные настройки переопределения из файлов мода.\nЭто отменит ваши настройки и вернёт к\nрекомендованным автором мода параметрам.",
@@ -2041,7 +2043,5 @@
     "cs_editor.unsupported_variable_type_tooltip": "Для этого типа переменной пользовательский интерфейс ещё не реализован. Выше отображается исходное значение JSON.",
     "cs_editor.user_settings": "Пользовательские настройки",
     "cs_editor.using_global_settings": "Используются глобальные настройки",
-    "cs_editor.using_weather_specific_settings": "Используются погодные настройки",
-    "menu.features.pause_weather_overrides": "Приостановить погодные переопределения",
-    "menu.features.pause_weather_tooltip": "Временно отключить погодные корректировки настроек для этой функции.\nЭто состояние не сохраняется."
+    "cs_editor.using_weather_specific_settings": "Используются погодные настройки"
 }

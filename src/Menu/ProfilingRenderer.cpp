@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "Globals.h"
+#include "GpuPass.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "State.h"
@@ -835,11 +836,18 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 	RenderFeatureTimingData(featurePrefix, featureMode, true);
 }
 
-bool ProfilingRenderer::HasFeatureTimers(const std::string&)
+bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
 {
-	// Always show the per-feature section so its Off/GPU/CPU controls stay
-	// reachable while capture is idle (timers only exist during a capture).
-	return globals::profiler != nullptr;
+	if (!globals::profiler)
+		return false;
+	if (GpuPassCapabilities::Contains(featurePrefix))
+		return true;
+
+	const auto prefix = GetFeatureTimerPrefix(featurePrefix);
+	const auto& results = globals::profiler->GetResults();
+	return std::any_of(results.begin(), results.end(), [&](const auto& result) {
+		return IsFeatureTimerResult(result, prefix);
+	});
 }
 
 std::string ProfilingRenderer::GetFeatureTimerPrefix(const std::string& featurePrefix)

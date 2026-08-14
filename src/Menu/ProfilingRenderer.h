@@ -62,8 +62,8 @@ public:
 	/**
 	 * @brief Checks whether the per-feature profiling section should be shown.
 	 *
-	 * Always true while the profiler exists, so the Off/GPU/CPU controls stay
-	 * reachable even before any capture has produced timer results.
+	 * True when an executed GPU pass declared this feature prefix or a legacy
+	 * profiler timer has produced a matching result.
 	 */
 	static bool HasFeatureTimers(const std::string& featurePrefix);
 

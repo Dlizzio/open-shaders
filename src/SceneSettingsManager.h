@@ -129,6 +129,7 @@ public:
 		std::string sourceFilename;                       // For overwrites: the filename it came from
 		std::filesystem::path sourcePath;                 // For overwrites: exact file path
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count;  // Which period this entry belongs to (TimeOfDay only)
+		std::optional<float> transitionSeconds;           // Location float transition override
 	};
 
 	/// One indexed value in an atomic scene-setting update.
@@ -251,6 +252,8 @@ public:
 
 	/// Check whether the feature exposes settings supported by the scene type.
 	static bool IsFeatureAllowedForType(SceneType type, const std::string& featureShortName);
+	static bool IsSettingAllowedForType(SceneType type, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
 	/// Check the shared catalog and settings blacklist policy.
 	static bool IsSceneSettingAllowed(
@@ -308,7 +311,8 @@ public:
 	};
 
 	/// Get scene-safe setting descriptors for a feature.
-	static std::vector<SettingDescriptor> GetFeatureSceneSettings(const std::string& featureShortName);
+	static std::vector<SettingDescriptor> GetFeatureSceneSettings(
+		SceneType type, const std::string& featureShortName);
 
 	/// Get scene-safe float setting descriptors for time/weather blending.
 	static std::vector<SettingDescriptor> GetTransitionableSceneSettings(const std::string& featureShortName);
@@ -358,6 +362,10 @@ public:
 	static bool GetNumericDisplayValue(const SettingEntry& entry, double storedValue, double& displayValue);
 	/// Convert a Scene Manager display value to its raw stored numeric setting value.
 	static bool GetNumericStoredValue(const SettingEntry& entry, double displayValue, double& storedValue);
+	/// Return whether direct numeric input must remain within the source widget bounds.
+	static bool IsNumericInputClamped(const SettingEntry& entry);
+	/// Return whether the source color editor accepts high-dynamic-range component values.
+	static bool IsHDRColorSetting(const SettingEntry& entry);
 	static size_t GetSettingChoiceCount(const SettingEntry& entry);
 	static bool GetSettingChoice(const SettingEntry& entry, size_t index, std::int64_t& value, std::string& displayName);
 
@@ -379,6 +387,8 @@ public:
 		bool deferSave = false);
 	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
 	void TogglePauseWeatherEntry(RE::FormID weatherId, size_t index);
+	/// Set weather entries to one pause state with a single persistence and resolver update.
+	void SetWeatherEntriesPaused(RE::FormID weatherId, std::span<const size_t> indices, bool paused);
 	void UpdateWeatherEntryValue(RE::FormID weatherId, size_t index, const json& newValue, bool deferSave = false);
 	/// Validate and update weather entries as one mutation.
 	void UpdateWeatherEntryValues(
@@ -398,6 +408,7 @@ public:
 
 	enum class LocationTargetType
 	{
+		Category,
 		Location,
 		Cell
 	};
@@ -420,7 +431,8 @@ public:
 		std::vector<SettingEntry> entries;
 	};
 
-	std::vector<LocationTarget> GetCurrentLocationTargets() const;
+	/// Return cached current targets in category, parent-location, and cell priority order.
+	const std::vector<LocationTarget>& GetCurrentLocationTargets() const;
 	const LocationSceneConfig& GetLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	bool HasLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	bool AddLocationSetting(LocationTargetType type, const std::string& formKey, const std::string& name,
@@ -429,6 +441,9 @@ public:
 		const std::string& settingKey, bool deferSave = false);
 	void RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index);
 	void TogglePauseLocationEntry(LocationTargetType type, const std::string& formKey, size_t index);
+	/// Set location entries to one pause state with a single persistence and resolver update.
+	void SetLocationEntriesPaused(LocationTargetType type, const std::string& formKey,
+		std::span<const size_t> indices, bool paused);
 	void UpdateLocationEntryValue(LocationTargetType type, const std::string& formKey, size_t index,
 		const json& newValue, bool deferSave = false);
 	/// Validate and update location entries as one mutation.
@@ -442,6 +457,114 @@ public:
 		const std::vector<size_t>& indices, const std::string& modName);
 	void DeleteAllLocationUserSettings(LocationTargetType type, const std::string& formKey);
 	static std::filesystem::path GetLocationOverwritesDir(LocationTargetType type);
+
+	/// Default duration used by location float transitions.
+	static constexpr float kDefaultLocationTransitionSeconds = 5.0f;
+	/// Largest accepted typed location transition duration.
+	static constexpr float kMaxLocationTransitionSeconds = 300.0f;
+
+	/// Return the global location float transition duration in seconds.
+	float GetLocationTransitionSeconds() const { return locationTransitionSeconds; }
+	/// Set and persist the global location float transition duration.
+	void SetLocationTransitionSeconds(float seconds, bool deferSave = false);
+	/// Return an entry-specific location transition duration, or null for the global duration.
+	std::optional<float> GetLocationEntryTransitionSeconds(
+		LocationTargetType type, std::string_view formKey, size_t index) const;
+	/// Set one or more location entries to the same transition duration as one atomic edit.
+	void SetLocationEntryTransitionSeconds(LocationTargetType type, const std::string& formKey,
+		std::span<const size_t> indices, std::optional<float> seconds, bool deferSave = false);
+
+	// --- Generic Scene Copy ---
+
+	/// Identifies one physical persisted setting.
+	struct SettingIdentity
+	{
+		std::string featureShortName;
+		std::vector<std::string> settingPath;
+		std::string settingKey;
+
+		auto operator<=>(const SettingIdentity&) const = default;
+	};
+
+	/// Kind of scene context participating in a copy operation.
+	enum class SceneContextType : std::uint8_t
+	{
+		TimeOfDay,
+		Weather,
+		Location,
+	};
+
+	/// Stable identity for a time period, weather period, or location target.
+	struct SceneContextId
+	{
+		SceneContextType type = SceneContextType::TimeOfDay;
+		TimeOfDayPeriod period = TimeOfDayPeriod::Count;
+		RE::FormID weatherId = 0;
+		LocationTargetType locationType = LocationTargetType::Location;
+		std::string locationFormKey;
+
+		auto operator<=>(const SceneContextId&) const = default;
+	};
+
+	/// Amount copied from a source context.
+	enum class CopyScope : std::uint8_t
+	{
+		EntireContext,
+		Setting,
+	};
+
+	/// How an existing destination user setting is handled.
+	enum class CopyConflictPolicy : std::uint8_t
+	{
+		SkipExisting,
+		OverwriteExisting,
+		Cancel,
+	};
+
+	/// One source context with settings compatible with a destination.
+	struct CopySource
+	{
+		SceneContextId context;
+		std::string displayName;
+		size_t settingCount = 0;
+	};
+
+	/// One physical setting available to copy.
+	struct CopyCandidate
+	{
+		SettingIdentity setting;
+		std::string displayName;
+		json value;
+		bool compatible = false;
+		bool conflicts = false;
+	};
+
+	/// Aggregate result of one transactional copy.
+	struct CopyResult
+	{
+		size_t copied = 0;
+		size_t skipped = 0;
+		size_t overwritten = 0;
+		size_t incompatible = 0;
+		bool hadConflicts = false;
+		bool cancelled = false;
+
+		/// Return whether the operation changed the destination.
+		bool Changed() const { return copied != 0 || overwritten != 0; }
+	};
+
+	/// Return non-empty contexts that contain compatible data for a destination.
+	std::vector<CopySource> GetCopySources(const SceneContextId& destination,
+		CopyScope scope = CopyScope::EntireContext,
+		const std::optional<SettingIdentity>& setting = std::nullopt) const;
+	/// Inspect the settings and conflicts in a proposed copy without mutating state.
+	std::vector<CopyCandidate> GetCopyCandidates(const SceneContextId& source,
+		const SceneContextId& destination, CopyScope scope = CopyScope::EntireContext,
+		const std::optional<SettingIdentity>& setting = std::nullopt) const;
+	/// Copy settings as one validated mutation and one save/reapply operation.
+	CopyResult CopySettings(const SceneContextId& source, const SceneContextId& destination,
+		CopyConflictPolicy conflictPolicy, CopyScope scope = CopyScope::EntireContext,
+		const std::optional<SettingIdentity>& setting = std::nullopt);
 
 	/// Enables location discovery once Skyrim form data is guaranteed to be available.
 	void OnDataLoaded();
@@ -466,6 +589,7 @@ private:
 	bool timeOfDayUserSettingsModified = false;
 	bool weatherUserSettingsModified = false;
 	bool locationUserSettingsModified = false;
+	bool locationTransitionModified = false;
 	bool dataLoaded = false;
 	bool deferredSceneChangesPending = false;
 	std::chrono::steady_clock::time_point deferredSceneChangesDeadline{};
@@ -500,6 +624,7 @@ private:
 	json unresolvedLocationUserSettings = json::object();
 	bool locationDataLoaded = false;
 	bool gameDataReady = false;
+	float locationTransitionSeconds = kDefaultLocationTransitionSeconds;
 
 	struct SettingAddress
 	{
@@ -509,19 +634,27 @@ private:
 
 		auto operator<=>(const SettingAddress&) const = default;
 	};
+	struct CatalogSceneSettingUpdate
+	{
+		std::vector<std::string> settingPath;
+		std::string key;
+		json value;
+	};
 
 	using ResolvedSettingMap = std::map<SettingAddress, json>;
 	ResolvedSettingMap baselineSettings;
 	ResolvedSettingMap appliedSettings;
+	ResolvedSettingMap resolvedSettingsScratch;
 	std::set<std::string> restoreFailureWarnings;
 	std::map<std::string, std::chrono::steady_clock::time_point> restoreRetryAfter;
 	struct ApplyFailureState
 	{
-		json signature;
+		size_t signature = 0;
 		std::chrono::steady_clock::time_point retryAfter{};
 		bool warningLogged = false;
 	};
 	std::map<std::string, ApplyFailureState> applyFailures;
+	std::map<std::string, ApplyFailureState> transitionApplyFailures;
 	static constexpr auto kApplyRetryDelay = std::chrono::seconds(2);
 	bool resolverDirty = true;
 	bool resolverSuspended = false;
@@ -541,6 +674,31 @@ private:
 	mutable bool locationTargetsCached = false;
 	mutable std::vector<LocationTarget> cachedLocationTargets;
 
+	struct LocationTransition
+	{
+		float startValue = 0.0f;
+		float targetValue = 0.0f;
+		float startTime = 0.0f;
+		float duration = 0.0f;
+		bool restoreAtEnd = false;
+	};
+	struct LocationTransitionBatch
+	{
+		std::vector<SettingAddress> addresses;
+		std::vector<LocationTransition*> transitions;
+		std::vector<CatalogSceneSettingUpdate> updates;
+		size_t signature = 0;
+	};
+	std::map<SettingAddress, LocationTransition> activeLocationTransitions;
+	std::map<std::string, LocationTransitionBatch> locationTransitionBatches;
+	bool locationTransitionBatchesDirty = true;
+	ResolvedSettingMap lastLocationOverrideValues;
+	std::map<SettingAddress, float> lastLocationTransitionDurations;
+	std::map<SettingAddress, float> pendingLocationTransitionDurations;
+	ResolvedSettingMap cachedLocationOverrides;
+	bool cachedLocationOverridesValid = false;
+	bool locationOverridesDirty = true;
+
 	// --- Per-Weather helpers ---
 	/// Load weather overwrites/user settings once game data is available for SPID resolution.
 	bool TryEnsureWeatherDataLoaded();
@@ -548,29 +706,53 @@ private:
 	void LoadWeatherData();
 	WeatherSceneConfig& GetWeatherConfigMut(RE::FormID weatherId);
 	RE::FormID GetEffectivePreviousWeatherId(const RE::Sky* sky, float weatherLerp) const;
-	float GetTimeOfDayPeriodFallbackFloat(float baseVal, const std::string& shortName,
-		const std::vector<std::string>& settingPath, const std::string& key, int periodIdx) const;
+	using PeriodValues = std::array<std::optional<float>, kPeriodCount>;
+	using PeriodSettingMap = std::map<SettingAddress, PeriodValues>;
+	struct CachedPeriodSettingMap
+	{
+		std::uint64_t revision = std::numeric_limits<std::uint64_t>::max();
+		PeriodSettingMap values;
+	};
+	std::uint64_t sceneValueRevision = 0;
+	mutable CachedPeriodSettingMap timeOfDayValueGroups;
+	mutable std::map<RE::FormID, CachedPeriodSettingMap> weatherValueGroups;
+	const PeriodSettingMap& BuildTimeOfDayValueGroups() const;
+	const PeriodSettingMap& BuildWeatherValueGroups(RE::FormID weatherId) const;
 
 	// --- Central runtime resolver ---
 	void ResolveAndApply(bool force = false);
 	bool HasActiveSceneEntriesCached();
-	ResolvedSettingMap BuildResolvedSettings();
+	ResolvedSettingMap& BuildResolvedSettings(bool collectLocationTransitionDurations);
 	void ApplyResolvedSettings(const ResolvedSettingMap& resolved, bool forceRetry);
+	void StartLocationTransitions(const ResolvedSettingMap& resolved, float now, bool animateChanges);
+	bool AdvanceLocationTransitions(float now);
+	void RebuildLocationTransitionBatches();
+	void ClearLocationTransitions();
 	void RestoreAppliedSettings();
 	void ResolveInteriorSettings(ResolvedSettingMap& resolved) const;
-	void ResolveTimeOfDaySettings(ResolvedSettingMap& resolved) const;
-	void ResolveWeatherSettings(ResolvedSettingMap& resolved) const;
-	void ResolveLocationSettings(ResolvedSettingMap& resolved, const std::vector<LocationTarget>& locationTargets) const;
+	void ResolveTimeOfDaySettings(ResolvedSettingMap& resolved, const PeriodSettingMap& values,
+		const std::array<float, kPeriodCount>& factors) const;
+	void ResolveWeatherSettings(ResolvedSettingMap& resolved, const PeriodSettingMap& timeOfDayValues,
+		const std::array<float, kPeriodCount>& factors) const;
+	void ResolveLocationSettings(ResolvedSettingMap& resolved,
+		const std::vector<LocationTarget>& locationTargets, bool collectTransitionDurations);
 	void OverlayEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
-		SceneType type, std::optional<EntrySource> source = std::nullopt) const;
-	float ResolveTimeOfDayFloat(const SettingAddress& address, float baseValue) const;
-	std::optional<float> ResolveWeatherFloat(const SettingAddress& address, float baseValue) const;
+		SceneType type, std::optional<EntrySource> source = std::nullopt,
+		std::map<SettingAddress, float>* transitionDurations = nullptr) const;
 	std::optional<float> ResolveWeatherLowerValue(RE::FormID weatherId, const SettingAddress& address,
 		TimeOfDayPeriod period, EntrySource selectedSource);
 	json GetBaselineValue(const SettingAddress& address);
+	const json* GetFeatureBaseSnapshot(const std::string& featureShortName);
+	void EnsureBaselines(std::span<const SettingAddress> addresses);
 	std::optional<json> ResolveLocationLowerValue(LocationTargetType type, std::string_view formKey,
 		const SettingAddress& address, EntrySource selectedSource);
+	std::optional<ResolvedSettingMap> BuildLocationLowerLayers(LocationTargetType type,
+		std::string_view formKey, std::optional<EntrySource> selectedSource = std::nullopt);
 	static bool ResolvedValuesEqual(const json& lhs, const json& rhs);
+	static size_t GetCatalogUpdateSignature(std::string_view featureShortName,
+		std::span<const CatalogSceneSettingUpdate> updates);
+	static bool ApplyCatalogSceneSettings(
+		Feature& feature, const std::vector<CatalogSceneSettingUpdate>& updates);
 
 	// --- Per-Location helpers ---
 	static std::string GetLocationConfigKey(LocationTargetType type, std::string_view formKey);
@@ -581,6 +763,8 @@ private:
 	void LoadLocationUserSettings(const json& data);
 	void PrepareLocationUserSettingsMutation(LocationTargetType type, std::string_view formKey,
 		bool replaceMalformedEntries);
+	static const char* GetLocationSectionName(LocationTargetType type);
+	static const char* GetLocationTargetTypeName(LocationTargetType type);
 
 	// --- Helpers ---
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
@@ -590,13 +774,35 @@ private:
 		const std::vector<std::string>& settingPath, const std::string& settingKey,
 		EntrySource source, TimeOfDayPeriod period = TimeOfDayPeriod::Count) const;
 
-	void ReapplyIfActive();
+	void ReapplyIfActive(bool activeSetMayHaveChanged = true);
 	void MarkEntryListUserSettingsModified(SceneType type);
 	void PrepareWeatherUserSettingsMutation(RE::FormID weatherId, bool replaceMalformedEntries);
 	void MarkDeferredSceneChanges();
 	void FlushDeferredSceneChanges();
 	void SuspendSceneLayer();
 	void ResumeSceneLayer();
+	float GetPauseAwareTime() const;
+
+	struct CachedFeaturePresentation
+	{
+		std::vector<SettingDescriptor> interiorSettings;
+		std::vector<SettingDescriptor> timeOfDaySettings;
+		std::vector<SettingDescriptor> locationSettings;
+	};
+	mutable std::map<std::string, CachedFeaturePresentation> featurePresentationCache;
+	mutable std::map<std::string, json> featureBaseSnapshots;
+	mutable std::set<std::string> configuredFeatureNamesCache;
+	mutable std::uint64_t configuredFeatureNamesRevision = std::numeric_limits<std::uint64_t>::max();
+	std::set<std::string> appliedFeatureNames;
+	const std::vector<SettingDescriptor>& GetCachedFeatureSceneSettings(
+		SceneType type, const std::string& featureShortName);
+	void InvalidateFeatureSnapshot(std::string_view featureShortName = {});
+
+	const std::vector<SettingEntry>* GetCopyContextEntries(const SceneContextId& context) const;
+	std::vector<CopyCandidate> BuildCopyCandidates(const SceneContextId& source,
+		const SceneContextId& destination, CopyScope scope,
+		const std::optional<SettingIdentity>& setting) const;
+	static bool IsValidSceneContext(const SceneContextId& context);
 
 	// --- Overwrite discovery helper ---
 	void DiscoverOverwritesInDir(SceneType type, const std::filesystem::path& dir,
