@@ -65,6 +65,8 @@ public:
 		kUltraPerformance = 4,
 	};
 
+	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
+
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
@@ -93,6 +95,15 @@ public:
 		// Explicit per-eye fraction of native HMD size (0 = Auto: preset-derived).
 		// Boot-locked; the preset is inert while set. DLSS clamps into NGX range.
 		float vrRenderScale = 0.0f;
+
+		// Opt in to AMD's runtime FSR4 upscaler DLL on eligible RDNA4 hardware instead of the
+		// host-linked FSR3 SDK; falls back to FSR3 on any failure.
+		bool fsr4RuntimeEnable = false;
+
+		// Tracks whether fsr4RuntimeEnable has been auto-migrated for the detected adapter.
+		// Defaults to current so a fresh config needs no migration; LoadSettings resets it to
+		// 0 when absent from JSON so pre-existing configs run the migration once.
+		uint32_t fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 	};
 
 	static constexpr float kVRRenderScaleMin = 0.33f;
@@ -108,7 +119,7 @@ public:
 	// presetDLSS is deliberately NOT here: Streamline::SetDLSSOptions reads
 	// settings.presetDLSS per-frame and applies it via slDLSSSetOptions, so
 	// it's already runtime-effective.
-	inline static constexpr Util::Settings::RestartTable<Settings, 7> kRestartFields{ {
+	inline static constexpr Util::Settings::RestartTable<Settings, 8> kRestartFields{ {
 		UTIL_RESTART_FIELD(Settings, frameGenerationMode, "Frame Generation"),
 		UTIL_RESTART_FIELD(Settings, frameGenerationForceEnable, "Force Enable Frame Generation"),
 		UTIL_RESTART_FIELD(Settings, renderAtUpscaleRes, "Render at Upscaled Resolution"),
@@ -116,6 +127,11 @@ public:
 		UTIL_RESTART_FIELD(Settings, upscaleMethod, "Upscaling Method"),
 		UTIL_RESTART_FIELD(Settings, qualityMode, "Upscale Preset"),
 		UTIL_RESTART_FIELD(Settings, vrRenderScale, "VR Render Scale"),
+		// CreateUpscalingTextureResources (which allocates runtimeFsrDepthTexture)
+		// only runs on an upscale-method change, not on this toggle -- restart-gate
+		// it so a mid-session flip can't select the runtime provider without ever
+		// allocating the texture Upscale() then dereferences.
+		UTIL_RESTART_FIELD(Settings, fsr4RuntimeEnable, "Use Runtime FSR4"),
 	} };
 	Util::Settings::BootSnapshot<Settings> bootSnapshot{ kRestartFields };
 
@@ -256,7 +272,7 @@ public:
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
 	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[5];          // One for each UpscaleMethod
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR + VR: converts R24G8_TYPELESS depth to R32_FLOAT
+	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR: converts R24G8_TYPELESS depth to R32_FLOAT
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;
@@ -329,6 +345,7 @@ public:
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
 	Texture2D* sharpenerTexture = nullptr;
+	Texture2D* runtimeFsrDepthTexture = nullptr;
 
 	virtual void ClearShaderCache() override;
 

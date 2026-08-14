@@ -3,8 +3,10 @@
 #include "Deferred.h"
 #include "Features/CSEditor.h"
 #include "Features/CSUtility.h"
+#include "Features/CloudRelight.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/Effects11.h"
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
@@ -51,6 +53,7 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/Game.h"
+#include "WeatherManager.h"
 
 namespace globals
 {
@@ -64,6 +67,7 @@ namespace globals
 	namespace features
 	{
 		CloudShadows cloudShadows{};
+		CloudRelight cloudRelight{};
 		DynamicCubemaps dynamicCubemaps{};
 		VolumetricShadows volumetricShadows{};
 		ExtendedMaterials extendedMaterials{};
@@ -97,6 +101,9 @@ namespace globals
 		ExtendedTranslucency extendedTranslucency{};
 		Upscaling upscaling{};
 		HDRDisplay hdrDisplay{};
+#if defined(ENABLE_EFFECTS11)
+		Effects11 effects11{};
+#endif
 		RenderDoc renderDoc{};
 		RemoteControl remoteControl{};
 		ScreenshotFeature screenshotFeature{};
@@ -182,6 +189,7 @@ namespace globals
 	Deferred* deferred = nullptr;
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
+	WeatherManager* weatherManager = nullptr;
 	SceneSettingsManager* sceneSettingsManager = nullptr;
 
 	static Profiler profilerInstance;
@@ -193,6 +201,7 @@ namespace globals
 		state = State::GetSingleton();
 		menu = Menu::GetSingleton();
 		deferred = Deferred::GetSingleton();
+		weatherManager = WeatherManager::GetSingleton();
 		sceneSettingsManager = SceneSettingsManager::GetSingleton();
 	}
 

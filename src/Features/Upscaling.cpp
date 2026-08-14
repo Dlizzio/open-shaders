@@ -48,9 +48,36 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	reflexUseFPSLimit,
 	reflexFPSLimit,
 	renderAtUpscaleRes,
-	vrRenderScale);
+	vrRenderScale,
+	fsr4RuntimeEnable,
+	fsr4RuntimeSelectionSchemaVersion);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
+
+/**
+ * @brief One-shot migration of fsr4RuntimeEnable for the detected adapter's FSR4 support class.
+ *
+ * RX 7000 (RDNA3 discrete) eligibility was added after fsr4RuntimeEnable already shipped
+ * defaulting to off; auto-enable it once for those adapters so existing/new RX 7000 users
+ * get the same experience as a fresh RX 9000 install. Leaves the user's own choice alone on
+ * RX 9000 (already eligible pre-migration) and on Unsupported adapters, where the version is
+ * deliberately left unstamped so the migration re-runs once a supported adapter is detected.
+ */
+void ApplyLegacyFsr4RuntimeSelectionMigration(Upscaling::Settings& a_settings, FidelityFX::Fsr4AdapterSupport a_adapterSupport)
+{
+	if (a_settings.fsr4RuntimeSelectionSchemaVersion >= Upscaling::kFsr4RuntimeSelectionSchemaVersion)
+		return;
+
+	if (a_adapterSupport == FidelityFX::Fsr4AdapterSupport::Unsupported)
+		return;
+
+	if (a_adapterSupport == FidelityFX::Fsr4AdapterSupport::RadeonRx7000 && !a_settings.fsr4RuntimeEnable) {
+		a_settings.fsr4RuntimeEnable = true;
+		logger::info("[Upscaling] Auto-enabled Runtime FSR4 for detected RX 7000-class adapter");
+	}
+
+	a_settings.fsr4RuntimeSelectionSchemaVersion = Upscaling::kFsr4RuntimeSelectionSchemaVersion;
+}
 
 /**
  * @brief Creates a Direct3D 11 device and swap chain, with support for advanced upscaling and frame generation features.
@@ -73,11 +100,14 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
-	DXGI_ADAPTER_DESC adapterDesc;
-	pAdapter->GetDesc(&adapterDesc);
-	globals::state->SetAdapterDescription(adapterDesc.Description);
-
 	auto& upscaling = globals::features::upscaling;
+
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (pAdapter && SUCCEEDED(pAdapter->GetDesc(&adapterDesc))) {
+		globals::state->SetAdapterDescription(adapterDesc.Description);
+		ApplyLegacyFsr4RuntimeSelectionMigration(upscaling.settings, FidelityFX::GetFsr4AdapterSupport(adapterDesc));
+	}
+
 	upscaling.LoadUpscalingSDKs();
 
 	if (upscaling.IsBackendInitialized())
@@ -318,12 +348,13 @@ namespace
 	};
 
 	// Foveated DLSS trades peripheral sharpness for speed, so only Performance opts into
-	// it. Single source of truth for Apply/MatchesPerformanceProfile below.
-	constexpr UpscalePreset GetUpscalePreset(Feature::PerfProfile profile)
+	// it, and only when DLSS (FoveatedRender::IsRuntimeSupported) is actually available.
+	// Single source of truth for Apply/MatchesPerformanceProfile below.
+	constexpr UpscalePreset GetUpscalePreset(Feature::PerfProfile profile, bool dlssAvailable)
 	{
 		switch (profile) {
 		case Feature::PerfProfile::Performance:
-			return { (uint)Upscaling::QualityMode::kPerformance, true };
+			return { (uint)Upscaling::QualityMode::kPerformance, dlssAvailable };
 		case Feature::PerfProfile::Balanced:
 			return { (uint)Upscaling::QualityMode::kBalanced, false };
 		default:
@@ -353,22 +384,48 @@ const char* Upscaling::GetQualityModeName(uint qualityMode) const
 // Profiles are preset-driven, so scale overrides are cleared.
 void Upscaling::ApplyPerformanceProfile(PerfProfile profile)
 {
-	const auto preset = GetUpscalePreset(profile);
+	const auto preset = GetUpscalePreset(profile, streamline.featureDLSS);
 	settings.renderAtUpscaleRes = true;
 	settings.qualityMode = preset.qualityMode;
 	settings.vrRenderScale = 0.0f;
 	// Foveation is VR-only (DrawFoveationControls/IsRuntimeSupported); leave it alone on Flat.
-	if (globals::game::isVR)
+	if (globals::game::isVR) {
 		foveatedRender.settings.enabled = preset.foveation ? 1 : 0;
+		if (preset.foveation)
+			settings.upscaleMethod = (uint)UpscaleMethod::kDLSS;
+		// Full Eye is 0-coverage by definition (FoveatedRender::GetFoveationProfile); shrink
+		// it so Performance isn't a silent no-op.
+		foveatedRender.subrectController.ApplyPresetByName(preset.foveation ? FoveatedRender::kPresetCenter75 : FoveatedRender::kPresetFullEye);
+	}
 }
 
 bool Upscaling::MatchesPerformanceProfile(PerfProfile profile) const
 {
-	const auto preset = GetUpscalePreset(profile);
-	return settings.renderAtUpscaleRes &&
-	       settings.vrRenderScale == 0.0f &&
-	       settings.qualityMode == preset.qualityMode &&
-	       (!globals::game::isVR || (foveatedRender.settings.enabled != 0) == preset.foveation);
+	const auto preset = GetUpscalePreset(profile, streamline.featureDLSS);
+	if (!(settings.renderAtUpscaleRes &&
+			settings.vrRenderScale == 0.0f &&
+			settings.qualityMode == preset.qualityMode)) {
+		return false;
+	}
+	if (!globals::game::isVR) {
+		return true;
+	}
+	if ((foveatedRender.settings.enabled != 0) != preset.foveation) {
+		return false;
+	}
+	// ApplyPerformanceProfile also sets DLSS and a region preset in VR; require
+	// both here via the same preset-name mapping, not a second hardcoded UV table.
+	if (preset.foveation && settings.upscaleMethod != (uint)UpscaleMethod::kDLSS) {
+		return false;
+	}
+	const char* expectedPresetName = preset.foveation ? FoveatedRender::kPresetCenter75 : FoveatedRender::kPresetFullEye;
+	const auto expectedUV = foveatedRender.subrectController.FindPresetUV(expectedPresetName);
+	if (!expectedUV) {
+		return false;
+	}
+	const auto& currentUV = foveatedRender.subrectController.GetUV();
+	return currentUV.x == expectedUV->x && currentUV.y == expectedUV->y &&
+	       currentUV.w == expectedUV->w && currentUV.h == expectedUV->h;
 }
 
 void Upscaling::DrawSettings()
@@ -499,6 +556,17 @@ void Upscaling::DrawSettings()
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
 			ImGui::SliderFloat(T(TKEY("sharpness"), "Sharpness"), &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
+			// Hidden entirely on ineligible GPUs so it can't be toggled somewhere it silently no-ops.
+			if (fidelityFX.IsRuntimeFsr4AutoEligible()) {
+				ImGui::Checkbox(T(TKEY("fsr4_runtime_enable"), "Use Runtime FSR4"), &settings.fsr4RuntimeEnable);
+				if (settings.fsr4RuntimeEnable) {
+					ImGui::TextDisabled("%s: %s", T(TKEY("fsr4_active_path"), "Active path"), fidelityFX.GetDisplayedFsrPathLabel().c_str());
+					if (fidelityFX.IsRuntimeFsr4FailureLatched())
+						Util::Text::Warning(T(TKEY("fsr4_failed_fallback"), "Runtime FSR4 failed this session -- using FSR3 fallback."));
+					else if (fidelityFX.IsRuntimeUpscalerFailureLatched())
+						Util::Text::Warning(T(TKEY("fsr4_runtime_failed_fallback"), "Runtime upscaler DLL failed this session -- using host FSR3 SDK."));
+				}
+			}
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			ImGui::Checkbox(T(TKEY("enable_sharpening"), "Enable Sharpening"), &settings.sharpnessEnabledDLSS);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -521,8 +589,9 @@ void Upscaling::DrawSettings()
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", T(TKEY("dlss_model_preset_tooltip"),
 									  "Choose which DLSS AI model preset to use.\n"
-									  "Each model offers different visual quality, performance, and motion stability.\n"
-									  "Set to 'Default' for automatic selection based on your Upscale Preset and hardware."));
+									  "Default lets the NVIDIA runtime choose for each upscale mode.\n"
+									  "Current defaults are K for DLAA, Quality, and Balanced; M for Performance; and L for Ultra Performance.\n"
+									  "An explicit preset overrides every upscale mode."));
 			}
 		}
 
@@ -889,7 +958,14 @@ void Upscaling::LoadSettings(json& o_json)
 		foveatedRender.LoadSettings(o_json["foveatedRender"]);
 		o_json.erase("foveatedRender");
 	}
+	// NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT fills an absent key with
+	// Settings' default member initializer (the CURRENT schema version), not 0 --
+	// detect absence explicitly so a pre-existing config still runs the migration.
+	const bool hadFsr4SchemaVersion = o_json.contains("fsr4RuntimeSelectionSchemaVersion");
 	settings = o_json;
+	if (!hadFsr4SchemaVersion)
+		settings.fsr4RuntimeSelectionSchemaVersion = 0;
+	ApplyLegacyFsr4RuntimeSelectionMigration(settings, fidelityFX.GetFsr4AdapterSupport());
 
 	// Sanitize loaded settings to ensure enum indices are valid
 	constexpr auto enumCount = 4;  // UpscaleMethod has 4 values: kNONE, kTAA, kFSR, kDLSS
@@ -1194,6 +1270,32 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			transparencyCompositionMaskTexture->CreateSRV(srvDesc);
 			transparencyCompositionMaskTexture->CreateUAV(uavDesc);
 		}
+
+		// Cross-API runtime sharing does not support the game's R24G8 depth allocation.
+		if (a_upscalemethod == UpscaleMethod::kFSR && !globals::game::isVR && fidelityFX.ShouldUseRuntimeUpscalerForFSR() && !runtimeFsrDepthTexture) {
+			D3D11_TEXTURE2D_DESC depthDesc{};
+			depthDesc.Width = texDesc.Width;
+			depthDesc.Height = texDesc.Height;
+			depthDesc.MipLevels = 1;
+			depthDesc.ArraySize = 1;
+			depthDesc.Format = DXGI_FORMAT_R32_FLOAT;
+			depthDesc.SampleDesc.Count = 1;
+			depthDesc.Usage = D3D11_USAGE_DEFAULT;
+			depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC depthSrvDesc{};
+			depthSrvDesc.Format = depthDesc.Format;
+			depthSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			depthSrvDesc.Texture2D.MipLevels = 1;
+
+			D3D11_UNORDERED_ACCESS_VIEW_DESC depthUavDesc{};
+			depthUavDesc.Format = depthDesc.Format;
+			depthUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+
+			runtimeFsrDepthTexture = new Texture2D(depthDesc, "Upscaling::RuntimeFsrDepth");
+			runtimeFsrDepthTexture->CreateSRV(depthSrvDesc);
+			runtimeFsrDepthTexture->CreateUAV(depthUavDesc);
+		}
 	}
 
 	// Motion vector copy texture is only needed for DLSS
@@ -1260,6 +1362,15 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			delete transparencyCompositionMaskTexture;
 			transparencyCompositionMaskTexture = nullptr;
 		}
+	}
+
+	if (a_upscalemethod != UpscaleMethod::kFSR && runtimeFsrDepthTexture) {
+		runtimeFsrDepthTexture->srv = nullptr;
+		runtimeFsrDepthTexture->uav = nullptr;
+		runtimeFsrDepthTexture->resource = nullptr;
+
+		delete runtimeFsrDepthTexture;
+		runtimeFsrDepthTexture = nullptr;
 	}
 
 	// Motion vector copy texture is only needed for DLSS - destroy when switching away from DLSS
@@ -1340,11 +1451,10 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 	auto upscaleMethod = GetUpscaleMethod();
 	uint methodIndex = (uint)upscaleMethod;
 
-	// VR FSR needs a separate variant: DEPTH_OUTPUT converts the R24G8_TYPELESS game depth to
-	// R32_FLOAT so GetFfxResourceDescriptionDX11() returns a valid format instead of UNKNOWN.
-	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kFSR) {
+	// Runtime FSR and VR require typed R32_FLOAT depth instead of the game's R24G8 resource.
+	if (upscaleMethod == UpscaleMethod::kFSR && (globals::game::isVR || runtimeFsrDepthTexture)) {
 		if (!encodeTexturesCSDepthOutput) {
-			logger::debug("Compiling EncodeTexturesCS.hlsl for VR FSR (FSR + DEPTH_OUTPUT)");
+			logger::debug("Compiling EncodeTexturesCS.hlsl for FSR typed depth output");
 			std::vector<std::pair<const char*, const char*>> defines = {
 				{ "FSR", "" },
 				{ "DEPTH_OUTPUT", "" }
@@ -2413,14 +2523,17 @@ void Upscaling::Upscale()
 			auto upscalingBuffer = upscalingDataCB->CB();
 			context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
 
-			// u2 (MotionVectorOutput): DLSS only — 5x5 dilated MVec for ghosting reduction.
-			// u3 (DepthOutput): VR FSR only — converts R24G8_TYPELESS to R32_FLOAT so
-			//   GetFfxResourceDescriptionDX11() returns a valid format. DLSS depth is copied in Streamline.cpp.
+			// u2 is DLSS-only; u3 provides typed depth for VR FSR and flat runtime FSR.
+			ID3D11UnorderedAccessView* depthOutput = nullptr;
+			if (upscaleMethod == UpscaleMethod::kFSR) {
+				depthOutput = globals::game::isVR ? vrIntermediateLinearDepth[i]->uav.get() :
+				                                    (runtimeFsrDepthTexture ? runtimeFsrDepthTexture->uav.get() : nullptr);
+			}
 			ID3D11UnorderedAccessView* uavs[4] = {
 				globals::game::isVR ? vrIntermediateReactiveMask[i]->uav.get() : reactiveMaskTexture->uav.get(),
 				globals::game::isVR ? vrIntermediateTransparencyMask[i]->uav.get() : transparencyCompositionMaskTexture->uav.get(),
 				(upscaleMethod == UpscaleMethod::kDLSS) ? (globals::game::isVR ? vrIntermediateMotionVectors[i]->uav.get() : motionVectorCopyTexture->uav.get()) : nullptr,
-				(upscaleMethod == UpscaleMethod::kFSR && globals::game::isVR) ? vrIntermediateLinearDepth[i]->uav.get() : nullptr
+				depthOutput
 			};
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
@@ -2493,10 +2606,12 @@ void Upscaling::Upscale()
 			// output must land in perfMode.testTexture (the private displayRes target used for
 			// OpenVR submit), not back in the now-small kMAIN. Mirrors Streamline's colorOut
 			// routing for DLSS.
+			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+			ID3D11Resource* fsrDepth = runtimeFsrDepthTexture ? runtimeFsrDepthTexture->resource.get() : depth.texture;
 			ID3D11Resource* fsrColorOut = (perfMode.IsHookActive() && perfMode.GetTestTexture()) ?
 			                                  static_cast<ID3D11Resource*>(perfMode.GetTestTexture()) :
 			                                  nullptr;
-			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR, fsrColorOut);
+			fidelityFX.Upscale(main.texture, fsrDepth, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR, fsrColorOut);
 		}
 	}
 }
@@ -2824,20 +2939,28 @@ void Upscaling::ApplySharpening()
 	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	if (!main.UAV)
+	if (!main.texture)
 		return;
 
 	CS_GPU_PASS("Upscaling::Sharpening");
-
-	float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
-	currentSharpness = exp2(-currentSharpness);
 
 	auto context = globals::d3d::context;
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	// Zero-copy path: DLSS has already written to sharpenerTexture; sharpen directly into kMAIN.UAV.
-	rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+	if (settings.sharpnessEnabledDLSS && settings.sharpnessDLSS > 0.0f && main.UAV) {
+		// Match FSR3's slider->RCAS conversion exactly (ffx_fsr3upscaler.cpp + FsrRcasCon):
+		//   sharpenessRemapped = -2*slider + 2   (sharpness in stops)
+		//   rcasAttenuation    = exp2(-sharpenessRemapped) = exp2(2*slider - 2)
+		float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
+		currentSharpness = exp2(-currentSharpness);
+
+		// DLSS has already written to sharpenerTexture; sharpen directly into kMAIN.UAV.
+		rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+	} else {
+		// Sharpening is disabled: resolve the DLSS output without altering it.
+		context->CopyResource(main.texture, sharpenerTexture->resource.get());
+	}
 
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }

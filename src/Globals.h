@@ -3,6 +3,7 @@
 #include <atomic>
 
 struct CloudShadows;
+struct CloudRelight;
 struct DynamicCubemaps;
 struct VolumetricShadows;
 struct ExtendedMaterials;
@@ -38,6 +39,9 @@ struct Upscaling;
 class Profiler;
 struct CSEditor;
 struct CSUtility;
+#if defined(ENABLE_EFFECTS11)
+struct Effects11;
+#endif
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct PostProcessing;
@@ -51,6 +55,7 @@ struct TruePBR;
 class RenderDoc;
 class RemoteControl;
 class Menu;
+class WeatherManager;
 class SceneSettingsManager;
 
 namespace SIE
@@ -96,6 +101,7 @@ namespace globals
 	namespace features
 	{
 		extern CloudShadows cloudShadows;
+		extern CloudRelight cloudRelight;
 		extern DynamicCubemaps dynamicCubemaps;
 		extern VolumetricShadows volumetricShadows;
 		extern ExtendedMaterials extendedMaterials;
@@ -129,6 +135,9 @@ namespace globals
 		extern ExtendedTranslucency extendedTranslucency;
 		extern Upscaling upscaling;
 		extern HDRDisplay hdrDisplay;
+#if defined(ENABLE_EFFECTS11)
+		extern Effects11 effects11;
+#endif
 		extern RenderDoc renderDoc;
 		extern RemoteControl remoteControl;
 		extern ScreenshotFeature screenshotFeature;
@@ -317,6 +326,7 @@ namespace globals
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
 	extern Profiler* profiler;
+	extern WeatherManager* weatherManager;
 	extern SceneSettingsManager* sceneSettingsManager;
 
 	/** @brief Initializes core singletons (ShaderCache, State, Menu, Deferred). Called once at plugin load. */

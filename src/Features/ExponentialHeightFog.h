@@ -42,10 +42,12 @@ public:
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
+	/** @brief Registers all fog parameters as weather-interpolatable variables. */
+	void RegisterWeatherVariables() override;
 	/** @brief Captures the current directional shadow map SRV for use in volumetric fog light scattering. */
 	void CaptureDirectionalShadowMap();
 
-	struct Settings
+	struct alignas(16) Settings
 	{
 		uint enabled = 0;
 		uint useDynamicCubemaps = 1;
@@ -84,6 +86,8 @@ public:
 		float2 pad0;
 	} settings;
 	STATIC_ASSERT_ALIGNAS_16(Settings);
+
+	Settings GetCommonBufferData() const;
 
 private:
 	struct VolumetricFogCB

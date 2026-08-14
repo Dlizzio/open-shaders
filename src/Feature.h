@@ -70,6 +70,9 @@ struct Feature
 	// Nexus Mods base URL for Skyrim Special Edition
 	static constexpr std::string_view NEXUS_BASE_URL = "https://www.nexusmods.com/skyrimspecialedition/mods/";
 	bool loaded = false;
+	// Whether the feature .ini is present on disk. Unlike `loaded` this stays true for
+	// features disabled at boot, so they remain reachable in the UI.
+	bool installed = false;
 	std::string version;
 	std::string failedLoadedMessage;
 
@@ -145,6 +148,20 @@ public:
 
 	bool IsAlpha() const { return GetReleaseStage() == ReleaseStage::Alpha; }
 	bool IsBeta() const { return GetReleaseStage() == ReleaseStage::Beta; }
+
+	/**
+	 * Whether the feature has yet to ship, declared via `Unreleased = True` in the
+	 * feature .ini and baked into FeatureVersions.h at build time. Orthogonal to
+	 * ReleaseStage: it gates UI visibility only, and carries no marker of its own.
+	 */
+	bool IsUnreleased() const { return FeatureVersions::FEATURE_UNRELEASED_NAMES.contains(const_cast<Feature*>(this)->GetShortName()); }
+
+	/**
+	 * Whether an unreleased feature must stay out of the UI entirely. Unreleased
+	 * features only surface once their .ini is installed, so a shipped build never
+	 * advertises work in progress; once installed they render like any other feature.
+	 */
+	bool IsHiddenUnreleased() const { return !installed && IsUnreleased(); }
 
 	/**
 	 * Localized stage marker shown after the feature name ("[ALPHA]", "[BETA]"),
@@ -293,6 +310,9 @@ public:
 	/** @brief Called after all game data files have been loaded. */
 	virtual void DataLoaded() {}
 
+	/** @brief Called after loading an existing save. */
+	virtual void GameLoaded() {}
+
 	/** @brief Called after all SKSE plugins have finished PostLoad. */
 	virtual void PostPostLoad() {}
 
@@ -369,6 +389,9 @@ public:
 	 * Features should override this to provide their weather analysis section name and draw function.
 	 */
 	virtual WeatherAnalysisConfig GetWeatherAnalysisConfig() const { return {}; }
+
+	/** @brief Registers weather-controllable variables for this feature. */
+	virtual void RegisterWeatherVariables() {}
 
 	/**
 	 * @brief Returns constraints this feature imposes on other features' settings

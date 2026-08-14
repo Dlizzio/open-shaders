@@ -4,8 +4,12 @@
 #include "FeatureVersions.h"
 #include "Features/CSEditor.h"
 #include "Features/CSUtility.h"
+#include "Features/CloudRelight.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
+#if defined(ENABLE_EFFECTS11)
+#	include "Features/Effects11.h"
+#endif
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
@@ -49,6 +53,8 @@
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
+#include "WeatherManager.h"
+#include "WeatherVariableRegistry.h"
 
 #include "State.h"
 #include "TruePBR.h"
@@ -243,6 +249,7 @@ namespace
 			&globals::features::lightLimitFix,
 			&globals::features::dynamicCubemaps,
 			&globals::features::cloudShadows,
+			&globals::features::cloudRelight,
 			&globals::features::waterEffects,
 			&globals::features::performanceOverlay,
 			&globals::features::subsurfaceScattering,
@@ -270,6 +277,9 @@ namespace
 			&globals::features::sceneManager,
 			&globals::features::screenshotFeature,
 			&globals::features::linearLighting,
+#if defined(ENABLE_EFFECTS11)
+			&globals::features::effects11,
+#endif
 			&globals::features::unifiedWater,
 			&globals::features::horizonFix,
 			&globals::features::exponentialHeightFog,
