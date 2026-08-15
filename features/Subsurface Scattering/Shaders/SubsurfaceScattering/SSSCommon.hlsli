@@ -1,6 +1,7 @@
 #ifndef SSS_COMMON_HLSLI
 #define SSS_COMMON_HLSLI
 
+#include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
 
 #define SSSS_N_SAMPLES 21
