@@ -104,12 +104,17 @@ public:
 	void CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 
 	void CreateInterop();
+	/** @brief (Re)creates the D3D11/D3D12-shared swap-chain and UI buffer textures at (re)size time. */
+	void RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc);
 
 	DXGISwapChainProxy* GetSwapChainProxy();
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 
-	HRESULT GetBuffer(void** ppSurface);
+	/** @brief IDXGISwapChain::GetBuffer equivalent for the wrapped D3D11 swap-chain buffer. Only buffer index 0 is supported. */
+	HRESULT GetBuffer(UINT buffer, REFIID riid, void** ppSurface);
+	/** @brief IDXGISwapChain::ResizeBuffers equivalent; rejects any bufferCount other than 2 (required by FidelityFX's replacement buffers). */
+	HRESULT ResizeBuffers(UINT bufferCount, UINT width, UINT height, DXGI_FORMAT format, UINT flags);
 	HRESULT Present(UINT SyncInterval, UINT Flags);
 	HRESULT GetDevice(_In_ REFIID riid, _COM_Outptr_ void** ppDevice);
 	HANDLE GetFrameLatencyWaitableObject();
