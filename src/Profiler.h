@@ -26,8 +26,9 @@ public:
 	static constexpr uint32_t kMaxTimers = 256;
 	static constexpr uint32_t kFrameLatency = 3;
 	static constexpr uint32_t kHistorySize = 300;
-	// Must exceed the longest legitimate gap between samples of a still-running pass;
-	// the DynamicCubemaps state machine spreads its passes over 6 frames.
+	/** @brief Collection-cycle gap before retiring an inactive timer.
+		Must exceed the longest legitimate gap between samples of a still-running pass;
+		the DynamicCubemaps state machine spreads its passes over 6 frames. */
 	static constexpr uint64_t kTimerRetireFrames = 60;
 
 	using PerfEventCallback = std::function<void(std::string_view)>;
