@@ -402,8 +402,6 @@ bool Profiler::CollectResults()
 	}
 	frame.cpuTimers.clear();
 
-	RetireStaleTimers();
-
 	totalTimeMs = activeTotalMs;
 	cpuTotalTimeMs = activeCpuTotalMs;
 	// Never zeroed while idle, unlike totalTimeMs/cpuTotalTimeMs; see
@@ -436,6 +434,8 @@ bool Profiler::CollectResults()
 		if (freshGpu || freshCpu)
 			known.lastSampleFrame = collectedFrames;
 	}
+
+	RetireStaleTimers();
 
 	results.clear();
 	results.reserve(knownTimers.size());
