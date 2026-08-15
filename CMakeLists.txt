@@ -1655,7 +1655,9 @@ endif()
 
 message("*************************************************************")
 message("Open Shaders configuration complete (fork of Community Shaders)")
-message("To prepare a ZIP package of AIO, Core, or Features")
+message(
+    "To prepare a package of AIO (.7z when 7-Zip is found), Core, or Features"
+)
 message("  Build cmake targets:")
 message("    - Package-Core: Core package")
 message("    - Package-AIO-Manual: AIO package (manual)")
