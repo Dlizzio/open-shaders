@@ -46,6 +46,13 @@ public:
 
 	float2 jitter = { 0, 0 };
 
+	enum class FrameGenMethod
+	{
+		kNone,
+		kFSR,
+		kDLSSG
+	};
+
 	enum class UpscaleMethod
 	{
 		kNONE,
@@ -76,6 +83,12 @@ public:
 		uint frameGenerationMode = 1;
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
+		// Workaround for adapters where DLSS-G initializes successfully but silently
+		// produces no interpolated frames; forces the FSR3 FG backend instead.
+		bool preferFSRFrameGen = false;
+		// Generated frames per real frame (1=2x). Clamped at apply time to the
+		// hardware-reported DLSSGState::numFramesToGenerateMax.
+		uint dlssgFramesToGenerate = 1;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
 		bool sharpnessEnabledDLSS = false;
@@ -119,9 +132,10 @@ public:
 	// presetDLSS is deliberately NOT here: Streamline::SetDLSSOptions reads
 	// settings.presetDLSS per-frame and applies it via slDLSSSetOptions, so
 	// it's already runtime-effective.
-	inline static constexpr Util::Settings::RestartTable<Settings, 8> kRestartFields{ {
+	inline static constexpr Util::Settings::RestartTable<Settings, 9> kRestartFields{ {
 		UTIL_RESTART_FIELD(Settings, frameGenerationMode, "Frame Generation"),
 		UTIL_RESTART_FIELD(Settings, frameGenerationForceEnable, "Force Enable Frame Generation"),
+		UTIL_RESTART_FIELD(Settings, preferFSRFrameGen, "Prefer AMD FSR Frame Generation"),
 		UTIL_RESTART_FIELD(Settings, renderAtUpscaleRes, "Render at Upscaled Resolution"),
 		UTIL_RESTART_FIELD(Settings, streamlineLogLevel, "Streamline Logging"),
 		UTIL_RESTART_FIELD(Settings, upscaleMethod, "Upscaling Method"),
@@ -178,7 +192,6 @@ public:
 	bool IsFrameGenerationDx12PathActive() const;
 	bool IsFrameGenerationActive() const;
 	bool ShouldUseFrameGenerationThisFrame() const;
-	float GetFrameGenerationFrameTime() const;
 	bool IsUpscalingActive() const;
 
 	// Feature interface overrides
@@ -247,6 +260,15 @@ public:
 	virtual void SetupResources() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
+	FrameGenMethod GetFrameGenMethod() const;
+	bool UsesDLSSGFrameGen() const;
+
+	/** @brief Real:generated frame ratio for the active FG backend -- the single source
+	 * of truth for pacing (FrameLimiter) and reporting (PerformanceOverlay). */
+	uint GetFrameGenerationMultiplier() const;
+
+	/** @brief Frame-generation runtime state for devbench (method, multiplier, DLSS-G status). */
+	virtual json GetDiagnostics() override;
 
 	// PerfMode can bank render resolution only in VR, with an upscale method that redirects its
 	// output to a separate display-res target (DLSS/FSR — TAA/None can't), and a preset below 1.0x
@@ -350,8 +372,9 @@ public:
 	virtual void ClearShaderCache() override;
 
 	// Static instances instead of singletons
-	static inline Streamline streamline;
-	static inline FidelityFX fidelityFX;  ///< Only for frame generation
+	static inline Streamline streamline;      ///< DX11 instance: DLSS + Reflex + PCL
+	static inline Streamline streamlineDX12;  ///< DX12 instance: DLSS-G frame generation
+	static inline FidelityFX fidelityFX;      ///< AMD FSR frame generation
 	static inline DX12SwapChain dx12SwapChain;
 	static inline RCAS rcas;                      ///< Standalone RCAS sharpening for DLSS
 	static inline PerfMode perfMode;              ///< VR-only: render engine at upscaled-render res
@@ -425,6 +448,7 @@ public:
 	void SetProxyD3D11Device(ID3D11Device* device);
 	void SetProxyD3D11DeviceContext(ID3D11DeviceContext* context);
 	void CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
+	void CreateProxySwapChainDirect(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 	void CreateProxyInterop();
 	IDXGISwapChain* GetProxySwapChain();
 
