@@ -333,6 +333,9 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		const bool armStartupMenuBlurSource =
+			!globals::state->startupMenuBlurSourceReady &&
+			globals::state->startupMenuInitializationComplete.load(std::memory_order_acquire);
 		globals::state->Reset();
 
 		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
@@ -342,6 +345,9 @@ struct IDXGISwapChain_Present
 			[&](IDXGISwapChain* swapChain, UINT syncInterval, UINT presentFlags) {
 				return func(swapChain, syncInterval, presentFlags);
 			});
+
+		if (SUCCEEDED(retval) && armStartupMenuBlurSource)
+			globals::state->startupMenuBlurSourceReady = true;
 
 		// Runs after HDR Present so the captured back buffer matches what's on screen.
 		globals::features::screenshotFeature.ProcessCaptureRequest();

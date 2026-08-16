@@ -343,6 +343,10 @@ public:
 	// Latched by Main_RenderWorld through frame end, so Post-time code can tell
 	// a real scene rendered this frame even under a menu (e.g. VR Playroom).
 	bool worldRenderedThisFrame = false;
+	// Set after all DataLoaded work that can block startup rendering completes.
+	std::atomic_bool startupMenuInitializationComplete{ false };
+	// Set after the first complete Present following startup initialization.
+	bool startupMenuBlurSourceReady = false;
 
 	// Cached menu open states, updated once per frame in Reset().
 	// Avoids repeated IsMenuOpen calls (each constructs a BSFixedString).
