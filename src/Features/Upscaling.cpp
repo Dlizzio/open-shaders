@@ -389,20 +389,29 @@ namespace
 	{
 		uint qualityMode;
 		bool foveation;
+		const char* cropPresetName;
+		FoveatedRender::DlssMode dlssMode;
+		FoveatedRender::StretchMode stretchMode;
+		FoveatedRender::PeripheryAAMode peripheryAAMode;
+		FoveatedRender::SubrectBlendMode subrectBlendMode;
 	};
 
-	// Foveated rendering (DLSS or FSR -- FoveatedRender::IsRuntimeSupported requires only
-	// VR) trades peripheral sharpness for speed, so only Performance opts into it.
 	// Single source of truth for Apply/MatchesPerformanceProfile below.
 	constexpr UpscalePreset GetUpscalePreset(Feature::PerfProfile profile)
 	{
 		switch (profile) {
 		case Feature::PerfProfile::Performance:
-			return { (uint)Upscaling::QualityMode::kPerformance, true };
+			return { (uint)Upscaling::QualityMode::kPerformance, true, FoveatedRender::kPresetCenter50,
+				FoveatedRender::DlssMode::kFaster, FoveatedRender::StretchMode::kBilinear,
+				FoveatedRender::PeripheryAAMode::kNone, FoveatedRender::SubrectBlendMode::kDither };
 		case Feature::PerfProfile::Balanced:
-			return { (uint)Upscaling::QualityMode::kBalanced, false };
+			return { (uint)Upscaling::QualityMode::kBalanced, true, FoveatedRender::kPresetCenter75,
+				FoveatedRender::DlssMode::kDefault, FoveatedRender::StretchMode::kGaussianBlur,
+				FoveatedRender::PeripheryAAMode::kTemporalSmooth, FoveatedRender::SubrectBlendMode::kFeather };
 		default:
-			return { (uint)Upscaling::QualityMode::kQuality, false };
+			return { (uint)Upscaling::QualityMode::kQuality, false, FoveatedRender::kPresetFullEye,
+				FoveatedRender::DlssMode::kDefault, FoveatedRender::StretchMode::kGaussianBlur,
+				FoveatedRender::PeripheryAAMode::kTemporalSmooth, FoveatedRender::SubrectBlendMode::kFeather };
 		}
 	}
 }
@@ -432,21 +441,32 @@ void Upscaling::ApplyPerformanceProfile(PerfProfile profile)
 	settings.renderAtUpscaleRes = true;
 	settings.qualityMode = preset.qualityMode;
 	settings.vrRenderScale = 0.0f;
-	// Foveation is VR-only (DrawFoveationControls/IsRuntimeSupported); leave it alone on Flat.
-	if (globals::game::isVR) {
-		foveatedRender.settings.enabled = preset.foveation ? 1 : 0;
-		// GetUpscaleMethod() reads upscaleMethod when DLSS is available and
-		// upscaleMethodNoDLSS otherwise (see DrawSettings' currentUpscaleMode
-		// selection above) -- write whichever field it will actually read.
-		if (preset.foveation) {
+	// Only fills the gap (never overrides an existing DLSS-or-FSR choice); Quality never
+	// forces one. GetUpscaleMethod() reads upscaleMethod/upscaleMethodNoDLSS depending on
+	// DLSS availability -- write whichever field it reads.
+	if (profile != PerfProfile::Quality) {
+		const auto currentMethod = GetUpscaleMethod();
+		const bool needsUpscaler = currentMethod != UpscaleMethod::kDLSS && currentMethod != UpscaleMethod::kFSR;
+		if (needsUpscaler) {
 			if (streamline.featureDLSS)
 				settings.upscaleMethod = (uint)UpscaleMethod::kDLSS;
 			else
 				settings.upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
 		}
-		// Full Eye is 0-coverage by definition (FoveatedRender::GetFoveationProfile); shrink
-		// it so Performance isn't a silent no-op.
-		foveatedRender.subrectController.ApplyPresetByName(preset.foveation ? FoveatedRender::kPresetCenter75 : FoveatedRender::kPresetFullEye);
+	}
+	// Foveation is VR-only (DrawFoveationControls/IsRuntimeSupported); leave it alone on Flat.
+	if (globals::game::isVR) {
+		foveatedRender.settings.enabled = preset.foveation ? 1 : 0;
+		if (preset.foveation) {
+			foveatedRender.settings.dlssMode = (uint)preset.dlssMode;
+			foveatedRender.settings.stretchMode = (uint)preset.stretchMode;
+			foveatedRender.settings.peripheryAAMode = (uint)preset.peripheryAAMode;
+			foveatedRender.settings.subrectBlendMode = (uint)preset.subrectBlendMode;
+			// A user-dragged custom crop is sticky across profile switches -- never
+			// silently overwrite it with a preset region.
+			if (!foveatedRender.subrectController.HasCustomCrop())
+				foveatedRender.subrectController.ApplyPresetByName(preset.cropPresetName);
+		}
 	}
 }
 
@@ -458,30 +478,61 @@ bool Upscaling::MatchesPerformanceProfile(PerfProfile profile) const
 			settings.qualityMode == preset.qualityMode)) {
 		return false;
 	}
+	// Match on "any redirecting method", not a hardcoded expected one -- ApplyPerformanceProfile
+	// never overrides an existing DLSS-or-FSR choice.
+	if (profile != PerfProfile::Quality) {
+		const auto method = GetUpscaleMethod();
+		if (method != UpscaleMethod::kDLSS && method != UpscaleMethod::kFSR) {
+			return false;
+		}
+	}
 	if (!globals::game::isVR) {
 		return true;
 	}
 	if ((foveatedRender.settings.enabled != 0) != preset.foveation) {
 		return false;
 	}
-	// ApplyPerformanceProfile also sets DLSS/FSR and a region preset in VR; require
-	// both here via the same preset-name mapping, not a second hardcoded UV table.
-	if (preset.foveation) {
-		const bool methodMatches = streamline.featureDLSS ?
-		                               settings.upscaleMethod == (uint)UpscaleMethod::kDLSS :
-		                               settings.upscaleMethodNoDLSS == (uint)UpscaleMethod::kFSR;
-		if (!methodMatches) {
-			return false;
-		}
+	if (!preset.foveation) {
+		return true;
 	}
-	const char* expectedPresetName = preset.foveation ? FoveatedRender::kPresetCenter75 : FoveatedRender::kPresetFullEye;
-	const auto expectedUV = foveatedRender.subrectController.FindPresetUV(expectedPresetName);
+	if (foveatedRender.settings.dlssMode != (uint)preset.dlssMode ||
+		foveatedRender.settings.stretchMode != (uint)preset.stretchMode ||
+		foveatedRender.settings.peripheryAAMode != (uint)preset.peripheryAAMode ||
+		foveatedRender.settings.subrectBlendMode != (uint)preset.subrectBlendMode) {
+		return false;
+	}
+	// A sticky custom crop still counts as "matching" -- ApplyPerformanceProfile
+	// deliberately leaves it alone rather than forcing the preset region.
+	if (foveatedRender.subrectController.HasCustomCrop()) {
+		return true;
+	}
+	const auto expectedUV = foveatedRender.subrectController.FindPresetUV(preset.cropPresetName);
 	if (!expectedUV) {
 		return false;
 	}
 	const auto& currentUV = foveatedRender.subrectController.GetUV();
 	return currentUV.x == expectedUV->x && currentUV.y == expectedUV->y &&
 	       currentUV.w == expectedUV->w && currentUV.h == expectedUV->h;
+}
+
+std::string Upscaling::GetProfilePreviewText(PerfProfile profile) const
+{
+	if (!globals::game::isVR)
+		return "";
+	const auto preset = GetUpscalePreset(profile);
+	if (!preset.foveation)
+		return T(TKEY("profile_preview_foveation_off"), "Foveation off (Full Eye)");
+	// ApplyPerformanceProfile leaves a custom crop alone rather than switching to the
+	// preset region -- the preview must match, or it promises a crop change that won't happen.
+	const std::string cropLabel = foveatedRender.subrectController.HasCustomCrop() ?
+	                                  T(TKEY("profile_preview_custom_crop"), "custom crop preserved") :
+	                                  preset.cropPresetName;
+	const char* dlssModeName = FoveatedRender::DlssModeName(preset.dlssMode);
+	const char* stretchModeName = FoveatedRender::StretchModeName(preset.stretchMode);
+	const char* peripheryAAName = FoveatedRender::PeripheryAAModeName(preset.peripheryAAMode);
+	const char* blendModeName = FoveatedRender::SubrectBlendModeName(preset.subrectBlendMode);
+	return std::vformat(T(TKEY("profile_preview_format"), "Foveation: {} / {} / {} / {} / {} blend"),
+		std::make_format_args(cropLabel, dlssModeName, stretchModeName, peripheryAAName, blendModeName));
 }
 
 void Upscaling::DrawSettings()
