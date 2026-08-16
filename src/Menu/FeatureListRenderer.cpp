@@ -862,7 +862,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 				ImGui::Separator();
 				if (Util::FlyoutMenuItem(
 						feat->HasScopedDefaultSettings() ?
-							T("menu.features.restore_page_defaults", "Restore Page Defaults") :
+							T("menu.features.restore_page_defaults", "Restore Defaults (Page)") :
 							T("menu.features.restore_defaults", "Restore Defaults"))) {
 					feat->RestoreCurrentPageDefaultSettings();
 					closeFlyout = true;
@@ -879,7 +879,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 				if (hasOverrides) {
 					if (Util::FlyoutMenuItem(
 							feat->HasScopedOverrideSettings() ?
-								T("menu.features.apply_page_override", "Apply Page Override") :
+								T("menu.features.apply_page_override", "Apply Override (Page)") :
 								T("menu.features.apply_override", "Apply Override"),
 							false,
 							!sceneControlled)) {
