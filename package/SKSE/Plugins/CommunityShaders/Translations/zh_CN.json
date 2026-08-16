@@ -869,7 +869,7 @@
     "feature.perf_overlay.show_draw_calls": "显示绘制调用",
     "feature.perf_overlay.show_fps": "显示FPS计数器",
     "feature.perf_overlay.show_frametime_graph": "显示帧时间图表",
-    "feature.perf_overlay.show_in_overlay": "在叠加层中显示",
+    "feature.perf_overlay.show_in_overlay": "在叠加层中显示性能",
     "feature.perf_overlay.show_in_overlay_tooltip": "在单独的窗口中打开性能叠加层，\n即使主菜单关闭也保持打开。",
     "feature.perf_overlay.show_post_fg_graph": "显示帧生成后帧时间图表",
     "feature.perf_overlay.show_pre_fg_graph": "显示帧生成前帧时间图表",

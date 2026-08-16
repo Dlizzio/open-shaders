@@ -816,7 +816,7 @@
     "feature.perf_overlay.show_draw_calls": "Показать вызовы отрисовки",
     "feature.perf_overlay.show_fps": "Показать счётчик FPS",
     "feature.perf_overlay.show_frametime_graph": "Показать график времени кадра",
-    "feature.perf_overlay.show_in_overlay": "Показать в оверлее",
+    "feature.perf_overlay.show_in_overlay": "Показывать производительность в оверлее",
     "feature.perf_overlay.show_in_overlay_tooltip": "Открывает оверлей производительности в отдельном окне, которое остаётся открытым\nдаже при закрытом главном меню. ",
     "feature.perf_overlay.show_post_fg_graph": "Показать график времени Post-FG кадра",
     "feature.perf_overlay.show_pre_fg_graph": "Показать график времени Pre-FG кадра",
