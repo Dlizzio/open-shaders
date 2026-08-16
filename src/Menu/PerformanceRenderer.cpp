@@ -18,6 +18,7 @@
 
 namespace
 {
+	constexpr float kProfileCardMinimumWidth = 240.0f;
 	constexpr float kProfileCardHeight = 144.0f;
 	constexpr float kProfileCardAccentHeight = 3.0f;
 	constexpr float kProfileCardBorderThickness = 2.0f;
@@ -145,8 +146,14 @@ static void DrawGlobalProfileChooser(const Feature::PerfProfile (&profiles)[3], 
 	const char* const (&descriptions)[3], int activeIdx)
 {
 	const auto& theme = Menu::GetSingleton()->GetTheme();
-	if (ImGui::BeginTable("##GlobalPerformanceProfiles", 3,
-			ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX)) {
+	const float minimumCardWidth = kProfileCardMinimumWidth * Util::GetUIScale();
+	const float minimumColumnWidth = minimumCardWidth + ImGui::GetStyle().CellPadding.x * 2.0f;
+	const int columnCount = std::clamp(
+		static_cast<int>(ImGui::GetContentRegionAvail().x / minimumColumnWidth),
+		1,
+		IM_ARRAYSIZE(profiles));
+	if (ImGui::BeginTable("##GlobalPerformanceProfiles", columnCount,
+			ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_NoSavedSettings)) {
 		for (int i = 0; i < IM_ARRAYSIZE(profiles); ++i) {
 			ImGui::TableNextColumn();
 			ImGui::PushID(i);
