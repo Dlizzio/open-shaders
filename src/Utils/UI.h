@@ -357,6 +357,9 @@ namespace Util
 	/** @brief Draws the rounded hover/active fill for the last submitted item. */
 	bool DrawCurrentItemRoundedButtonHighlight(ImDrawList* drawList = nullptr);
 
+	/** @brief Draws an animated disclosure chevron inside the supplied rectangle. */
+	void DrawDisclosureChevron(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, float progress);
+
 	/** @brief Renders a flyout menu item over a theme-rounded hover highlight. */
 	bool FlyoutMenuItem(
 		const char* label,
