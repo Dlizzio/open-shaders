@@ -983,8 +983,8 @@ namespace Util
 			categoryIcon = menu.characters.texture;
 		} else if (strcmp(categoryKey, "Display") == 0) {
 			categoryIcon = menu.display.texture;
-		} else if (strcmp(categoryKey, "Grass") == 0) {
-			categoryIcon = menu.grass.texture;
+		} else if (strcmp(categoryKey, "Foliage") == 0) {
+			categoryIcon = menu.foliage.texture;
 		} else if (strcmp(categoryKey, "Lighting") == 0) {
 			categoryIcon = menu.lighting.texture;
 		} else if (strcmp(categoryKey, "Sky") == 0) {

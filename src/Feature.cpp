@@ -534,8 +534,8 @@ std::string Feature::GetDisplayCategory() const
 		return T("feature.category.characters", "Characters");
 	if (category == FeatureCategories::kDisplay)
 		return T("feature.category.display", "Display");
-	if (category == FeatureCategories::kGrass)
-		return T("feature.category.grass", "Grass");
+	if (category == FeatureCategories::kFoliage)
+		return T("feature.category.grass", "Foliage");
 	if (category == FeatureCategories::kLandscapeAndTextures)
 		return T("feature.category.landscape_and_textures", "Landscape & Textures");
 	if (category == FeatureCategories::kLighting)

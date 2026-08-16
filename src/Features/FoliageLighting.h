@@ -24,7 +24,7 @@ struct FoliageLighting : Feature
 	virtual std::string GetName() override { return "Foliage Lighting"; }
 	virtual std::string GetDisplayName() override { return T("feature.foliage_lighting.name", "Foliage Lighting"); }
 	virtual std::string GetShortName() override { return "FoliageLighting"; }
-	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
+	virtual std::string_view GetCategory() const override { return FeatureCategories::kFoliage; }
 	virtual bool IsCore() const override { return true; }
 	virtual bool SupportsVR() override { return true; }
 
