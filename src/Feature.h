@@ -330,9 +330,6 @@ public:
 	/** @brief Whether Restore Defaults targets the current settings page instead of the entire feature. */
 	virtual bool HasScopedDefaultSettings() const { return false; }
 
-	/** @brief Whether the current settings page should also offer a full-feature reset. */
-	virtual bool CanRestoreAllDefaultSettings() const { return false; }
-
 	/** @brief Restores defaults for the currently visible settings page or subfeature. */
 	virtual void RestoreCurrentPageDefaultSettings() { RestoreDefaultSettings(); }
 
@@ -372,6 +369,12 @@ public:
 	 * @return True if overrides were found and applied, false otherwise
 	 */
 	virtual bool ReapplyOverrideSettings();
+
+	/** @brief Whether Apply Override targets the current settings page instead of the entire feature. */
+	virtual bool HasScopedOverrideSettings() const { return false; }
+
+	/** @brief Reapplies overrides for the current page or the entire feature. */
+	virtual bool ReapplyCurrentPageOverrideSettings() { return ReapplyOverrideSettings(); }
 
 	/**
 	 * Weather analysis configuration for features that want to provide weather analysis.
@@ -525,4 +528,8 @@ public:
 			}
 		}
 	}
+
+protected:
+	/** Reapplies override-controlled values for the selected top-level setting keys. */
+	bool ReapplyOverrideSettingsForKeys(std::span<const std::string_view> a_settingKeys);
 };

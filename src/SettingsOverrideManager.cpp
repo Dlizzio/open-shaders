@@ -1047,6 +1047,15 @@ bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, c
 	}
 }
 
+bool SettingsOverrideManager::PersistUserOverride(const std::string& featureName, const json& currentSettings, const json& overrideSettings)
+{
+	if (!enabled || featureName.empty())
+		return false;
+	if (Util::Settings::BuildUserOverride(currentSettings, overrideSettings).empty())
+		return DeleteUserOverride(featureName);
+	return SaveUserOverride(featureName, currentSettings, overrideSettings);
+}
+
 bool SettingsOverrideManager::HasUserOverride(const std::string& featureName) const
 {
 	if (!enabled || featureName.empty()) {

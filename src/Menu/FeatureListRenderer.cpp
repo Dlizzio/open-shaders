@@ -860,20 +860,10 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 
 			if (!isDisabled && isLoaded) {
 				ImGui::Separator();
-				if (feat->CanRestoreAllDefaultSettings()) {
-					if (Util::FlyoutMenuItem(T("menu.features.restore_all_defaults", "Restore All Defaults"))) {
-						feat->RestoreDefaultSettings();
-						closeFlyout = true;
-					}
-
-					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::Text(
-							"%s",
-							T("menu.features.restore_all_defaults_tooltip", "Restore default settings for every page in this feature"));
-					}
-				}
-
-				if (Util::FlyoutMenuItem(T("menu.features.restore_defaults", "Restore Defaults"))) {
+				if (Util::FlyoutMenuItem(
+						feat->HasScopedDefaultSettings() ?
+							T("menu.features.restore_page_defaults", "Restore Page Defaults") :
+							T("menu.features.restore_defaults", "Restore Defaults"))) {
 					feat->RestoreCurrentPageDefaultSettings();
 					closeFlyout = true;
 				}
@@ -887,9 +877,14 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 				}
 
 				if (hasOverrides) {
-					if (Util::FlyoutMenuItem(T("menu.features.apply_override", "Apply Override"), false, !sceneControlled)) {
+					if (Util::FlyoutMenuItem(
+							feat->HasScopedOverrideSettings() ?
+								T("menu.features.apply_page_override", "Apply Page Override") :
+								T("menu.features.apply_override", "Apply Override"),
+							false,
+							!sceneControlled)) {
 						closeFlyout = true;
-						if (feat->ReapplyOverrideSettings()) {
+						if (feat->ReapplyCurrentPageOverrideSettings()) {
 							logger::info("Successfully reapplied override settings for {}", featureName);
 						} else {
 							logger::warn("Failed to reapply override settings for {}", featureName);
@@ -906,10 +901,15 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 						} else {
 							ImGui::Text(
 								"%s",
-								T("menu.features.restore_override_tooltip",
-									"Restores original override settings from mod files.\n"
-									"This will discard your customizations and revert to\n"
-									"the mod author's recommended settings."));
+								feat->HasScopedOverrideSettings() ?
+									T("menu.features.restore_page_override_tooltip",
+										"Restores override settings for this page from mod files.\n"
+										"This will discard your customizations on this page and revert to\n"
+										"the mod author's recommended settings.") :
+									T("menu.features.restore_override_tooltip",
+										"Restores original override settings from mod files.\n"
+										"This will discard your customizations and revert to\n"
+										"the mod author's recommended settings."));
 						}
 					}
 				}

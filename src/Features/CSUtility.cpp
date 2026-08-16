@@ -10,7 +10,9 @@
 #include "Utils/UI.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <string_view>
 
 #define I18N_KEY_PREFIX "feature.cs_utility."
 
@@ -30,7 +32,6 @@ namespace
 	constexpr uint32_t kMaxVanillaPointLights = 7;
 	constexpr uint32_t kVanillaPointLightCBRegister = 3;
 	constexpr uint32_t kFirstPointLightSceneIndex = 1;
-
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{
 		if (!std::isfinite(a_value))
@@ -265,6 +266,37 @@ void CSUtility::RestoreCurrentPageDefaultSettings()
 		settings.bloomEnhancement = defaults.bloomEnhancement;
 		break;
 	}
+}
+
+bool CSUtility::ReapplyCurrentPageOverrideSettings()
+{
+	static constexpr std::array<std::string_view, 1> atmosphereKeys{ "skyBrightness" };
+	static constexpr std::array<std::string_view, 1> waterKeys{ "water" };
+	static constexpr std::array<std::string_view, 7> multiplierKeys{
+		"directionalLightMult",
+		"pointLightMult",
+		"linearPointLightMult",
+		"spotlightMult",
+		"linearSpotlightMult",
+		"omnidirectionalBulbMult",
+		"linearOmnidirectionalBulbMult"
+	};
+	static constexpr std::array<std::string_view, 2> depthOfFieldKeys{ "sceneDof", "underwaterDof" };
+	static constexpr std::array<std::string_view, 1> bloomKeys{ "bloomEnhancement" };
+
+	switch (activeSettingsPage) {
+	case SettingsPage::Atmosphere:
+		return ReapplyOverrideSettingsForKeys(atmosphereKeys);
+	case SettingsPage::Water:
+		return ReapplyOverrideSettingsForKeys(waterKeys);
+	case SettingsPage::Multipliers:
+		return ReapplyOverrideSettingsForKeys(multiplierKeys);
+	case SettingsPage::VanillaDepthOfField:
+		return ReapplyOverrideSettingsForKeys(depthOfFieldKeys);
+	case SettingsPage::VanillaBloom:
+		return ReapplyOverrideSettingsForKeys(bloomKeys);
+	}
+	return false;
 }
 
 void CSUtility::SetupResources()

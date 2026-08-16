@@ -66,12 +66,14 @@ struct PostProcessing : Feature
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
-	/** @return true because Post Processing supports page-scoped restoration. */
-	virtual bool HasScopedDefaultSettings() const override { return true; }
-	/** @return true only while viewing a valid pipeline subfeature. */
-	virtual bool CanRestoreAllDefaultSettings() const override;
-	/** Restores defaults for the pipeline page or selected subfeature. */
+	/** @return true while viewing a pipeline subfeature. */
+	virtual bool HasScopedDefaultSettings() const override;
+	/** Restores defaults for the entire feature or selected subfeature. */
 	virtual void RestoreCurrentPageDefaultSettings() override;
+	/** @return true while viewing a pipeline subfeature. */
+	virtual bool HasScopedOverrideSettings() const override;
+	/** Reapplies overrides for the entire feature or selected subfeature. */
+	virtual bool ReapplyCurrentPageOverrideSettings() override;
 
 	json pendingSettings = {};
 
@@ -194,5 +196,7 @@ struct PostProcessing : Feature
 	};
 
 private:
-	void RestorePipelineDefaultEnablement(bool a_visibleOnly);
+	bool ApplyPendingSettings();
+	bool HasActivePipelineFeature() const;
+	void RestorePipelineDefaultEnablement();
 };

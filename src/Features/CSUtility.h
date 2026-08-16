@@ -140,10 +140,12 @@ struct CSUtility : Feature
 	virtual void RestoreDefaultSettings() override;
 	/** @return true because OS Utility supports restoring the active tab. */
 	virtual bool HasScopedDefaultSettings() const override { return true; }
-	/** @return true because every OS Utility tab can offer a full reset. */
-	virtual bool CanRestoreAllDefaultSettings() const override { return true; }
 	/** Restores default settings for the active OS Utility tab. */
 	virtual void RestoreCurrentPageDefaultSettings() override;
+	/** @return true because OS Utility reapplies overrides for the active tab. */
+	virtual bool HasScopedOverrideSettings() const override { return true; }
+	/** Reapplies override-controlled settings for the active OS Utility tab. */
+	virtual bool ReapplyCurrentPageOverrideSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;

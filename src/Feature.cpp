@@ -461,6 +461,60 @@ bool Feature::ReapplyOverrideSettings()
 	return false;
 }
 
+bool Feature::ReapplyOverrideSettingsForKeys(std::span<const std::string_view> a_settingKeys)
+{
+	auto* overrideManager = SettingsOverrideManager::GetSingleton();
+	const std::string featureName = GetShortName();
+	if (!overrideManager || !overrideManager->HasFeatureOverrides(featureName))
+		return false;
+
+	const auto featureOverrides = overrideManager->GetFeatureOverrides(featureName);
+	const auto isOverridden = [&](std::string_view a_key) {
+		const std::string key{ a_key };
+		for (const auto* featureOverride : featureOverrides) {
+			if (featureOverride->enabled && featureOverride->overrideData.contains(key))
+				return true;
+		}
+		return false;
+	};
+
+	json originalSettings;
+	SaveSettings(originalSettings);
+	json currentSettings = originalSettings;
+	json mergedSettings = originalSettings;
+	if (overrideManager->ReapplyFeatureOverrides(featureName, mergedSettings) == 0)
+		return false;
+
+	bool applied = false;
+	for (const auto keyView : a_settingKeys) {
+		const std::string key{ keyView };
+		if (!isOverridden(keyView) || !mergedSettings.contains(key))
+			continue;
+		currentSettings[key] = mergedSettings[key];
+		applied = true;
+	}
+	if (!applied)
+		return false;
+
+	try {
+		LoadSettings(currentSettings);
+		SaveSettings(currentSettings);
+		const json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
+		if (overrideManager->PersistUserOverride(featureName, currentSettings, overrideSettings))
+			return true;
+		logger::warn("Failed to persist scoped override settings for {}", featureName);
+	} catch (const std::exception& e) {
+		logger::warn("Failed to apply scoped override settings for {}. Error: {}", featureName, e.what());
+	}
+
+	try {
+		LoadSettings(originalSettings);
+	} catch (const std::exception& e) {
+		logger::error("Failed to roll back scoped override settings for {}. Error: {}", featureName, e.what());
+	}
+	return false;
+}
+
 std::string Feature::GetDisplayCategory() const
 {
 	const auto category = GetCategory();

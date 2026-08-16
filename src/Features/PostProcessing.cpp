@@ -5,6 +5,7 @@
 
 #include "Globals.h"
 #include "Profiler.h"
+#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
 
@@ -307,8 +308,21 @@ bool PostProcessing::LoadPresetFrom(std::string a_name)
 		return false;
 	}
 
-	ProcessSettings(a_presets);
-	return true;
+	pendingSettings = {};
+	json previousSettings;
+	SaveSettings(previousSettings);
+	try {
+		ProcessSettings(a_presets);
+		return true;
+	} catch (const std::exception& e) {
+		logger::warn("Failed to apply preset: {}. Error: {}", a_name, e.what());
+		try {
+			ProcessSettings(previousSettings);
+		} catch (const std::exception& rollbackError) {
+			logger::error("Failed to roll back preset: {}. Error: {}", a_name, rollbackError.what());
+		}
+		return false;
+	}
 }
 
 void PostProcessing::SavePresetTo(std::string a_name)
@@ -349,9 +363,7 @@ void PostProcessing::RestoreDefaultSettings()
 {
 	bypass = false;
 
-	// If pipeline isn't initialized yet (called during early loading before SetupResources),
-	// load default.json into pendingSettings for deferred application in SetupResources.
-	// This ensures first-startup defaults match what "Restore Defaults" produces later.
+	// Defer the default preset until SetupResources creates the pipeline.
 	bool pipelineReady = pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] != nullptr;
 	if (!pipelineReady) {
 		try {
@@ -367,12 +379,13 @@ void PostProcessing::RestoreDefaultSettings()
 		return;
 	}
 
+	pendingSettings = {};
 	if (LoadPresetFrom("default"))
 		return;
 
 	logger::warn("Falling back to built-in Post Processing defaults");
 	settings = {};
-	RestorePipelineDefaultEnablement(false);
+	RestorePipelineDefaultEnablement();
 
 	for (auto& pipe : pipeline) {
 		if (pipe) {
@@ -381,70 +394,148 @@ void PostProcessing::RestoreDefaultSettings()
 	}
 }
 
-bool PostProcessing::CanRestoreAllDefaultSettings() const
+bool PostProcessing::HasActivePipelineFeature() const
 {
 	return activeSettingsPage == SettingsPage::SubFeature &&
 	       activePipelineFeature < pipeline.size() &&
 	       pipeline[activePipelineFeature] != nullptr;
 }
 
+bool PostProcessing::HasScopedDefaultSettings() const
+{
+	return HasActivePipelineFeature();
+}
+
+bool PostProcessing::HasScopedOverrideSettings() const
+{
+	return HasActivePipelineFeature();
+}
+
 void PostProcessing::RestoreCurrentPageDefaultSettings()
 {
-	json defaultPreset;
-	try {
-		std::ifstream input{ std::format("{}\\{}.json", ppPresetPath, "default") };
-		input >> defaultPreset;
-	} catch (const std::exception& e) {
-		logger::warn("Failed to load scoped Post Processing defaults. Error: {}", e.what());
-		if (CanRestoreAllDefaultSettings()) {
-			auto& feature = pipeline[activePipelineFeature];
-			if (!feature->IsAutoEnabled())
-				feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(activePipelineFeature));
-			feature->RestoreDefaultSettings();
-		} else {
-			settings = {};
-			bypass = false;
-			RestorePipelineDefaultEnablement(true);
-		}
-		return;
-	}
-
-	if (!CanRestoreAllDefaultSettings()) {
-		settings = defaultPreset.value("ppsettings", Settings{});
-		bypass = false;
-		for (size_t i = 0; i < pipeline.size(); ++i) {
-			auto& feature = pipeline[i];
-			if (!feature || !feature->IsVisible() || feature->IsAutoEnabled())
-				continue;
-			if (const auto defaults = defaultPreset.find(feature->GetType()); defaults != defaultPreset.end())
-				feature->enabled = defaults->value("enabled", IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(i)));
-			else
-				feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(i));
-		}
+	if (!HasActivePipelineFeature()) {
+		RestoreDefaultSettings();
 		return;
 	}
 
 	auto& feature = pipeline[activePipelineFeature];
-	const auto featureType = feature->GetType();
-	if (const auto defaults = defaultPreset.find(featureType); defaults != defaultPreset.end()) {
+	const auto restoreBuiltInDefaults = [&]() {
+		if (!feature->IsAutoEnabled())
+			feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(activePipelineFeature));
+		feature->RestoreDefaultSettings();
+	};
+
+	try {
+		json defaultPreset;
+		std::ifstream input{ std::format("{}\\{}.json", ppPresetPath, "default") };
+		input >> defaultPreset;
+
+		const auto featureType = feature->GetType();
+		const auto defaults = defaultPreset.find(featureType);
+		if (defaults == defaultPreset.end()) {
+			logger::warn("Default preset has no settings for Post Processing subfeature {}", featureType);
+			restoreBuiltInDefaults();
+			return;
+		}
+
 		if (!feature->IsAutoEnabled())
 			feature->enabled = defaults->value("enabled", IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(activePipelineFeature)));
 		json featureSettings = defaults->value("settings", json::object());
 		feature->LoadSettings(featureSettings);
-		return;
+	} catch (const std::exception& e) {
+		logger::warn("Failed to apply scoped Post Processing defaults. Error: {}", e.what());
+		restoreBuiltInDefaults();
 	}
-
-	logger::warn("Default preset has no settings for Post Processing subfeature {}", featureType);
-	if (!feature->IsAutoEnabled())
-		feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(activePipelineFeature));
-	feature->RestoreDefaultSettings();
 }
 
-void PostProcessing::RestorePipelineDefaultEnablement(bool a_visibleOnly)
+bool PostProcessing::ReapplyCurrentPageOverrideSettings()
+{
+	auto* overrideManager = SettingsOverrideManager::GetSingleton();
+	const std::string featureName = GetShortName();
+	if (!overrideManager || !overrideManager->HasFeatureOverrides(featureName))
+		return false;
+
+	if (!ApplyPendingSettings())
+		return false;
+
+	json currentSettings;
+	SaveSettings(currentSettings);
+	json mergedSettings = currentSettings;
+	if (overrideManager->ReapplyFeatureOverrides(featureName, mergedSettings) == 0)
+		return false;
+
+	const auto rollback = [&]() {
+		try {
+			ProcessSettings(currentSettings);
+		} catch (const std::exception& e) {
+			logger::error("Failed to roll back override settings for {}. Error: {}", featureName, e.what());
+		}
+	};
+
+	if (!HasActivePipelineFeature()) {
+		try {
+			ProcessSettings(mergedSettings);
+		} catch (const std::exception& e) {
+			logger::warn("Failed to apply override settings for {}. Error: {}", featureName, e.what());
+			rollback();
+			return false;
+		}
+		if (overrideManager->DeleteUserOverride(featureName))
+			return true;
+		logger::warn("Failed to delete user override settings for {}", featureName);
+		rollback();
+		return false;
+	}
+
+	const auto featureType = pipeline[activePipelineFeature]->GetType();
+	bool hasScopedOverride = false;
+	for (const auto* featureOverride : overrideManager->GetFeatureOverrides(featureName)) {
+		if (featureOverride->enabled && featureOverride->overrideData.contains(featureType)) {
+			hasScopedOverride = true;
+			break;
+		}
+	}
+	if (!hasScopedOverride || !mergedSettings.contains(featureType))
+		return false;
+
+	json scopedSettings = json::object();
+	scopedSettings[featureType] = mergedSettings[featureType];
+	try {
+		ProcessSettings(scopedSettings);
+		SaveSettings(currentSettings);
+		const json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
+		if (overrideManager->PersistUserOverride(featureName, currentSettings, overrideSettings))
+			return true;
+		logger::warn("Failed to persist scoped override settings for {}", featureName);
+	} catch (const std::exception& e) {
+		logger::warn("Failed to apply scoped override settings for {}. Error: {}", featureName, e.what());
+	}
+	rollback();
+	return false;
+}
+
+bool PostProcessing::ApplyPendingSettings()
+{
+	if (pendingSettings.empty())
+		return true;
+
+	json settingsToApply = std::move(pendingSettings);
+	pendingSettings = {};
+	try {
+		ProcessSettings(settingsToApply);
+		return true;
+	} catch (const std::exception& e) {
+		logger::warn("Failed to apply pending Post Processing settings. Error: {}", e.what());
+		RestoreDefaultSettings();
+		return false;
+	}
+}
+
+void PostProcessing::RestorePipelineDefaultEnablement()
 {
 	for (size_t i = 0; i < pipeline.size(); ++i) {
 		auto& feature = pipeline[i];
-		if (!feature || (a_visibleOnly && (!feature->IsVisible() || feature->IsAutoEnabled())))
+		if (!feature)
 			continue;
 		feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(i));
 	}
@@ -532,7 +623,7 @@ void PostProcessing::SetupResources()
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_unique<Camera>();
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_unique<Border>();
 
-	RestorePipelineDefaultEnablement(false);
+	RestorePipelineDefaultEnablement();
 
 	for (auto& pipe : pipeline) {
 		if (pipe) {
@@ -543,8 +634,7 @@ void PostProcessing::SetupResources()
 
 	bokehResources.Setup();
 
-	ProcessSettings(pendingSettings);
-	pendingSettings = {};
+	ApplyPendingSettings();
 }
 
 void PostProcessing::Reset()
@@ -719,11 +809,8 @@ void PostProcessing::ClearBorderMotionVectorsForFrameGen()
 
 void PostProcessing::Prepass()
 {
-	if (!pendingSettings.empty()) {
-		logger::debug("Processing pending post processing settings...");
-		ProcessSettings(pendingSettings);
-		pendingSettings = {};
-	}
+	if (!pendingSettings.empty())
+		ApplyPendingSettings();
 
 	// globals::game::imageSpaceManager isn't cached until OnDataLoaded(); skip
 	// the update rather than crash if Prepass() runs before that.
