@@ -726,6 +726,7 @@ void CSUtility::SanitizeDepthOfFieldOverride(DepthOfFieldOverride& a_override)
 void CSUtility::DrawDepthOfFieldSettings()
 {
 	if (ImGui::BeginTabItem(T(TKEY("tab_vanilla_dof"), "Vanilla DOF"))) {
+		activeSettingsPage = SettingsPage::VanillaDepthOfField;
 		static Util::ConfirmationPopup sceneLockPopup;
 		static Util::ConfirmationPopup underwaterLockPopup;
 

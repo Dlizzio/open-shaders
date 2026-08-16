@@ -731,11 +731,14 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		auto* sceneManager = globals::sceneSettingsManager;
 		bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
 
-		// Render feature header with integrated action buttons
-		RenderFeatureHeader(feat, isDisabled, isLoaded, sceneControlled);
+		// Render feature header and capture the fixed action-button position
+		const auto featureActionsLayout = RenderFeatureHeader(feat, isLoaded);
 
 		// Render feature settings content
 		RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
+
+		// Draw last so the fixed action button remains above scrolling settings
+		RenderFeatureActions(feat, isDisabled, isLoaded, sceneControlled, featureActionsLayout);
 	}
 	ImGui::EndChild();
 	ImGui::PopID();
@@ -743,15 +746,8 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	RenderReactiveConstraintWarningDialog();
 }
 
-void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
+FeatureListRenderer::DrawMenuVisitor::FeatureActionsLayout FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isLoaded)
 {
-	auto& themeSettings = globals::menu->GetSettings().Theme;
-	const auto featureName = feat->GetShortName();
-
-	// Check if override is available for this feature
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
-
 	// Get available content width for positioning
 	float availableWidth = ImGui::GetContentRegionAvail().x;
 
@@ -770,14 +766,45 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	const float titleOnlyHeight = DrawFeatureHeader(
 		feat->GetDisplayName(), isLoaded ? feat->version : "", description, stageTag, StageTagColor(stage), actionsButtonSize);
 
-	// Save cursor position after header (for restoring after buttons are drawn)
-	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
-
 	// Position the action button to the right of the header, middle-aligned with title only
 	// Calculate Y position to middle-align the button with title text only (not description)
 	const float buttonY = titleStartPos.y + (titleOnlyHeight - actionsButtonSize) * 0.5f;
+	const FeatureActionsLayout actionsLayout{
+		titleStartPos.x + availableWidth - actionsButtonSize,
+		buttonY + ImGui::GetScrollY(),
+		actionsButtonSize
+	};
 
-	ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - actionsButtonSize, buttonY));
+	return actionsLayout;
+}
+
+void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
+	Feature* feat,
+	bool isDisabled,
+	bool isLoaded,
+	bool sceneControlled,
+	const FeatureActionsLayout& layout)
+{
+	auto& themeSettings = globals::menu->GetSettings().Theme;
+	const auto featureName = feat->GetShortName();
+	auto overrideManager = SettingsOverrideManager::GetSingleton();
+	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
+
+	const ImVec2 cursorPosAfterSettings = ImGui::GetCursorScreenPos();
+	ImGui::SetCursorScreenPos(ImVec2(layout.x, layout.y));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+	const bool overlayVisible = ImGui::BeginChild(
+		"##FeatureActionsOverlay",
+		ImVec2(layout.size, layout.size),
+		false,
+		ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+	ImGui::PopStyleVar();
+	if (!overlayVisible) {
+		ImGui::EndChild();
+		ImGui::SetCursorScreenPos(cursorPosAfterSettings);
+		ImGui::Dummy(ImVec2(0.0f, 0.0f));
+		return;
+	}
 
 	// Feature actions dropdown
 	bool bootEnabled = !isDisabled;
@@ -787,7 +814,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	}
 
 	ImGui::PushID(featureName.c_str());
-	const bool actionsButtonPressed = ImGui::Button("##FeatureActions", ImVec2(actionsButtonSize, actionsButtonSize));
+	const bool actionsButtonPressed = ImGui::Button("##FeatureActions", ImVec2(layout.size, layout.size));
 	const ImGuiID actionsButtonId = ImGui::GetItemID();
 	const ImVec2 actionsButtonMin = ImGui::GetItemRectMin();
 	const ImVec2 actionsButtonMax = ImGui::GetItemRectMax();
@@ -833,19 +860,31 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 			if (!isDisabled && isLoaded) {
 				ImGui::Separator();
-				if (Util::FlyoutMenuItem(T("menu.features.restore_defaults", "Restore Defaults"))) {
-					feat->RestoreDefaultSettings();
+				if (Util::FlyoutMenuItem(
+						feat->HasScopedDefaultSettings() ?
+							T("menu.features.restore_page_defaults", "Restore Defaults (Page)") :
+							T("menu.features.restore_defaults", "Restore Defaults"))) {
+					feat->RestoreCurrentPageDefaultSettings();
 					closeFlyout = true;
 				}
 
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("%s", T("menu.features.restore_defaults_tooltip", "Restore default settings for this feature"));
+					ImGui::Text(
+						"%s",
+						feat->HasScopedDefaultSettings() ?
+							T("menu.features.restore_page_defaults_tooltip", "Restore default settings for this page") :
+							T("menu.features.restore_defaults_tooltip", "Restore default settings for this feature"));
 				}
 
 				if (hasOverrides) {
-					if (Util::FlyoutMenuItem(T("menu.features.apply_override", "Apply Override"), false, !sceneControlled)) {
+					if (Util::FlyoutMenuItem(
+							feat->HasScopedOverrideSettings() ?
+								T("menu.features.apply_page_override", "Apply Override (Page)") :
+								T("menu.features.apply_override", "Apply Override"),
+							false,
+							!sceneControlled)) {
 						closeFlyout = true;
-						if (feat->ReapplyOverrideSettings()) {
+						if (feat->ReapplyCurrentPageOverrideSettings()) {
 							logger::info("Successfully reapplied override settings for {}", featureName);
 						} else {
 							logger::warn("Failed to reapply override settings for {}", featureName);
@@ -862,10 +901,15 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 						} else {
 							ImGui::Text(
 								"%s",
-								T("menu.features.restore_override_tooltip",
-									"Restores original override settings from mod files.\n"
-									"This will discard your customizations and revert to\n"
-									"the mod author's recommended settings."));
+								feat->HasScopedOverrideSettings() ?
+									T("menu.features.restore_page_override_tooltip",
+										"Restores override settings for this page from mod files.\n"
+										"This will discard your customizations on this page and revert to\n"
+										"the mod author's recommended settings.") :
+									T("menu.features.restore_override_tooltip",
+										"Restores original override settings from mod files.\n"
+										"This will discard your customizations and revert to\n"
+										"the mod author's recommended settings."));
 						}
 					}
 				}
@@ -878,9 +922,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	DrawFeatureActionsArrow(actionsButtonDrawList, actionsButtonMin, actionsButtonMax, arrowProgress);
 	ImGui::PopID();
-
-	// Restore cursor position after the title and separator
-	ImGui::SetCursorScreenPos(cursorPosAfterHeader);
+	ImGui::EndChild();
+	ImGui::SetCursorScreenPos(cursorPosAfterSettings);
+	ImGui::Dummy(ImVec2(0.0f, 0.0f));
 }
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled)
