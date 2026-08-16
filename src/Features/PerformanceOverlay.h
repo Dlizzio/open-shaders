@@ -125,7 +125,7 @@ struct PerformanceOverlay : OverlayFeature
 	std::string GetShortName() override { return "PerformanceOverlay"; }
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsCore() const override { return true; }
-	virtual bool IsInMenu() const override { return true; }
+	virtual bool IsInMenu() const override { return false; }
 	bool IsOverlayVisible() const override { return settings.ShowInOverlay; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{

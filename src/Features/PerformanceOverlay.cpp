@@ -140,7 +140,7 @@ void PerformanceOverlay::DrawSettings()
 	auto menu = Menu::GetSingleton();
 	const auto& themeSettings = menu->GetTheme();
 	const auto& menuSettings = menu->GetSettings();
-	ImGui::Checkbox(T(TKEY("show_in_overlay"), "Show in Overlay"), &this->settings.ShowInOverlay);
+	ImGui::Checkbox(T(TKEY("show_in_overlay"), "Show Performance in Overlay"), &this->settings.ShowInOverlay);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("show_in_overlay_tooltip"), "Opens performance overlay in a separate window that stays open\neven when the main menu is closed. "));
 		ImGui::Text("%s", T(TKEY("toggle_with"), "Toggle with "));
