@@ -33,7 +33,7 @@ void FoveatedRender::PostPostLoad()
 {
 	bootSnapshot.LatchIfNeeded(settings);
 
-	// Opt into PR-1's stereo extension so the controller tracks a separate
+	// Opt into the stereo extension so the controller tracks a separate
 	// right-eye UV (HMD nose-side overlap symmetry).
 	subrectController.SetStereoEnabled(true);
 
@@ -52,6 +52,11 @@ void FoveatedRender::PostPostLoad()
 			.uv = { 0.5f, 0.25f, 0.5f, 0.5f },
 			.rightUV = Util::Subrect::UVRegion{ 0.0f, 0.25f, 0.5f, 0.5f } },
 	});
+	// PostPostLoad runs after settings load, so a user with an older, shorter
+	// persisted preset list (from before these names existed) still sees every
+	// current preset in the DrawEditor dropdown, not just whichever ones they
+	// happened to click as buttons.
+	subrectController.MaterializeNewDefaults();
 }
 
 void FoveatedRender::ClearShaderCache()
@@ -111,17 +116,42 @@ void FoveatedRender::ClampSettings()
 
 bool FoveatedRender::IsActive() const
 {
-	// Gate on DLSS being the *selected* method, not just available
+	// Gate on DLSS/FSR being the *selected* method, not just available
 	// (IsRuntimeSupported): otherwise foveation and its SSR consumer run under
-	// TAA/FSR/None and the route derefs unallocated DLSS resources — the crash
+	// TAA/None and the route derefs unallocated upscaler resources — the crash
 	// seen under RenderDoc, whose DX12 swapchain disables DLSS.
-	return enabledAtBoot && IsRuntimeSupported() &&
-	       globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
+	if (!enabledAtBoot || !IsRuntimeSupported())
+		return false;
+	const auto method = globals::features::upscaling.GetUpscaleMethod();
+	if (method != Upscaling::UpscaleMethod::kDLSS && method != Upscaling::UpscaleMethod::kFSR)
+		return false;
+
+	// A Full Eye region pays the isolation/stretch overhead (snapshot copies, mask
+	// clears, StretchDRS) for a subrect equal to the full frame -- no savings, real
+	// cost. Skip the route so the standard full-frame path runs instead.
+	const bool isFullEye = subrectController.GetUV().IsFullEye() && subrectController.GetRightEyeUV().IsFullEye();
+	return !isFullEye;
+}
+
+bool FoveatedRender::ShouldForceVisualize() const
+{
+	using namespace std::chrono_literals;
+	return std::chrono::steady_clock::now() - lastDragTime < 3s;
 }
 
 bool FoveatedRender::IsRuntimeSupported() const
 {
-	return globals::game::isVR && globals::features::upscaling.streamline.featureDLSS;
+	// FSR's host path has no adapter/runtime prerequisite, so VR alone is
+	// sufficient to enable the option -- IsActive() is what actually gates
+	// on the *selected* method (kDLSS/kFSR) being one the route supports.
+	return globals::game::isVR;
+}
+
+FoveatedRender::DlssMode FoveatedRender::GetDlssMode() const
+{
+	if (globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kFSR)
+		return DlssMode::kDefault;
+	return (DlssMode)std::min(settings.dlssMode, 1u);
 }
 
 FoveatedRender::FoveationProfile FoveatedRender::GetFoveationProfile() const
@@ -212,9 +242,9 @@ void FoveatedRender::DrawEnable()
 	ClampSettings();
 
 	ImGui::TextWrapped(T(TKEY("foveated_overview"),
-		"Foveated subrect DLSS: only the user-selected region gets full DLSS upscaling, "
-		"the periphery is cheaply stretched. Significant DLSS cost reduction at the cost "
-		"of peripheral sharpness. VR + DLSS only."));
+		"Foveated subrect upscaling: only the user-selected region gets full DLSS/FSR "
+		"upscaling, the periphery is cheaply stretched. Significant upscaler cost reduction "
+		"at the cost of peripheral sharpness. VR only."));
 
 	const bool runtimeSupported = IsRuntimeSupported();
 	if (!runtimeSupported) {
@@ -224,25 +254,31 @@ void FoveatedRender::DrawEnable()
 	if (!runtimeSupported)
 		ImGui::BeginDisabled();
 	bool enabledBool = settings.enabled != 0;
-	if (ImGui::Checkbox(T(TKEY("foveated_enable"), "Enable Foveated DLSS (region source)"), &enabledBool))
+	if (ImGui::Checkbox(T(TKEY("foveated_enable"), "Enable Foveated Upscaling (region source)"), &enabledBool)) {
 		settings.enabled = enabledBool ? 1u : 0u;
+		// Full Eye is a deliberate no-op (see IsActive()) -- enabling straight from
+		// it would silently do nothing until the user finds the region picker below.
+		if (enabledBool && subrectController.GetUV().IsFullEye() && subrectController.GetRightEyeUV().IsFullEye())
+			subrectController.ApplyPresetByName(kPresetCenter75);
+	}
 	if (!runtimeSupported)
 		ImGui::EndDisabled();
 
 	Util::UI::DrawSettingDiff(bootSnapshot, settings, &Settings::enabled);
 
 	if (enabledAtBoot) {
-		if (globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS)
-			Util::Text::WrappedInfo(T(TKEY("foveated_active"), "Active: foveated subrect DLSS is enabled (skipped in menus / on preflight failure)."));
+		const auto method = globals::features::upscaling.GetUpscaleMethod();
+		const bool methodOk = method == Upscaling::UpscaleMethod::kDLSS || method == Upscaling::UpscaleMethod::kFSR;
+		if (IsActive())
+			Util::Text::WrappedInfo(T(TKEY("foveated_active"), "Active: foveated subrect upscaling is enabled (skipped in menus / on preflight failure)."));
+		else if (!methodOk)
+			Util::Text::Warning(T(TKEY("foveated_standing_by"), "Standing by: only active while the Upscaling Method is DLSS or FSR. Inactive right now."));
 		else
-			Util::Text::Warning(T(TKEY("foveated_standing_by"), "Standing by: only active while the Upscaling Method is DLSS. Inactive right now."));
+			Util::Text::Warning(T(TKEY("foveated_standing_by_full_eye"), "Standing by: region is Full Eye (no crop) -- shrink it in Subrect Region below to see savings."));
 	}
 
 	if (!globals::game::isVR) {
-		Util::Text::Warning(T(TKEY("foveated_vr_only"), "VR only. Non-VR / FSR support pending future contributors."));
-	}
-	if (globals::game::isVR && !globals::features::upscaling.streamline.featureDLSS) {
-		Util::Text::Warning(T(TKEY("foveated_dlss_unavailable"), "DLSS runtime not available. Enable is blocked."));
+		Util::Text::Warning(T(TKEY("foveated_vr_only"), "VR only -- flat has no equivalent lens-driven periphery quality cliff to exploit."));
 	}
 }
 
@@ -256,24 +292,10 @@ void FoveatedRender::DrawSettings()
 
 	ClampSettings();
 
-	Util::Text::WrappedInfo(T(TKEY("foveated_shared_panel_note"), "Quality, Sharpness, and DLSS Preset are on the main Upscaling panel — changes there apply to foveated rendering too."));
+	Util::Text::WrappedInfo(T(TKEY("foveated_shared_panel_note"), "Quality and Sharpness are on the main Upscaling panel — changes there apply to foveated rendering too. DLSS Preset also applies there when DLSS is the selected upscaler."));
 
 	// ── VR-only knobs ──
 	if (globals::game::isVR) {
-		ImGui::Text("%s", T(TKEY("foveated_region_preset_label"), "Region Preset"));
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("foveated_region_preset_tooltip"),
-								  "Shrinking this region below Full Eye is what actually reduces DLSS cost — "
-								  "the smaller the region, the greater the savings and the more visible the "
-								  "peripheral softness. Fine-tune further in Subrect Region below."));
-		}
-		for (const auto& presetName : { kPresetFullEye, kPresetCenter75, kPresetCenter50, kPresetNasalConvergence50 }) {
-			if (ImGui::Button(presetName))
-				subrectController.ApplyPresetByName(presetName);
-			ImGui::SameLine();
-		}
-		ImGui::NewLine();
-
 		ImGui::Separator();
 		ImGui::Text("%s", T(TKEY("foveated_dlss_mode_header"), "VR DLSS Mode"));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -288,6 +310,9 @@ void FoveatedRender::DrawSettings()
 								  "invisible in motion. Presets J and K are incompatible and auto-clamp to L."));
 		}
 
+		const bool isFSR = globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kFSR;
+		if (isFSR)
+			ImGui::BeginDisabled();
 		const char* dlssModes[] = {
 			T(TKEY("foveated_dlss_mode_default"), "Default"),
 			T(TKEY("foveated_dlss_mode_faster"), "Faster")
@@ -302,31 +327,37 @@ void FoveatedRender::DrawSettings()
 					prevPreset, globals::features::upscaling.settings.presetDLSS);
 			}
 		}
-		switch (GetDlssMode()) {
-		case DlssMode::kDefault:
-			ImGui::TextWrapped(T(TKEY("foveated_dlss_mode_default_desc"), "Per-eye isolation: 5 copies per frame, 2 DLSS evaluates. All presets."));
-			break;
-		case DlssMode::kFaster:
-			ImGui::TextWrapped(T(TKEY("foveated_dlss_mode_faster_desc"), "Viewport offset: 1 snapshot, 2 mask clears, 2 DLSS evaluates. Presets J/K unavailable."));
-			break;
-		default:
-			break;
+		if (isFSR) {
+			ImGui::EndDisabled();
+			ImGui::TextWrapped(T(TKEY("foveated_dlss_mode_fsr_desc"), "Not used by FSR -- applies only when DLSS is the selected upscaler."));
+		} else {
+			switch (GetDlssMode()) {
+			case DlssMode::kDefault:
+				ImGui::TextWrapped(T(TKEY("foveated_dlss_mode_default_desc"), "Per-eye isolation: 5 copies per frame, 2 DLSS evaluates. All presets."));
+				break;
+			case DlssMode::kFaster:
+				ImGui::TextWrapped(T(TKEY("foveated_dlss_mode_faster_desc"), "Viewport offset: 1 snapshot, 2 mask clears, 2 DLSS evaluates. Presets J/K unavailable."));
+				break;
+			default:
+				break;
+			}
 		}
 
 		ImGui::Separator();
 		ImGui::Text("%s", T(TKEY("foveated_periphery_header"), "Periphery Rendering"));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("foveated_periphery_tooltip"),
-								  "The area outside your selected subrect is filled cheaply rather than running DLSS.\n"
-								  "These settings control how that cheap fill looks and whether it flickers.\n"
+								  "The area outside your selected subrect is filled cheaply rather than running\n"
+								  "the selected upscaler. These settings control how that cheap fill looks and\n"
+								  "whether it flickers.\n"
 								  "\n"
 								  "Stretch method: how pixels outside the subrect are reconstructed from the lower-res\n"
-								  "render buffer. Does not affect the DLSS subrect region at all.\n"
+								  "render buffer. Does not affect the upscaled subrect region at all.\n"
 								  "\n"
 								  "Periphery AA: reduces temporal flicker in the stretched area using motion-compensated\n"
-								  "history blending. Independent of the DLSS subrect.\n"
+								  "history blending. Independent of the upscaled subrect.\n"
 								  "\n"
-								  "Edge Blend: controls how the DLSS subrect edge meets the stretched periphery.\n"
+								  "Edge Blend: controls how the upscaled subrect edge meets the stretched periphery.\n"
 								  "Hard Copy leaves a sharp seam; Feather/Dither soften it. Only affects the boundary."));
 		}
 
@@ -385,8 +416,8 @@ void FoveatedRender::DrawSettings()
 		ImGui::Separator();
 		ImGui::Text("%s", T(TKEY("foveated_subrect_region_header"), "Subrect Region"));
 		ImGui::TextWrapped(T(TKEY("foveated_subrect_region_desc"),
-			"Drag in the preview below to select the region that gets full DLSS upscaling. "
-			"The rest is cheaply stretched — saves significant DLSS cost."));
+			"Drag in the preview below to select the region that gets full upscaling. "
+			"The rest is cheaply stretched — saves significant upscaling cost."));
 		Util::Text::WrappedInfo(T(TKEY("foveated_screenshot_subrect_note"), "Screenshot has its own subrect; align them only if you want pixel-matched captures."));
 
 		bool debugBool = settings.debugVisualize != 0;
@@ -394,10 +425,11 @@ void FoveatedRender::DrawSettings()
 			settings.debugVisualize = debugBool ? 1u : 0u;
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("foveated_visualize_regions_tooltip"),
-								  "Diagnostic: tint the cheap-stretched periphery red so the DLSS-reconstructed\n"
+								  "Diagnostic: tint the cheap-stretched periphery red so the upscaled\n"
 								  "subrect (un-tinted) pops visually in-game. Lets you confirm at a glance where\n"
-								  "DLSS is actually running vs where the cheap stretch is filling. No perf impact;\n"
-								  "runtime toggle, no restart needed."));
+								  "the selected upscaler is actually running vs where the cheap stretch is filling.\n"
+								  "No perf impact; runtime toggle, no restart needed. Also shows briefly whenever\n"
+								  "you drag-resize the region below, even with this off."));
 		}
 
 		// Preview off kVR_FRAMEBUFFER (the final composed SBS image the headset
@@ -415,6 +447,9 @@ void FoveatedRender::DrawSettings()
 		} else {
 			subrectController.DrawEditor(nullptr, nullptr, 0.5f);
 		}
+
+		if (subrectController.IsDragging())
+			lastDragTime = std::chrono::steady_clock::now();
 	}
 }
 
