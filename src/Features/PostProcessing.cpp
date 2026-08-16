@@ -463,12 +463,21 @@ bool PostProcessing::ReapplyCurrentPageOverrideSettings()
 	json mergedSettings = currentSettings;
 	if (overrideManager->ReapplyFeatureOverrides(featureName, mergedSettings) == 0)
 		return false;
+	const json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
 
 	const auto rollback = [&]() {
 		try {
 			ProcessSettings(currentSettings);
 		} catch (const std::exception& e) {
 			logger::error("Failed to roll back override settings for {}. Error: {}", featureName, e.what());
+		}
+	};
+	const auto rollbackPersistence = [&]() {
+		try {
+			if (!overrideManager->PersistUserOverride(featureName, currentSettings, overrideSettings))
+				logger::error("Failed to roll back persisted override settings for {}", featureName);
+		} catch (const std::exception& e) {
+			logger::error("Failed to roll back persisted override settings for {}. Error: {}", featureName, e.what());
 		}
 	};
 
@@ -484,6 +493,7 @@ bool PostProcessing::ReapplyCurrentPageOverrideSettings()
 			return true;
 		logger::warn("Failed to delete user override settings for {}", featureName);
 		rollback();
+		rollbackPersistence();
 		return false;
 	}
 
@@ -500,17 +510,21 @@ bool PostProcessing::ReapplyCurrentPageOverrideSettings()
 
 	json scopedSettings = json::object();
 	scopedSettings[featureType] = mergedSettings[featureType];
+	bool persistenceAttempted = false;
 	try {
 		ProcessSettings(scopedSettings);
-		SaveSettings(currentSettings);
-		const json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
-		if (overrideManager->PersistUserOverride(featureName, currentSettings, overrideSettings))
+		json appliedSettings;
+		SaveSettings(appliedSettings);
+		persistenceAttempted = true;
+		if (overrideManager->PersistUserOverride(featureName, appliedSettings, overrideSettings))
 			return true;
 		logger::warn("Failed to persist scoped override settings for {}", featureName);
 	} catch (const std::exception& e) {
 		logger::warn("Failed to apply scoped override settings for {}. Error: {}", featureName, e.what());
 	}
 	rollback();
+	if (persistenceAttempted)
+		rollbackPersistence();
 	return false;
 }
 
@@ -535,7 +549,7 @@ void PostProcessing::RestorePipelineDefaultEnablement()
 {
 	for (size_t i = 0; i < pipeline.size(); ++i) {
 		auto& feature = pipeline[i];
-		if (!feature)
+		if (!feature || feature->IsAutoEnabled())
 			continue;
 		feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(i));
 	}

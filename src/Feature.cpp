@@ -496,11 +496,15 @@ bool Feature::ReapplyOverrideSettingsForKeys(std::span<const std::string_view> a
 	if (!applied)
 		return false;
 
+	json overrideSettings;
+	bool persistenceAttempted = false;
 	try {
 		LoadSettings(currentSettings);
-		SaveSettings(currentSettings);
-		const json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
-		if (overrideManager->PersistUserOverride(featureName, currentSettings, overrideSettings))
+		json appliedSettings;
+		SaveSettings(appliedSettings);
+		overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
+		persistenceAttempted = true;
+		if (overrideManager->PersistUserOverride(featureName, appliedSettings, overrideSettings))
 			return true;
 		logger::warn("Failed to persist scoped override settings for {}", featureName);
 	} catch (const std::exception& e) {
@@ -511,6 +515,14 @@ bool Feature::ReapplyOverrideSettingsForKeys(std::span<const std::string_view> a
 		LoadSettings(originalSettings);
 	} catch (const std::exception& e) {
 		logger::error("Failed to roll back scoped override settings for {}. Error: {}", featureName, e.what());
+	}
+	if (persistenceAttempted) {
+		try {
+			if (!overrideManager->PersistUserOverride(featureName, originalSettings, overrideSettings))
+				logger::error("Failed to roll back persisted override settings for {}", featureName);
+		} catch (const std::exception& e) {
+			logger::error("Failed to roll back persisted override settings for {}. Error: {}", featureName, e.what());
+		}
 	}
 	return false;
 }
