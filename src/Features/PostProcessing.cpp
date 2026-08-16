@@ -19,8 +19,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void PostProcessing::DrawSettings()
 {
-	static int pipelinePageNum = 0;
-	static int pipelineFeatIdx = 0;
 	static int presetIdx = -1;
 
 	ImGui::BeginGroup();
@@ -66,8 +64,8 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	if (pipelinePageNum == 0) {
-		for (int i = 0; i < pipeline.size(); ++i) {
+	if (activeSettingsPage == SettingsPage::Pipeline) {
+		for (size_t i = 0; i < pipeline.size(); ++i) {
 			auto& feat = pipeline[i];
 			if (feat && feat->IsVisible()) {
 				auto displayName = feat->GetDisplayName();
@@ -76,8 +74,8 @@ void PostProcessing::DrawSettings()
 				ImGui::Checkbox("##Enabled", &feat->enabled);
 				ImGui::SameLine();
 				if (PostProcessingUI::IconButton(ICON_FA_BARS)) {
-					pipelineFeatIdx = i;
-					pipelinePageNum = 1;
+					activePipelineFeature = i;
+					activeSettingsPage = SettingsPage::SubFeature;
 				}
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T("feature.post_processing.edit_settings_for_this_feature", "Edit settings for this feature."));
@@ -88,14 +86,14 @@ void PostProcessing::DrawSettings()
 				ImGui::PopID();
 			}
 		}
-	} else if (pipelinePageNum == 1) {
+	} else if (activeSettingsPage == SettingsPage::SubFeature) {
 		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
 		if (PostProcessingUI::ActionButton(backLabel.c_str())) {
-			pipelinePageNum = 0;
+			activeSettingsPage = SettingsPage::Pipeline;
 		}
 		ImGui::Separator();
-		if (pipelineFeatIdx >= 0 && pipelineFeatIdx < pipeline.size()) {
-			auto& feat = pipeline[pipelineFeatIdx];
+		if (activePipelineFeature < pipeline.size()) {
+			auto& feat = pipeline[activePipelineFeature];
 			if (feat) {
 				auto displayName = feat->GetDisplayName();
 				auto description = feat->GetDesc();
@@ -125,11 +123,11 @@ void PostProcessing::DrawSettings()
 				ImGui::PopID();
 			} else {
 				ImGui::TextDisabled("%s", T("feature.post_processing.selected_feature_is_not_valid", "Selected feature is not valid."));
-				pipelinePageNum = 0;
+				activeSettingsPage = SettingsPage::Pipeline;
 			}
 		} else {
 			ImGui::TextDisabled("%s", T("feature.post_processing.invalid_feature_selected_returning_to_list", "Invalid feature selected. Returning to list."));
-			pipelinePageNum = 0;
+			activeSettingsPage = SettingsPage::Pipeline;
 		}
 	}
 
@@ -265,7 +263,7 @@ std::vector<std::string> PostProcessing::LoadPresets()
 	return o_presets;
 }
 
-void PostProcessing::LoadPresetFrom(std::string a_name)
+bool PostProcessing::LoadPresetFrom(std::string a_name)
 {
 	json a_presets = {};
 
@@ -279,10 +277,11 @@ void PostProcessing::LoadPresetFrom(std::string a_name)
 		i >> a_presets;
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load preset: {}. Error: {}", a_name, e.what());
-		return;
+		return false;
 	}
 
 	ProcessSettings(a_presets);
+	return true;
 }
 
 void PostProcessing::SavePresetTo(std::string a_name)
@@ -321,6 +320,8 @@ void PostProcessing::SavePresetTo(std::string a_name)
 
 void PostProcessing::RestoreDefaultSettings()
 {
+	bypass = false;
+
 	// If pipeline isn't initialized yet (called during early loading before SetupResources),
 	// load default.json into pendingSettings for deferred application in SetupResources.
 	// This ensures first-startup defaults match what "Restore Defaults" produces later.
@@ -339,28 +340,77 @@ void PostProcessing::RestoreDefaultSettings()
 		return;
 	}
 
-	try {
-		LoadPresetFrom("default");
-	} catch (const std::exception& e) {
-		logger::warn("Failed to load default preset. Error: {}", e.what());
-		settings = {};
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
+	if (LoadPresetFrom("default"))
+		return;
 
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
+	logger::warn("Falling back to built-in Post Processing defaults");
+	settings = {};
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
 
-		for (auto& pipe : pipeline) {
-			if (pipe) {
-				pipe->RestoreDefaultSettings();
-			}
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
+
+	for (auto& pipe : pipeline) {
+		if (pipe) {
+			pipe->RestoreDefaultSettings();
 		}
 	}
+}
+
+bool PostProcessing::CanRestoreAllDefaultSettings() const
+{
+	return activeSettingsPage == SettingsPage::SubFeature &&
+	       activePipelineFeature < pipeline.size() &&
+	       pipeline[activePipelineFeature] != nullptr;
+}
+
+void PostProcessing::RestoreCurrentPageDefaultSettings()
+{
+	json defaultPreset;
+	try {
+		std::ifstream input{ std::format("{}\\{}.json", ppPresetPath, "default") };
+		input >> defaultPreset;
+	} catch (const std::exception& e) {
+		logger::warn("Failed to load scoped Post Processing defaults. Error: {}", e.what());
+		if (CanRestoreAllDefaultSettings())
+			pipeline[activePipelineFeature]->RestoreDefaultSettings();
+		else {
+			settings = {};
+			bypass = false;
+		}
+		return;
+	}
+
+	if (!CanRestoreAllDefaultSettings()) {
+		settings = defaultPreset.value("ppsettings", Settings{});
+		bypass = false;
+		for (auto& feature : pipeline) {
+			if (!feature || !feature->IsVisible() || feature->IsAutoEnabled())
+				continue;
+			if (const auto defaults = defaultPreset.find(feature->GetType()); defaults != defaultPreset.end())
+				feature->enabled = defaults->value("enabled", true);
+		}
+		return;
+	}
+
+	auto& feature = pipeline[activePipelineFeature];
+	const auto featureType = feature->GetType();
+	if (const auto defaults = defaultPreset.find(featureType); defaults != defaultPreset.end()) {
+		if (!feature->IsAutoEnabled())
+			feature->enabled = defaults->value("enabled", true);
+		json featureSettings = defaults->value("settings", json::object());
+		feature->LoadSettings(featureSettings);
+		return;
+	}
+
+	logger::warn("Default preset has no settings for Post Processing subfeature {}", featureType);
+	feature->RestoreDefaultSettings();
 }
 
 void PostProcessing::ClearShaderCache()

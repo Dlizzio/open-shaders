@@ -66,6 +66,9 @@ struct PostProcessing : Feature
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+	virtual bool HasScopedDefaultSettings() const override { return true; }
+	virtual bool CanRestoreAllDefaultSettings() const override;
+	virtual void RestoreCurrentPageDefaultSettings() override;
 
 	json pendingSettings = {};
 
@@ -74,7 +77,7 @@ struct PostProcessing : Feature
 	std::vector<std::string> presets = {};
 	std::vector<std::string> LoadPresets();
 	void SavePresetTo(std::string a_name);
-	void LoadPresetFrom(std::string a_name);
+	bool LoadPresetFrom(std::string a_name);
 
 	enum class FeaturePipelineIndex : size_t
 	{
@@ -95,6 +98,14 @@ struct PostProcessing : Feature
 	};
 
 	std::array<std::unique_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
+
+	enum class SettingsPage
+	{
+		Pipeline,
+		SubFeature
+	};
+	SettingsPage activeSettingsPage = SettingsPage::Pipeline;
+	size_t activePipelineFeature = 0;
 
 	BokehResources bokehResources;
 

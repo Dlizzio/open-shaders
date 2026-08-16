@@ -139,6 +139,7 @@ void CSUtility::DrawSettings()
 {
 	if (ImGui::BeginTabBar("##CSUtilityTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_atmosphere"), "Atmosphere"))) {
+			activeSettingsPage = SettingsPage::Atmosphere;
 			ImGui::SliderFloat(T(TKEY("sky_brightness"), "Sky Brightness"), &settings.skyBrightness, kSkyBrightnessMin, kSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			ImGui::EndTabItem();
 		}
@@ -146,6 +147,7 @@ void CSUtility::DrawSettings()
 		DrawWaterSettings();
 
 		if (ImGui::BeginTabItem(T(TKEY("tab_multipliers"), "Multipliers"))) {
+			activeSettingsPage = SettingsPage::Multipliers;
 			if (ImGui::TreeNodeEx(T(TKEY("lighting"), "Lighting"), ImGuiTreeNodeFlags_DefaultOpen)) {
 				const bool linearLightingEnabled = globals::features::linearLighting.settings.enableLinearLighting;
 				DrawMultiplierSlider(T(TKEY("global_point_lighting"), "Global Point Lighting"), settings.pointLightMult);
@@ -186,6 +188,7 @@ void CSUtility::DrawWaterSettings()
 	if (!ImGui::BeginTabItem(T(TKEY("tab_water"), "Water")))
 		return;
 
+	activeSettingsPage = SettingsPage::Water;
 	auto& water = settings.water;
 	DrawWaterSlider(T(TKEY("water_brightness"), "Brightness"), water.brightness, kWaterBrightnessMin, kWaterBrightnessMax,
 		T(TKEY("water_brightness_tooltip"), "Scales the final water surface brightness."));
@@ -212,6 +215,7 @@ void CSUtility::DrawWaterSettings()
 void CSUtility::DrawVanillaBloomSettings()
 {
 	if (ImGui::BeginTabItem(T(TKEY("tab_vanilla_bloom"), "Vanilla Bloom"))) {
+		activeSettingsPage = SettingsPage::VanillaBloom;
 		Bloom::DrawSettings(settings.bloomEnhancement);
 		ImGui::EndTabItem();
 	}
@@ -232,6 +236,35 @@ void CSUtility::SaveSettings(json& o_json)
 void CSUtility::RestoreDefaultSettings()
 {
 	settings = {};
+}
+
+void CSUtility::RestoreCurrentPageDefaultSettings()
+{
+	const Settings defaults{};
+	switch (activeSettingsPage) {
+	case SettingsPage::Atmosphere:
+		settings.skyBrightness = defaults.skyBrightness;
+		break;
+	case SettingsPage::Water:
+		settings.water = defaults.water;
+		break;
+	case SettingsPage::Multipliers:
+		settings.directionalLightMult = defaults.directionalLightMult;
+		settings.pointLightMult = defaults.pointLightMult;
+		settings.linearPointLightMult = defaults.linearPointLightMult;
+		settings.spotlightMult = defaults.spotlightMult;
+		settings.linearSpotlightMult = defaults.linearSpotlightMult;
+		settings.omnidirectionalBulbMult = defaults.omnidirectionalBulbMult;
+		settings.linearOmnidirectionalBulbMult = defaults.linearOmnidirectionalBulbMult;
+		break;
+	case SettingsPage::VanillaDepthOfField:
+		settings.sceneDof = defaults.sceneDof;
+		settings.underwaterDof = defaults.underwaterDof;
+		break;
+	case SettingsPage::VanillaBloom:
+		settings.bloomEnhancement = defaults.bloomEnhancement;
+		break;
+	}
 }
 
 void CSUtility::SetupResources()

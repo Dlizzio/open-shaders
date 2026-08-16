@@ -91,6 +91,16 @@ struct CSUtility : Feature
 		Bloom::PresetSettings bloomEnhancement;
 	} settings;
 
+	enum class SettingsPage
+	{
+		Atmosphere,
+		Water,
+		Multipliers,
+		VanillaDepthOfField,
+		VanillaBloom
+	};
+	SettingsPage activeSettingsPage = SettingsPage::Atmosphere;
+
 	struct alignas(16) PerFrameData
 	{
 		float skyBrightness;
@@ -126,6 +136,9 @@ struct CSUtility : Feature
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+	virtual bool HasScopedDefaultSettings() const override { return true; }
+	virtual bool CanRestoreAllDefaultSettings() const override { return true; }
+	virtual void RestoreCurrentPageDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;

@@ -327,6 +327,15 @@ public:
 	virtual void LoadSettings(json&) {}
 	virtual void RestoreDefaultSettings() {}
 
+	/** @brief Whether Restore Defaults targets the current settings page instead of the entire feature. */
+	virtual bool HasScopedDefaultSettings() const { return false; }
+
+	/** @brief Whether the current settings page should also offer a full-feature reset. */
+	virtual bool CanRestoreAllDefaultSettings() const { return false; }
+
+	/** @brief Restores defaults for the currently visible settings page or subfeature. */
+	virtual void RestoreCurrentPageDefaultSettings() { RestoreDefaultSettings(); }
+
 	/**
 	 * @brief Live runtime diagnostics (counters, gauges), distinct from persisted
 	 * settings. Exposed generically via devbench's openshaders.feature
