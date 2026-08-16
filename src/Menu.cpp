@@ -378,7 +378,7 @@ Menu::~Menu()
 	uiIcons.undo.Release();
 	uiIcons.characters.Release();
 	uiIcons.display.Release();
-	uiIcons.grass.Release();
+	uiIcons.foliage.Release();
 	uiIcons.lighting.Release();
 	uiIcons.sky.Release();
 	uiIcons.landscape.Release();

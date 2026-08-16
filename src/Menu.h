@@ -312,7 +312,7 @@ public:
 		// Category icons
 		UIIcon characters;
 		UIIcon display;
-		UIIcon grass;
+		UIIcon foliage;
 		UIIcon lighting;
 		UIIcon sky;
 		UIIcon landscape;
