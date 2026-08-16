@@ -91,14 +91,16 @@ struct CSUtility : Feature
 		Bloom::PresetSettings bloomEnhancement;
 	} settings;
 
+	/** Identifies the OS Utility tab targeted by scoped default restoration. */
 	enum class SettingsPage
 	{
-		Atmosphere,
-		Water,
-		Multipliers,
-		VanillaDepthOfField,
-		VanillaBloom
+		Atmosphere,           ///< Sky atmosphere controls.
+		Water,                ///< Water rendering controls.
+		Multipliers,          ///< Lighting multiplier controls.
+		VanillaDepthOfField,  ///< Vanilla depth-of-field controls.
+		VanillaBloom          ///< Vanilla bloom controls.
 	};
+	/** The visible tab whose settings Restore Defaults changes. */
 	SettingsPage activeSettingsPage = SettingsPage::Atmosphere;
 
 	struct alignas(16) PerFrameData
@@ -136,8 +138,11 @@ struct CSUtility : Feature
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+	/** @return true because OS Utility supports restoring the active tab. */
 	virtual bool HasScopedDefaultSettings() const override { return true; }
+	/** @return true because every OS Utility tab can offer a full reset. */
 	virtual bool CanRestoreAllDefaultSettings() const override { return true; }
+	/** Restores default settings for the active OS Utility tab. */
 	virtual void RestoreCurrentPageDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;

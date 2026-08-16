@@ -17,6 +17,33 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PostProcessing::Settings,
 	DisableVanillaTonemapping)
 
+namespace
+{
+	constexpr bool IsPipelineFeatureEnabledByDefault(PostProcessing::FeaturePipelineIndex a_index)
+	{
+		using Index = PostProcessing::FeaturePipelineIndex;
+		switch (a_index) {
+		case Index::Vignette:
+		case Index::AutoExposure:
+		case Index::CODBloom:
+		case Index::Composite:
+		case Index::ColorGrading:
+			return true;
+		case Index::DoF:
+		case Index::LocalExposure:
+		case Index::MotionBlur:
+		case Index::PhysicalGlare:
+		case Index::LensFlare:
+		case Index::LUT:
+		case Index::Camera:
+		case Index::Border:
+		case Index::COUNT:
+			return false;
+		}
+		return false;
+	}
+}
+
 void PostProcessing::DrawSettings()
 {
 	static int presetIdx = -1;
@@ -345,16 +372,7 @@ void PostProcessing::RestoreDefaultSettings()
 
 	logger::warn("Falling back to built-in Post Processing defaults");
 	settings = {};
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
-
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
+	RestorePipelineDefaultEnablement(false);
 
 	for (auto& pipe : pipeline) {
 		if (pipe) {
@@ -378,11 +396,15 @@ void PostProcessing::RestoreCurrentPageDefaultSettings()
 		input >> defaultPreset;
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load scoped Post Processing defaults. Error: {}", e.what());
-		if (CanRestoreAllDefaultSettings())
-			pipeline[activePipelineFeature]->RestoreDefaultSettings();
-		else {
+		if (CanRestoreAllDefaultSettings()) {
+			auto& feature = pipeline[activePipelineFeature];
+			if (!feature->IsAutoEnabled())
+				feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(activePipelineFeature));
+			feature->RestoreDefaultSettings();
+		} else {
 			settings = {};
 			bypass = false;
+			RestorePipelineDefaultEnablement(true);
 		}
 		return;
 	}
@@ -390,11 +412,14 @@ void PostProcessing::RestoreCurrentPageDefaultSettings()
 	if (!CanRestoreAllDefaultSettings()) {
 		settings = defaultPreset.value("ppsettings", Settings{});
 		bypass = false;
-		for (auto& feature : pipeline) {
+		for (size_t i = 0; i < pipeline.size(); ++i) {
+			auto& feature = pipeline[i];
 			if (!feature || !feature->IsVisible() || feature->IsAutoEnabled())
 				continue;
 			if (const auto defaults = defaultPreset.find(feature->GetType()); defaults != defaultPreset.end())
-				feature->enabled = defaults->value("enabled", true);
+				feature->enabled = defaults->value("enabled", IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(i)));
+			else
+				feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(i));
 		}
 		return;
 	}
@@ -403,14 +428,26 @@ void PostProcessing::RestoreCurrentPageDefaultSettings()
 	const auto featureType = feature->GetType();
 	if (const auto defaults = defaultPreset.find(featureType); defaults != defaultPreset.end()) {
 		if (!feature->IsAutoEnabled())
-			feature->enabled = defaults->value("enabled", true);
+			feature->enabled = defaults->value("enabled", IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(activePipelineFeature)));
 		json featureSettings = defaults->value("settings", json::object());
 		feature->LoadSettings(featureSettings);
 		return;
 	}
 
 	logger::warn("Default preset has no settings for Post Processing subfeature {}", featureType);
+	if (!feature->IsAutoEnabled())
+		feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(activePipelineFeature));
 	feature->RestoreDefaultSettings();
+}
+
+void PostProcessing::RestorePipelineDefaultEnablement(bool a_visibleOnly)
+{
+	for (size_t i = 0; i < pipeline.size(); ++i) {
+		auto& feature = pipeline[i];
+		if (!feature || (a_visibleOnly && (!feature->IsVisible() || feature->IsAutoEnabled())))
+			continue;
+		feature->enabled = IsPipelineFeatureEnabledByDefault(static_cast<FeaturePipelineIndex>(i));
+	}
 }
 
 void PostProcessing::ClearShaderCache()
@@ -481,32 +518,21 @@ void PostProcessing::SetupResources()
 		copyCS.attach(rawPtr);
 
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_unique<LocalExposure>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] = std::make_unique<HistogramAutoExposure>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] = std::make_unique<ColorGrading>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)] = std::make_unique<LUT>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
 
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_unique<MotionBlur>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_unique<DoF>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_unique<PhysicalGlare>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_unique<CODBloom>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_unique<LensFlare>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_unique<Composite>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_unique<Vignette>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_unique<Camera>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_unique<Border>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)].get()->enabled = false;
+
+	RestorePipelineDefaultEnablement(false);
 
 	for (auto& pipe : pipeline) {
 		if (pipe) {

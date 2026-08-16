@@ -66,8 +66,11 @@ struct PostProcessing : Feature
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+	/** @return true because Post Processing supports page-scoped restoration. */
 	virtual bool HasScopedDefaultSettings() const override { return true; }
+	/** @return true only while viewing a valid pipeline subfeature. */
 	virtual bool CanRestoreAllDefaultSettings() const override;
+	/** Restores defaults for the pipeline page or selected subfeature. */
 	virtual void RestoreCurrentPageDefaultSettings() override;
 
 	json pendingSettings = {};
@@ -77,6 +80,7 @@ struct PostProcessing : Feature
 	std::vector<std::string> presets = {};
 	std::vector<std::string> LoadPresets();
 	void SavePresetTo(std::string a_name);
+	/** Loads a named preset. @return true when parsing and application succeed. */
 	bool LoadPresetFrom(std::string a_name);
 
 	enum class FeaturePipelineIndex : size_t
@@ -99,12 +103,15 @@ struct PostProcessing : Feature
 
 	std::array<std::unique_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
 
+	/** Identifies the Post Processing page targeted by scoped restoration. */
 	enum class SettingsPage
 	{
-		Pipeline,
-		SubFeature
+		Pipeline,   ///< Top-level pipeline controls.
+		SubFeature  ///< Settings for the selected pipeline feature.
 	};
+	/** The visible page whose settings Restore Defaults changes. */
 	SettingsPage activeSettingsPage = SettingsPage::Pipeline;
+	/** Index of the pipeline feature shown on the subfeature page. */
 	size_t activePipelineFeature = 0;
 
 	BokehResources bokehResources;
@@ -185,4 +192,7 @@ struct PostProcessing : Feature
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+private:
+	void RestorePipelineDefaultEnablement(bool a_visibleOnly);
 };
