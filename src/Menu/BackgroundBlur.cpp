@@ -6,7 +6,6 @@
 #include "../Features/HDRDisplay.h"
 #include "../Features/Upscaling.h"
 #include "../Globals.h"
-#include "../ShaderCache.h"
 #include "../State.h"
 #include "../Util.h"
 
@@ -131,21 +130,9 @@ namespace BackgroundBlur
 			return {};
 		}
 
-		bool IsMainOrLoadingMenuOpen()
+		bool IsStartupMenuBlurSourceReady()
 		{
-			auto* state = globals::state;
-			return state && state->IsMainOrLoadingMenuOpen(globals::game::ui);
-		}
-
-		bool IsStartupMenuBlurSourceReady(SIE::ShaderCache* shaderCache)
-		{
-			return !shaderCache || (shaderCache->menuLoaded && !shaderCache->IsCompiling());
-		}
-
-		bool ShouldSkipStartupMenuBlur()
-		{
-			return IsMainOrLoadingMenuOpen() &&
-			       !IsStartupMenuBlurSourceReady(globals::shaderCache);
+			return globals::state && globals::state->startupMenuBlurSourceReady;
 		}
 
 		// Release all blur texture resources; caller must hold resourceMutex
@@ -577,8 +564,7 @@ namespace BackgroundBlur
 		                 hdr->settings.enableHDR && hdr->hdrDataCB && hdr->outputTexture &&
 		                 hdr->hdrTexture && hdr->hdrTexture->resource && hdr->hdrTexture->srv && hdr->hdrTexture->rtv;
 
-		// Startup main/loading back buffer can be black until DataLoaded and initial shader work finish.
-		if (ShouldSkipStartupMenuBlur())
+		if (!IsStartupMenuBlurSourceReady())
 			return;
 
 		winrt::com_ptr<ID3D11Texture2D> currentTexture;
