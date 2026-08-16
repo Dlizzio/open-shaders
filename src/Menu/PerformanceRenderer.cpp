@@ -245,7 +245,7 @@ static void RenderPresets(Feature* host)
 		ImGui::TextUnformatted(T(TKEY("fine_tune_features"), "Fine-Tune Individual Features"));
 	}
 	ImGui::TextWrapped("%s", T(TKEY("fine_tune_features_description"),
-		"Override the selected preset for one feature without changing the others."));
+								 "Override the selected preset for one feature without changing the others."));
 	ImGui::Spacing();
 
 	// Drawn in perf-impact order (GetPerformanceOrder), set up in `ordered` above.
