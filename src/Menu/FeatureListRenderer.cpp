@@ -4,8 +4,8 @@
 #include <cmath>
 #include <format>
 #include <imgui.h>
-#include <numbers>
 #include <ranges>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "Feature.h"
@@ -30,10 +30,20 @@
 namespace
 {
 	constexpr float FEATURE_ACTION_BUTTON_SCALE = 1.4f;
-	constexpr float FEATURE_ACTION_ARROW_RADIUS_RATIO = 0.30f;
-	constexpr float FEATURE_ACTION_ARROW_HORIZONTAL_RATIO = 0.866f;
-	constexpr float FEATURE_ACTION_ARROW_VERTICAL_RATIO = 0.75f;
 	constexpr float FEATURE_ACTION_CHECKMARK_LEFT_OFFSET = 2.0f;
+	constexpr float FEATURE_PAGE_BOTTOM_TOLERANCE = 1.0f;
+	constexpr float FEATURE_PAGE_LAYOUT_EPSILON = 0.5f;
+
+	struct FeaturePageLayoutState
+	{
+		bool measured = false;
+		float materialHeight = 0.0f;
+		float contentHeight = 0.0f;
+		float scrollY = 0.0f;
+		float scrollMaxY = 0.0f;
+	};
+
+	std::unordered_map<std::string, FeaturePageLayoutState> g_featurePageLayouts;
 
 	// Core built-in menu names that always appear first in the menu list
 	// These are canonical identifiers used for logic — NOT translated
@@ -69,30 +79,6 @@ namespace
 	{
 		const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
 		return stage == Feature::ReleaseStage::Alpha ? statusPalette.Error : statusPalette.Warning;
-	}
-
-	void DrawFeatureActionsArrow(ImDrawList* drawList, const ImVec2& buttonMin, const ImVec2& buttonMax, float progress)
-	{
-		const ImVec2 center((buttonMin.x + buttonMax.x) * 0.5f, (buttonMin.y + buttonMax.y) * 0.5f);
-		const float radius = (buttonMax.x - buttonMin.x) * FEATURE_ACTION_ARROW_RADIUS_RATIO;
-		const float angle = std::numbers::pi_v<float> * std::clamp(progress, 0.0f, 1.0f);
-		const float cosine = std::cos(angle);
-		const float sine = std::sin(angle);
-
-		// Match ImGui's standard down-arrow proportions.
-		std::array<ImVec2, 3> points = {
-			ImVec2(0.0f, FEATURE_ACTION_ARROW_VERTICAL_RATIO * radius),
-			ImVec2(-FEATURE_ACTION_ARROW_HORIZONTAL_RATIO * radius, -FEATURE_ACTION_ARROW_VERTICAL_RATIO * radius),
-			ImVec2(FEATURE_ACTION_ARROW_HORIZONTAL_RATIO * radius, -FEATURE_ACTION_ARROW_VERTICAL_RATIO * radius)
-		};
-		for (auto& point : points) {
-			const ImVec2 rotated(
-				point.x * cosine - point.y * sine,
-				point.x * sine + point.y * cosine);
-			point = ImVec2(center.x + rotated.x, center.y + rotated.y);
-		}
-
-		drawList->AddTriangleFilled(points[0], points[1], points[2], ImGui::GetColorU32(ImGuiCol_Text));
 	}
 
 	/**
@@ -691,6 +677,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 {
+	ProfilingRenderer::DeactivateFeatureTimers();
 	ImGui::PushID(menu.name.c_str());
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
 		// Add spacing only for Home menu
@@ -717,33 +704,72 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const CategoryHeader&)
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 {
-	if (feat == &globals::features::csEditor)
+	if (feat == &globals::features::csEditor) {
+		ProfilingRenderer::DeactivateFeatureTimers();
 		return;
+	}
 
 	const auto featureName = feat->GetShortName();
 	bool isDisabled = globals::state->IsFeatureDisabled(featureName);
 	bool isLoaded = feat->loaded;
 	bool hasFailedMessage = !feat->failedLoadedMessage.empty();
+	const bool featureProfilingAvailable = !isDisabled && isLoaded && ProfilingRenderer::IsFeatureProfilingAvailable();
 
 	ImGui::PushID(featureName.c_str());
+	const float profilingHeight = ProfilingRenderer::PrepareFeatureTimers(featureName, featureProfilingAvailable);
+	if (!featureProfilingAvailable) {
+		g_featurePageLayouts.erase(featureName);
+		if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true))
+			RenderFeatureMaterial(feat, isDisabled, isLoaded, hasFailedMessage);
+		ImGui::EndChild();
+		ImGui::PopID();
+		RenderReactiveConstraintWarningDialog();
+		return;
+	}
+
+	auto& pageLayout = g_featurePageLayouts[featureName];
+	const float pageViewportHeight = std::max(
+		ImGui::GetContentRegionAvail().y - ImGui::GetStyle().WindowPadding.y * 2.0f,
+		0.0f);
+	const float predictedProfilingStart = std::max(pageLayout.materialHeight, pageViewportHeight - profilingHeight);
+	const float predictedContentHeight = predictedProfilingStart + profilingHeight;
+	const float contentHeightDelta = predictedContentHeight - pageLayout.contentHeight;
+	const bool profilingWasAtBottom = pageLayout.scrollMaxY <= FEATURE_PAGE_BOTTOM_TOLERANCE ||
+	                                  pageLayout.scrollY >= pageLayout.scrollMaxY - FEATURE_PAGE_BOTTOM_TOLERANCE;
+
+	ImGui::SetNextWindowContentSize(ImVec2(0.0f, predictedContentHeight));
+	if (pageLayout.measured && profilingWasAtBottom && std::abs(contentHeightDelta) >= FEATURE_PAGE_LAYOUT_EPSILON)
+		ImGui::SetNextWindowScroll(ImVec2(-1.0f, std::max(pageLayout.scrollY + contentHeightDelta, 0.0f)));
+
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-		// Compute scene-controlled state once for both header and settings
-		auto* sceneManager = globals::sceneSettingsManager;
-		bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
+		const float materialStartY = ImGui::GetCursorPosY();
+		const float materialHeight = RenderFeatureMaterial(feat, isDisabled, isLoaded, hasFailedMessage);
+		const float profilingStart = std::max(materialHeight, pageViewportHeight - profilingHeight);
+		ImGui::SetCursorPosY(materialStartY + profilingStart);
+		ProfilingRenderer::RenderFeatureTimers(featureName);
 
-		// Render feature header and capture the fixed action-button position
-		const auto featureActionsLayout = RenderFeatureHeader(feat, isLoaded);
-
-		// Render feature settings content
-		RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
-
-		// Draw last so the fixed action button remains above scrolling settings
-		RenderFeatureActions(feat, isDisabled, isLoaded, sceneControlled, featureActionsLayout);
+		pageLayout.measured = true;
+		pageLayout.materialHeight = materialHeight;
+		pageLayout.contentHeight = profilingStart + profilingHeight;
+		pageLayout.scrollY = ImGui::GetScrollY();
+		pageLayout.scrollMaxY = ImGui::GetScrollMaxY();
 	}
 	ImGui::EndChild();
 	ImGui::PopID();
 	// Render reactive constraint warning outside the child window so it can appear as a top-level popup
 	RenderReactiveConstraintWarningDialog();
+}
+
+float FeatureListRenderer::DrawMenuVisitor::RenderFeatureMaterial(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage)
+{
+	const float materialStartY = ImGui::GetCursorPosY();
+	auto* sceneManager = globals::sceneSettingsManager;
+	const auto featureName = feat->GetShortName();
+	const bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
+	const auto featureActionsLayout = RenderFeatureHeader(feat, isLoaded);
+	RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
+	RenderFeatureActions(feat, isDisabled, isLoaded, sceneControlled, featureActionsLayout);
+	return std::max(ImGui::GetCursorPosY() - materialStartY, 0.0f);
 }
 
 FeatureListRenderer::DrawMenuVisitor::FeatureActionsLayout FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isLoaded)
@@ -920,7 +946,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 		}
 	}
 
-	DrawFeatureActionsArrow(actionsButtonDrawList, actionsButtonMin, actionsButtonMax, arrowProgress);
+	Util::DrawDisclosureChevron(actionsButtonDrawList, actionsButtonMin, actionsButtonMax, arrowProgress);
 	ImGui::PopID();
 	ImGui::EndChild();
 	ImGui::SetCursorScreenPos(cursorPosAfterSettings);
@@ -979,11 +1005,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
 			feat->DrawSettings();
-
-			if (feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
-				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
-				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
-			}
 
 			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
 
