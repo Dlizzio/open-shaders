@@ -4,8 +4,8 @@
 #include <cmath>
 #include <format>
 #include <imgui.h>
-#include <numbers>
 #include <ranges>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "Feature.h"
@@ -31,10 +31,20 @@
 namespace
 {
 	constexpr float FEATURE_ACTION_BUTTON_SCALE = 1.4f;
-	constexpr float FEATURE_ACTION_ARROW_RADIUS_RATIO = 0.30f;
-	constexpr float FEATURE_ACTION_ARROW_HORIZONTAL_RATIO = 0.866f;
-	constexpr float FEATURE_ACTION_ARROW_VERTICAL_RATIO = 0.75f;
 	constexpr float FEATURE_ACTION_CHECKMARK_LEFT_OFFSET = 2.0f;
+	constexpr float FEATURE_PAGE_BOTTOM_TOLERANCE = 1.0f;
+	constexpr float FEATURE_PAGE_LAYOUT_EPSILON = 0.5f;
+
+	struct FeaturePageLayoutState
+	{
+		bool measured = false;
+		float materialHeight = 0.0f;
+		float contentHeight = 0.0f;
+		float scrollY = 0.0f;
+		float scrollMaxY = 0.0f;
+	};
+
+	std::unordered_map<std::string, FeaturePageLayoutState> g_featurePageLayouts;
 
 	// Core built-in menu names that always appear first in the menu list
 	// These are canonical identifiers used for logic — NOT translated
@@ -70,30 +80,6 @@ namespace
 	{
 		const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
 		return stage == Feature::ReleaseStage::Alpha ? statusPalette.Error : statusPalette.Warning;
-	}
-
-	void DrawFeatureActionsArrow(ImDrawList* drawList, const ImVec2& buttonMin, const ImVec2& buttonMax, float progress)
-	{
-		const ImVec2 center((buttonMin.x + buttonMax.x) * 0.5f, (buttonMin.y + buttonMax.y) * 0.5f);
-		const float radius = (buttonMax.x - buttonMin.x) * FEATURE_ACTION_ARROW_RADIUS_RATIO;
-		const float angle = std::numbers::pi_v<float> * std::clamp(progress, 0.0f, 1.0f);
-		const float cosine = std::cos(angle);
-		const float sine = std::sin(angle);
-
-		// Match ImGui's standard down-arrow proportions.
-		std::array<ImVec2, 3> points = {
-			ImVec2(0.0f, FEATURE_ACTION_ARROW_VERTICAL_RATIO * radius),
-			ImVec2(-FEATURE_ACTION_ARROW_HORIZONTAL_RATIO * radius, -FEATURE_ACTION_ARROW_VERTICAL_RATIO * radius),
-			ImVec2(FEATURE_ACTION_ARROW_HORIZONTAL_RATIO * radius, -FEATURE_ACTION_ARROW_VERTICAL_RATIO * radius)
-		};
-		for (auto& point : points) {
-			const ImVec2 rotated(
-				point.x * cosine - point.y * sine,
-				point.x * sine + point.y * cosine);
-			point = ImVec2(center.x + rotated.x, center.y + rotated.y);
-		}
-
-		drawList->AddTriangleFilled(points[0], points[1], points[2], ImGui::GetColorU32(ImGuiCol_Text));
 	}
 
 	/**
@@ -178,8 +164,8 @@ namespace
 			return T("feature.category.characters", "Characters");
 		if (category == FeatureCategories::kDisplay)
 			return T("feature.category.display", "Display");
-		if (category == FeatureCategories::kGrass)
-			return T("feature.category.grass", "Grass");
+		if (category == FeatureCategories::kFoliage)
+			return T("feature.category.grass", "Foliage");
 		if (category == FeatureCategories::kLandscapeAndTextures)
 			return T("feature.category.landscape_and_textures", "Landscape & Textures");
 		if (category == FeatureCategories::kLighting)
@@ -428,7 +414,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	}
 
 	// Define category order
-	std::vector<std::string> categoryOrder = { "Display", "Utility", "Characters", "Grass", "Lighting", "Materials", "Post-Processing", "Sky", "Landscape & Textures", "Water", "Other" };
+	std::vector<std::string> categoryOrder = { "Display", "Utility", "Characters", "Foliage", "Lighting", "Materials", "Post-Processing", "Sky", "Landscape & Textures", "Water", "Other" };
 	// Add categorized features to menu with collapsible headers
 	for (const std::string& category : categoryOrder) {
 		if (categorizedFeatures.find(category) != categorizedFeatures.end() && !categorizedFeatures[category].empty()) {
@@ -692,6 +678,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 {
+	ProfilingRenderer::DeactivateFeatureTimers();
 	ImGui::PushID(menu.name.c_str());
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
 		// Add spacing only for Home menu
@@ -718,25 +705,56 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const CategoryHeader&)
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 {
-	if (feat == &globals::features::csEditor)
+	if (feat == &globals::features::csEditor) {
+		ProfilingRenderer::DeactivateFeatureTimers();
 		return;
+	}
 
 	const auto featureName = feat->GetShortName();
 	bool isDisabled = !feat->IsAlwaysEnabled() && globals::state->IsFeatureDisabled(featureName);
 	bool isLoaded = feat->loaded;
 	bool hasFailedMessage = !feat->failedLoadedMessage.empty();
+	const bool featureProfilingAvailable =
+		!isDisabled && isLoaded && ProfilingRenderer::IsFeatureProfilingAvailable(featureName);
 
 	ImGui::PushID(featureName.c_str());
+	const float profilingHeight = ProfilingRenderer::PrepareFeatureTimers(featureName, featureProfilingAvailable);
+	if (!featureProfilingAvailable) {
+		g_featurePageLayouts.erase(featureName);
+		if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true))
+			RenderFeatureMaterial(feat, isDisabled, isLoaded, hasFailedMessage);
+		ImGui::EndChild();
+		ImGui::PopID();
+		RenderReactiveConstraintWarningDialog();
+		return;
+	}
+
+	auto& pageLayout = g_featurePageLayouts[featureName];
+	const float pageViewportHeight = std::max(
+		ImGui::GetContentRegionAvail().y - ImGui::GetStyle().WindowPadding.y * 2.0f,
+		0.0f);
+	const float predictedProfilingStart = std::max(pageLayout.materialHeight, pageViewportHeight - profilingHeight);
+	const float predictedContentHeight = predictedProfilingStart + profilingHeight;
+	const float contentHeightDelta = predictedContentHeight - pageLayout.contentHeight;
+	const bool profilingWasAtBottom = pageLayout.scrollMaxY <= FEATURE_PAGE_BOTTOM_TOLERANCE ||
+	                                  pageLayout.scrollY >= pageLayout.scrollMaxY - FEATURE_PAGE_BOTTOM_TOLERANCE;
+
+	ImGui::SetNextWindowContentSize(ImVec2(0.0f, predictedContentHeight));
+	if (pageLayout.measured && profilingWasAtBottom && std::abs(contentHeightDelta) >= FEATURE_PAGE_LAYOUT_EPSILON)
+		ImGui::SetNextWindowScroll(ImVec2(-1.0f, std::max(pageLayout.scrollY + contentHeightDelta, 0.0f)));
+
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-		// Compute scene-controlled state once for both header and settings
-		auto* sceneManager = globals::sceneSettingsManager;
-		bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
+		const float materialStartY = ImGui::GetCursorPosY();
+		const float materialHeight = RenderFeatureMaterial(feat, isDisabled, isLoaded, hasFailedMessage);
+		const float profilingStart = std::max(materialHeight, pageViewportHeight - profilingHeight);
+		ImGui::SetCursorPosY(materialStartY + profilingStart);
+		ProfilingRenderer::RenderFeatureTimers(featureName);
 
-		// Render feature header with integrated action buttons
-		RenderFeatureHeader(feat, isDisabled, isLoaded, sceneControlled);
-
-		// Render feature settings content
-		RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
+		pageLayout.measured = true;
+		pageLayout.materialHeight = materialHeight;
+		pageLayout.contentHeight = profilingStart + profilingHeight;
+		pageLayout.scrollY = ImGui::GetScrollY();
+		pageLayout.scrollMaxY = ImGui::GetScrollMaxY();
 	}
 	ImGui::EndChild();
 	ImGui::PopID();
@@ -744,15 +762,24 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	RenderReactiveConstraintWarningDialog();
 }
 
-void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
+float FeatureListRenderer::DrawMenuVisitor::RenderFeatureMaterial(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage)
 {
-	auto& themeSettings = globals::menu->GetSettings().Theme;
+	const float materialStartY = ImGui::GetCursorPosY();
+	auto* sceneManager = globals::sceneSettingsManager;
 	const auto featureName = feat->GetShortName();
+	const bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
+	const auto featureActionsLayout = RenderFeatureHeader(feat, isDisabled, isLoaded);
+	RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
+	RenderFeatureActions(feat, isDisabled, isLoaded, sceneControlled, featureActionsLayout);
+	return std::max(ImGui::GetCursorPosY() - materialStartY, 0.0f);
+}
 
-	// Check if override is available for this feature
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	bool hasOverrides = feat->UsesMainSettings() && overrideManager && overrideManager->HasFeatureOverrides(featureName);
-
+FeatureListRenderer::DrawMenuVisitor::FeatureActionsLayout FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(
+	Feature* feat, bool isDisabled, bool isLoaded)
+{
+	const auto featureName = feat->GetShortName();
+	auto* overrideManager = SettingsOverrideManager::GetSingleton();
+	const bool hasOverrides = feat->UsesMainSettings() && overrideManager && overrideManager->HasFeatureOverrides(featureName);
 	// Get available content width for positioning
 	float availableWidth = ImGui::GetContentRegionAvail().x;
 
@@ -774,116 +801,168 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	const float titleOnlyHeight = DrawFeatureHeader(
 		feat->GetDisplayName(), isLoaded ? feat->version : "", description, stageTag, StageTagColor(stage), actionsButtonSize);
 
-	// Save cursor position after header (for restoring after buttons are drawn)
-	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
+	// Position the action button to the right of the header, middle-aligned with title only
+	const float buttonY = titleStartPos.y + (titleOnlyHeight - actionsButtonSize) * 0.5f;
+	const FeatureActionsLayout actionsLayout{
+		titleStartPos.x + availableWidth - actionsButtonSize,
+		buttonY + ImGui::GetScrollY(),
+		actionsButtonSize
+	};
 
-	if (hasFeatureActions) {
-		// Position the action button to the right of the header, middle-aligned with title only
-		const float buttonY = titleStartPos.y + (titleOnlyHeight - actionsButtonSize) * 0.5f;
-		ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - actionsButtonSize, buttonY));
+	return actionsLayout;
+}
 
-		bool bootEnabled = !isDisabled;
-		if (g_featureActionsFlyoutFeature != featureName) {
+void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
+	Feature* feat,
+	bool isDisabled,
+	bool isLoaded,
+	bool sceneControlled,
+	const FeatureActionsLayout& layout)
+{
+	auto& themeSettings = globals::menu->GetSettings().Theme;
+	const auto featureName = feat->GetShortName();
+	auto* overrideManager = SettingsOverrideManager::GetSingleton();
+	const bool hasOverrides = feat->UsesMainSettings() && overrideManager && overrideManager->HasFeatureOverrides(featureName);
+	const bool canRestoreDefaults = !isDisabled && isLoaded && feat->HasRestoreDefaults();
+	const bool canApplyOverrides = !isDisabled && isLoaded && hasOverrides;
+
+	if (layout.size <= 0.0f) {
+		if (g_featureActionsFlyoutFeature == featureName) {
 			Util::CloseFlyout(g_featureActionsFlyout);
-			g_featureActionsFlyoutFeature = featureName;
+			g_featureActionsFlyoutFeature.clear();
 		}
+		return;
+	}
 
-		ImGui::PushID(featureName.c_str());
-		const bool actionsButtonPressed = ImGui::Button("##FeatureActions", ImVec2(actionsButtonSize, actionsButtonSize));
-		const ImGuiID actionsButtonId = ImGui::GetItemID();
-		const ImVec2 actionsButtonMin = ImGui::GetItemRectMin();
-		const ImVec2 actionsButtonMax = ImGui::GetItemRectMax();
-		auto* actionsButtonDrawList = ImGui::GetWindowDrawList();
-		float arrowProgress = 0.0f;
-		{
-			const auto& style = ImGui::GetStyle();
-			const float highlightGap = std::max(0.0f, style.WindowPadding.x - style.ItemSpacing.x * 0.5f);
-			const ImVec2 flyoutPadding(
-				style.WindowPadding.x, highlightGap + style.ItemSpacing.y * 0.5f);
-			Util::FlyoutScope flyout(
-				g_featureActionsFlyout, actionsButtonId, actionsButtonPressed,
-				{ flyoutPadding, style.WindowRounding,
-					ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).w, style.Alpha });
-			arrowProgress = g_featureActionsFlyout.activeId == actionsButtonId ?
-			                    Util::GetFlyoutEasedProgress(g_featureActionsFlyout) :
-			                    0.0f;
+	const ImVec2 cursorPosAfterSettings = ImGui::GetCursorScreenPos();
+	ImGui::SetCursorScreenPos(ImVec2(layout.x, layout.y));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+	const bool overlayVisible = ImGui::BeginChild(
+		"##FeatureActionsOverlay",
+		ImVec2(layout.size, layout.size),
+		false,
+		ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+	ImGui::PopStyleVar();
+	if (!overlayVisible) {
+		ImGui::EndChild();
+		ImGui::SetCursorScreenPos(cursorPosAfterSettings);
+		ImGui::Dummy(ImVec2(0.0f, 0.0f));
+		return;
+	}
 
-			if (flyout) {
-				bool closeFlyout = false;
-				if (!feat->IsAlwaysEnabled()) {
-					{
-						const bool failedToLoad = !feat->failedLoadedMessage.empty();
-						if (failedToLoad)
-							ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
-						const SKSE::stl::scope_exit restoreTextColor([failedToLoad]() noexcept {
-							if (failedToLoad)
-								ImGui::PopStyleColor();
-						});
+	bool bootEnabled = !isDisabled;
+	if (g_featureActionsFlyoutFeature != featureName) {
+		Util::CloseFlyout(g_featureActionsFlyout);
+		g_featureActionsFlyoutFeature = featureName;
+	}
 
-						if (Util::FlyoutMenuItem(
-								T("menu.features.enable_at_boot", "Enable at Boot"),
-								bootEnabled,
-								true,
-								FEATURE_ACTION_CHECKMARK_LEFT_OFFSET * Util::GetUIScale())) {
-							const bool nowDisabled = feat->ToggleAtBootSetting();
-							bootEnabled = !nowDisabled;
-							logger::info("{}: {} at boot.", featureName, nowDisabled ? "Disabled" : "Enabled");
-						}
+	ImGui::PushID(featureName.c_str());
+	const bool actionsButtonPressed = ImGui::Button("##FeatureActions", ImVec2(layout.size, layout.size));
+	const ImGuiID actionsButtonId = ImGui::GetItemID();
+	const ImVec2 actionsButtonMin = ImGui::GetItemRectMin();
+	const ImVec2 actionsButtonMax = ImGui::GetItemRectMax();
+	auto* actionsButtonDrawList = ImGui::GetWindowDrawList();
+	float arrowProgress = 0.0f;
+	{
+		const auto& style = ImGui::GetStyle();
+		const float highlightGap = std::max(0.0f, style.WindowPadding.x - style.ItemSpacing.x * 0.5f);
+		const ImVec2 flyoutPadding(style.WindowPadding.x, highlightGap + style.ItemSpacing.y * 0.5f);
+		Util::FlyoutScope flyout(
+			g_featureActionsFlyout, actionsButtonId, actionsButtonPressed,
+			{ flyoutPadding, style.WindowRounding, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).w, style.Alpha });
+		arrowProgress = g_featureActionsFlyout.activeId == actionsButtonId ?
+		                    Util::GetFlyoutEasedProgress(g_featureActionsFlyout) :
+		                    0.0f;
+
+		if (flyout) {
+			bool closeFlyout = false;
+			if (!feat->IsAlwaysEnabled()) {
+				const bool failedToLoad = !feat->failedLoadedMessage.empty();
+				if (failedToLoad)
+					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
+				const SKSE::stl::scope_exit restoreTextColor([failedToLoad]() noexcept {
+					if (failedToLoad)
+						ImGui::PopStyleColor();
+				});
+
+				if (Util::FlyoutMenuItem(
+						T("menu.features.enable_at_boot", "Enable at Boot"),
+						bootEnabled,
+						true,
+						FEATURE_ACTION_CHECKMARK_LEFT_OFFSET * Util::GetUIScale())) {
+					const bool nowDisabled = feat->ToggleAtBootSetting();
+					bootEnabled = !nowDisabled;
+					logger::info("{}: {} at boot.", featureName, nowDisabled ? "Disabled" : "Enabled");
+				}
+
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text(
+						T("menu.features.boot_toggle_tooltip",
+							"Toggle feature loading at boot.\n"
+							"Current state: %s\n"
+							"Restart required for changes to take effect.\n"
+							"Disabling removes performance impact."),
+						bootEnabled ? T("menu.features.enabled", "Enabled") : T("menu.features.disabled", "Disabled"));
+				}
+			}
+
+			if (canRestoreDefaults || canApplyOverrides) {
+				if (!feat->IsAlwaysEnabled())
+					ImGui::Separator();
+				if (canRestoreDefaults) {
+					if (Util::FlyoutMenuItem(
+							feat->HasScopedDefaultSettings() ?
+								T("menu.features.restore_page_defaults", "Restore Defaults (Page)") :
+								T("menu.features.restore_defaults", "Restore Defaults"))) {
+						SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
+						feat->RestoreCurrentPageDefaultSettings();
+						closeFlyout = true;
 					}
 
 					if (auto _tt = Util::HoverTooltipWrapper()) {
 						ImGui::Text(
-							T("menu.features.boot_toggle_tooltip",
-								"Toggle feature loading at boot.\n"
-								"Current state: %s\n"
-								"Restart required for changes to take effect.\n"
-								"Disabling removes performance impact."),
-							bootEnabled ? T("menu.features.enabled", "Enabled") : T("menu.features.disabled", "Disabled"));
+							"%s",
+							feat->HasScopedDefaultSettings() ?
+								T("menu.features.restore_page_defaults_tooltip", "Restore default settings for this page") :
+								T("menu.features.restore_defaults_tooltip", "Restore default settings for this feature"));
 					}
 				}
 
-				if (canRestoreDefaults || canApplyOverrides) {
-					if (!feat->IsAlwaysEnabled())
-						ImGui::Separator();
-
-					if (canRestoreDefaults) {
-						if (Util::FlyoutMenuItem(T("menu.features.restore_defaults", "Restore Defaults"))) {
-							SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
-							feat->RestoreDefaultSettings();
-							closeFlyout = true;
-						}
-
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text("%s", T("menu.features.restore_defaults_tooltip", "Restore default settings for this feature"));
+				if (canApplyOverrides) {
+					if (Util::FlyoutMenuItem(
+							feat->HasScopedOverrideSettings() ?
+								T("menu.features.apply_page_override", "Apply Override (Page)") :
+								T("menu.features.apply_override", "Apply Override"),
+							false,
+							!sceneControlled)) {
+						closeFlyout = true;
+						SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
+						if (feat->ReapplyCurrentPageOverrideSettings()) {
+							logger::info("Successfully reapplied override settings for {}", featureName);
+						} else {
+							logger::warn("Failed to reapply override settings for {}", featureName);
 						}
 					}
 
-					if (canApplyOverrides) {
-						if (Util::FlyoutMenuItem(T("menu.features.apply_override", "Apply Override"), false, !sceneControlled)) {
-							closeFlyout = true;
-							SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
-							if (feat->ReapplyOverrideSettings()) {
-								logger::info("Successfully reapplied override settings for {}", featureName);
-							} else {
-								logger::warn("Failed to reapply override settings for {}", featureName);
-							}
-						}
-
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							if (sceneControlled) {
-								ImGui::Text(
-									"%s",
-									T("menu.features.cannot_apply_overrides_scene",
-										"Cannot apply overrides while scene-specific settings are active.\n"
-										"Pause scene settings for this feature first."));
-							} else {
-								ImGui::Text(
-									"%s",
-									T("menu.features.restore_override_tooltip",
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						if (sceneControlled) {
+							ImGui::Text(
+								"%s",
+								T("menu.features.cannot_apply_overrides_scene",
+									"Cannot apply overrides while scene-specific settings are active.\n"
+									"Pause scene settings for this feature first."));
+						} else {
+							ImGui::Text(
+								"%s",
+								feat->HasScopedOverrideSettings() ?
+									T("menu.features.restore_page_override_tooltip",
+										"Restores override settings for this page from mod files.\n"
+									"This will discard your customizations on this page and revert to\n"
+									"the mod author's recommended settings.") :
+								T("menu.features.restore_override_tooltip",
 										"Restores original override settings from mod files.\n"
 										"This will discard your customizations and revert to\n"
-										"the mod author's recommended settings."));
-							}
+									"the mod author's recommended settings."));
 						}
 					}
 				}
@@ -892,16 +971,13 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 					Util::RequestCloseFlyout(g_featureActionsFlyout);
 			}
 		}
-
-		DrawFeatureActionsArrow(actionsButtonDrawList, actionsButtonMin, actionsButtonMax, arrowProgress);
-		ImGui::PopID();
-	} else if (g_featureActionsFlyoutFeature == featureName) {
-		Util::CloseFlyout(g_featureActionsFlyout);
-		g_featureActionsFlyoutFeature.clear();
 	}
 
-	// Restore cursor position after the title and separator
-	ImGui::SetCursorScreenPos(cursorPosAfterHeader);
+	Util::DrawDisclosureChevron(actionsButtonDrawList, actionsButtonMin, actionsButtonMax, arrowProgress);
+	ImGui::PopID();
+	ImGui::EndChild();
+	ImGui::SetCursorScreenPos(cursorPosAfterSettings);
+	ImGui::Dummy(ImVec2(0.0f, 0.0f));
 }
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled)
@@ -958,11 +1034,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			{
 				SceneSettingsUIHooks::FeatureDrawGuard featureDrawGuard(feat, sceneControlled);
 				feat->DrawSettings();
-			}
-
-			if (feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
-				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
-				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
 			}
 
 			ImVec2 cursorPosAfter = ImGui::GetCursorPos();

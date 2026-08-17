@@ -333,6 +333,9 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		const bool armStartupMenuBlurSource =
+			!globals::state->startupMenuBlurSourceReady &&
+			globals::state->startupMenuInitializationComplete.load(std::memory_order_acquire);
 		globals::state->Reset();
 
 		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
@@ -342,6 +345,9 @@ struct IDXGISwapChain_Present
 			[&](IDXGISwapChain* swapChain, UINT syncInterval, UINT presentFlags) {
 				return func(swapChain, syncInterval, presentFlags);
 			});
+
+		if (SUCCEEDED(retval) && armStartupMenuBlurSource)
+			globals::state->startupMenuBlurSourceReady = true;
 
 		// Runs after HDR Present so the captured back buffer matches what's on screen.
 		globals::features::screenshotFeature.ProcessCaptureRequest();
@@ -490,19 +496,18 @@ struct BSShaderRenderTargets_Create
 		perfMode.EndCreateRTEnlarge();
 
 		globals::ReInit();
+
+		// Must precede Setup()'s SetupResources dispatch -- Upscaling::SetupResources()
+		// allocates FSR's foveation-dependent texture only on its first (and typically
+		// only) upscale-method-change, so IsLoaded() must already be latched by then.
+		FoveatedRenderImpl::Bridge::BootSequence();
+
 		globals::state->Setup();
 
 		// PerfMode is not in the Feature list (it's a worker driven by the
 		// upscaling toggle), so SetupResources runs here directly.
 		if (perfMode.IsHookActive())
 			perfMode.SetupResources();
-
-		// PR-3 MVP-B: latch FoveatedRender enable + qualityMode at the moment
-		// the engine is fully initialized but before the first frame. After
-		// this point, live setting changes won't be honored mid-game (matches
-		// Streamline's DLSS option lifecycle — quality changes need a full
-		// resource recreate the user has to opt into).
-		FoveatedRenderImpl::Bridge::BootSequence();
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -513,7 +518,12 @@ struct BSInputDeviceManager_PollInputDevices
 	{
 		// Reflex sleep/cap runs here by design: this executes before rendering work for the frame.
 		// UpdateReflex() enforces "once per frame" internally in case this hook is hit multiple times.
-		globals::features::upscaling.streamline.UpdateReflex();
+		// When using DLSS-G, Reflex must run via the DX12 Streamline instance.
+		auto& upscaling = globals::features::upscaling;
+		if (upscaling.UsesDLSSGFrameGen() && upscaling.streamlineDX12.featureReflex)
+			upscaling.streamlineDX12.UpdateReflex();
+		else
+			upscaling.streamline.UpdateReflex();
 
 		bool blockedDevice = true;
 

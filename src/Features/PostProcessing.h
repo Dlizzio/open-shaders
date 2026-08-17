@@ -66,6 +66,14 @@ struct PostProcessing : Feature
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+	/** @return true while viewing a pipeline subfeature. */
+	virtual bool HasScopedDefaultSettings() const override;
+	/** Restores defaults for the entire feature or selected subfeature. */
+	virtual void RestoreCurrentPageDefaultSettings() override;
+	/** @return true while viewing a pipeline subfeature. */
+	virtual bool HasScopedOverrideSettings() const override;
+	/** Reapplies overrides for the entire feature or selected subfeature. */
+	virtual bool ReapplyCurrentPageOverrideSettings() override;
 
 	json pendingSettings = {};
 
@@ -74,7 +82,8 @@ struct PostProcessing : Feature
 	std::vector<std::string> presets = {};
 	std::vector<std::string> LoadPresets();
 	void SavePresetTo(std::string a_name);
-	void LoadPresetFrom(std::string a_name);
+	/** Loads a named preset. @return true when parsing and application succeed. */
+	bool LoadPresetFrom(std::string a_name);
 
 	enum class FeaturePipelineIndex : size_t
 	{
@@ -95,6 +104,17 @@ struct PostProcessing : Feature
 	};
 
 	std::array<std::unique_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
+
+	/** Identifies the Post Processing page targeted by scoped restoration. */
+	enum class SettingsPage
+	{
+		Pipeline,   ///< Top-level pipeline controls.
+		SubFeature  ///< Settings for the selected pipeline feature.
+	};
+	/** The visible page whose settings Restore Defaults changes. */
+	SettingsPage activeSettingsPage = SettingsPage::Pipeline;
+	/** Index of the pipeline feature shown on the subfeature page. */
+	size_t activePipelineFeature = 0;
 
 	BokehResources bokehResources;
 
@@ -174,4 +194,9 @@ struct PostProcessing : Feature
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+private:
+	bool ApplyPendingSettings();
+	bool HasActivePipelineFeature() const;
+	void RestorePipelineDefaultEnablement();
 };

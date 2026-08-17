@@ -15,16 +15,13 @@ if(DEVBENCH_BRIDGE)
     list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
 endif()
 
-# Effects11 — same before-project() rationale as DEVBENCH_BRIDGE above. Off by
-# default for this fork: kept buildable, but excluded from shipped binaries.
+# Effects11 — on by default; the vcpkg port is an unconditional dependency
+# (see vcpkg.json), not a manifest feature like DEVBENCH_BRIDGE above.
 option(
     ENABLE_EFFECTS11
     "Enable the Effects11 feature (ENB-style post-processing framework)."
-    OFF
+    ON
 )
-if(ENABLE_EFFECTS11)
-    list(APPEND VCPKG_MANIFEST_FEATURES "effects11")
-endif()
 
 project(
     # gersemi: ignore
@@ -250,8 +247,6 @@ if(DEVBENCH_BRIDGE)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
 endif()
 
-# Effects11: opt-in via -DENABLE_EFFECTS11=ON. When off, the port isn't linked and
-# the feature's sources are excluded below, so it never reaches a shipped binary.
 if(ENABLE_EFFECTS11)
     target_link_libraries(${PROJECT_NAME} PRIVATE Microsoft::Effects11)
     target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_EFFECTS11)
@@ -959,7 +954,14 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 
     append_copy_if_different(_shader_copy_cmds _package_shaders "${CMAKE_SOURCE_DIR}/package/Shaders" "${AIO_DIR}/Shaders")
     append_copy_if_different(_shader_copy_cmds FFX_RUNTIME_FILES "${FFX_RUNTIME_SHADER_ROOT}" "${AIO_DIR}/Shaders")
+    # Streamline-Runtime.cmake's payload is a build-tree dir, not a FEATURE_PATH, so
+    # the glob below never discovers it -- wire it in explicitly, same as FFX above.
+    append_copy_if_different(_shader_copy_cmds STREAMLINE_RUNTIME_FILES "${STREAMLINE_RUNTIME_DIRECTORY}" "${AIO_DIR}/${STREAMLINE_RUNTIME_RELATIVE_DIRECTORY}")
+    append_copy_if_different(_shader_copy_cmds STREAMLINE_RUNTIME_DX12_FILES "${STREAMLINE_RUNTIME_DX12_DIRECTORY}" "${AIO_DIR}/${STREAMLINE_RUNTIME_DX12_RELATIVE_DIRECTORY}")
 
+    # Accumulated below and added to DEPENDS -- HLSL_FILES alone missed non-shader
+    # feature payload (e.g. bundled DLLs), silently pinning stale binaries forever.
+    set(_all_feature_shader_files)
     foreach(_fpath IN LISTS AIO_LOCAL_FEATURE_PATHS)
         if(EXISTS "${_fpath}/Shaders")
             file(
@@ -969,6 +971,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             )
             list(FILTER _feat_shaders EXCLUDE REGEX "/Tests/")
             append_copy_if_different(_shader_copy_cmds _feat_shaders "${_fpath}/Shaders" "${AIO_DIR}/Shaders")
+            list(APPEND _all_feature_shader_files ${_feat_shaders})
         endif()
     endforeach()
 
@@ -981,6 +984,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         DEPENDS
             ${HLSL_FILES}
             ${FFX_RUNTIME_FILES}
+            ${STREAMLINE_RUNTIME_FILES}
+            ${STREAMLINE_RUNTIME_DX12_FILES}
+            ${_package_shaders}
+            ${_all_feature_shader_files}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
         COMMENT "Copying changed shaders into AIO/Shaders"
     )
@@ -1721,7 +1728,9 @@ endif()
 
 message("*************************************************************")
 message("Open Shaders configuration complete (fork of Community Shaders)")
-message("To prepare a ZIP package of AIO, Core, or Features")
+message(
+    "To prepare a package of AIO (.7z when 7-Zip is found), Core, or Features"
+)
 message("  Build cmake targets:")
 message("    - Package-Core: Core package")
 message("    - Package-AIO-Manual: AIO package (manual)")

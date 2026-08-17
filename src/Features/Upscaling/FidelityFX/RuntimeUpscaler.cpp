@@ -1638,7 +1638,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
-	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness)
+	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool a_forceHostPath)
 {
 	if (!a_color || !a_depth || !a_motionVectors || !a_reactiveMask || !a_transparencyCompositionMask || !a_output ||
 		!a_renderWidth || !a_renderHeight || !a_displayWidth || !a_displayHeight) {
@@ -1655,8 +1655,8 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	if (runtimeUpscalerQuarantined && HasRuntimeUpscalerResources())
 		ResetRuntimeUpscalerResources(false);
 
-	const bool runtimeFsr4Requested = ShouldRequestRuntimeFsr4();
-	const bool runtimeRequested = runtimeFsr4Requested || ShouldUseRuntimeUpscalerForFSR();
+	const bool runtimeFsr4Requested = !a_forceHostPath && ShouldRequestRuntimeFsr4();
+	const bool runtimeRequested = !a_forceHostPath && (runtimeFsr4Requested || ShouldUseRuntimeUpscalerForFSR());
 	const uint32_t requestedRuntimeVersion = runtimeFsr4Requested ? FFX_UPSCALER_VERSION : Fsr3Version;
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 	const uint32_t runtimeContextCount = splitPerEyeContexts ? 2u : 1u;
@@ -1773,6 +1773,11 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	dispatchParameters.motionVectorScale.y = a_motionVectorScaleY;
 	dispatchParameters.renderSize.width = a_renderWidth;
 	dispatchParameters.renderSize.height = a_renderHeight;
+	// Left zero-initialized, the SDK defaults upscaleSize to the full eye --
+	// a foveated crop dispatch needs its own output extent here, or FSR3
+	// reconstructs the crop magnified onto the full-eye canvas.
+	dispatchParameters.upscaleSize.width = a_displayWidth;
+	dispatchParameters.upscaleSize.height = a_displayHeight;
 	dispatchParameters.jitterOffset.x = -jitter.x;
 	dispatchParameters.jitterOffset.y = -jitter.y;
 	dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
@@ -1780,7 +1785,11 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	dispatchParameters.cameraNear = *globals::game::cameraNear;
 	dispatchParameters.enableSharpening = true;
 	dispatchParameters.sharpness = a_sharpness;
-	dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
+	// Narrows FOV by the crop's height fraction (a no-op ratio of 1.0 when uncropped);
+	// FSR3 has no principal-point field, so an off-center crop still gets a centered FOV.
+	const float verticalFovFull = Util::GetVerticalFOVRad();
+	const float cropHeightFraction = a_motionVectorScaleY > 0.0f ? (float)a_renderHeight / a_motionVectorScaleY : 1.0f;
+	dispatchParameters.cameraFovAngleVertical = 2.0f * std::atan(std::tan(verticalFovFull * 0.5f) * cropHeightFraction);
 	dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
 	const bool runtimeFallbackReset = runtimeRequested && runtimeFallbackResetDispatchesRemaining > 0;
 	if (runtimeFallbackReset)

@@ -15,6 +15,7 @@
 #include "Upscaling/FoveatedRender/Preprocess.h"
 #include "Upscaling/PerfMode.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/DevBenchUx.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <Windows.h>
@@ -37,6 +38,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationMode,
 	frameGenerationForceEnable,
 	frameGenerationAllowInMenus,
+	preferFSRFrameGen,
+	dlssgFramesToGenerate,
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessEnabledDLSS,
@@ -110,9 +113,6 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 	upscaling.LoadUpscalingSDKs();
 
-	if (upscaling.IsBackendInitialized())
-		upscaling.CheckBackendFeatures(pAdapter);
-
 	// FLIP_DISCARD requires BufferCount >= 2 and a flip-model-compatible (non-sRGB) format.
 	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	if (pSwapChainDesc->BufferCount < 2)
@@ -155,7 +155,46 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	if (shouldProxy) {
 		logger::info("[Frame Generation] Frame Generation enabled, using D3D12 proxy");
 
-		if (upscaling.HasFrameGenModule()) {
+		// DLSS-G availability is only trustworthy once a real D3D12 device is bound to
+		// the Streamline instance, so create and bind it before probing.
+		bool dlssgAvailable = false;
+		// NVIDIA only: on other vendors the probe would still SL-proxy the device and
+		// queue that the FSR path then runs on.
+		if (upscaling.streamlineDX12.initialized && adapterDesc.VendorId == Streamline::kNvidiaVendorId) {
+			auto& sc = upscaling.dx12SwapChain;
+			sc.CreateD3D12Device(pAdapter);
+
+			// Detection needs the device bound, not SL-upgraded -- run raw so
+			// dlssgAvailable reflects real availability, not just preference.
+			upscaling.streamlineDX12.SetD3DDevice12(sc.d3d12Device.get());
+			upscaling.streamlineDX12.CheckFeatures(pAdapter);
+			upscaling.streamlineDX12.PostDevice();
+
+			// Only suppress DLSS-G when FSR3 is actually reachable to fall back to.
+			const bool userPrefersReachableFsr = upscaling.settings.preferFSRFrameGen && upscaling.fidelityFX.featureFSR3FG;
+			dlssgAvailable = upscaling.streamlineDX12.featureDLSSG && !userPrefersReachableFsr;
+
+			// Gating on dlssgAvailable (any cause, not just preference) keeps the FSR
+			// path on a clean device -- upgrading unconditionally corrupted FSR3's
+			// FrameGeneration DLL state and crashed on first Present.
+			if (dlssgAvailable && upscaling.streamlineDX12.slUpgradeInterface) {
+				// Upgrade in place -- a local copy leaves later queue/swap-chain
+				// creation SL-invisible and silently breaks FG.
+				upscaling.streamlineDX12.slUpgradeInterface((void**)&sc.d3d12Device);
+
+				// CreateD3D12Device already populated commandQueue; release it first --
+				// put() on an already-populated com_ptr leaks the prior reference.
+				sc.commandQueue = nullptr;
+				D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+				queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+				queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+				queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+				queueDesc.NodeMask = 0;
+				DX::ThrowIfFailed(sc.d3d12Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(sc.commandQueue.put())));
+			}
+		}
+
+		if (dlssgAvailable || upscaling.HasFrameGenModule()) {
 			DX::ThrowIfFailed(D3D11CreateDevice(
 				pAdapter,
 				DriverType,
@@ -170,7 +209,16 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 			upscaling.SetProxyD3D11Device(*ppDevice);
 			upscaling.SetProxyD3D11DeviceContext(*ppImmediateContext);
-			upscaling.CreateProxySwapChain(pAdapter, *pSwapChainDesc);
+
+			if (dlssgAvailable) {
+				logger::info("[Frame Generation] DLSS-G available, creating direct swap chain");
+				upscaling.CreateProxySwapChainDirect(pAdapter, *pSwapChainDesc);
+				if (upscaling.streamlineDX12.slUpgradeInterface)
+					upscaling.streamlineDX12.slUpgradeInterface((void**)&upscaling.dx12SwapChain.swapChain);
+			} else {
+				upscaling.CreateProxySwapChain(pAdapter, *pSwapChainDesc);
+			}
+
 			upscaling.CreateProxyInterop();
 
 			*ppSwapChain = upscaling.GetProxySwapChain();
@@ -179,21 +227,18 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 			if (upscaling.IsBackendInitialized()) {
 				upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
-				// Don't wrap the swap chain with Streamline when using the D3D12
-				// proxy.  The proxy's GetDevice() returns the D3D11 device for
-				// IID_ID3D11Device, which other SKSE plugins (e.g. SkyrimPlatform)
-				// rely on.  Streamline's wrapper would bypass this override and
-				// forward to the underlying D3D12 swap chain, causing
-				// E_NOINTERFACE.  The proxy must remain the outermost layer.
+				// Never SL-wrap the swap chain here: the proxy's GetDevice() override (which
+				// SkyrimPlatform relies on for IID_ID3D11Device) must stay outermost, or QI
+				// through Streamline's wrapper fails with E_NOINTERFACE.
 				upscaling.SetBackendD3DDevice(*ppDevice);
-				// Some features (notably Reflex/PCL) may report availability only after device bind.
+				// Feature availability (notably Reflex/PCL) is only reliable after device bind.
 				upscaling.CheckBackendFeatures(pAdapter);
 				upscaling.PostBackendDevice();
 			}
 
 			return S_OK;
 		} else {
-			logger::warn("[Frame Generation] FidelityFX DLLs are not loaded, skipping proxy");
+			logger::warn("[Frame Generation] No frame generation module available, skipping proxy");
 			upscaling.fidelityFXMissing = true;
 		}
 	}
@@ -215,7 +260,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
 		upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
 		upscaling.SetBackendD3DDevice(*ppDevice);
-		// Re-check after device bind to ensure feature availability is accurate.
+		// Feature availability (notably Reflex/PCL) is only reliable after device bind.
 		upscaling.CheckBackendFeatures(pAdapter);
 		upscaling.PostBackendDevice();
 	}
@@ -298,7 +343,7 @@ void Upscaling::DrawFoveationControls(bool showTuning)
 	const bool enabled = foveatedRender.settings.enabled != 0;
 	if (!enabled)
 		ImGui::BeginDisabled();
-	if (ImGui::TreeNodeEx(T(TKEY("foveated_tuning"), "Foveated DLSS Tuning"))) {
+	if (ImGui::TreeNodeEx(T(TKEY("foveated_tuning"), "Foveated Upscaling Tuning"))) {
 		foveatedRender.DrawSettings();
 		ImGui::TreePop();
 	}
@@ -345,20 +390,29 @@ namespace
 	{
 		uint qualityMode;
 		bool foveation;
+		const char* cropPresetName;
+		FoveatedRender::DlssMode dlssMode;
+		FoveatedRender::StretchMode stretchMode;
+		FoveatedRender::PeripheryAAMode peripheryAAMode;
+		FoveatedRender::SubrectBlendMode subrectBlendMode;
 	};
 
-	// Foveated DLSS trades peripheral sharpness for speed, so only Performance opts into
-	// it, and only when DLSS (FoveatedRender::IsRuntimeSupported) is actually available.
 	// Single source of truth for Apply/MatchesPerformanceProfile below.
-	constexpr UpscalePreset GetUpscalePreset(Feature::PerfProfile profile, bool dlssAvailable)
+	constexpr UpscalePreset GetUpscalePreset(Feature::PerfProfile profile)
 	{
 		switch (profile) {
 		case Feature::PerfProfile::Performance:
-			return { (uint)Upscaling::QualityMode::kPerformance, dlssAvailable };
+			return { (uint)Upscaling::QualityMode::kPerformance, true, FoveatedRender::kPresetCenter50,
+				FoveatedRender::DlssMode::kFaster, FoveatedRender::StretchMode::kBilinear,
+				FoveatedRender::PeripheryAAMode::kNone, FoveatedRender::SubrectBlendMode::kDither };
 		case Feature::PerfProfile::Balanced:
-			return { (uint)Upscaling::QualityMode::kBalanced, false };
+			return { (uint)Upscaling::QualityMode::kBalanced, true, FoveatedRender::kPresetCenter75,
+				FoveatedRender::DlssMode::kDefault, FoveatedRender::StretchMode::kGaussianBlur,
+				FoveatedRender::PeripheryAAMode::kTemporalSmooth, FoveatedRender::SubrectBlendMode::kFeather };
 		default:
-			return { (uint)Upscaling::QualityMode::kQuality, false };
+			return { (uint)Upscaling::QualityMode::kQuality, false, FoveatedRender::kPresetFullEye,
+				FoveatedRender::DlssMode::kDefault, FoveatedRender::StretchMode::kGaussianBlur,
+				FoveatedRender::PeripheryAAMode::kTemporalSmooth, FoveatedRender::SubrectBlendMode::kFeather };
 		}
 	}
 }
@@ -384,28 +438,54 @@ const char* Upscaling::GetQualityModeName(uint qualityMode) const
 // Profiles are preset-driven, so scale overrides are cleared.
 void Upscaling::ApplyPerformanceProfile(PerfProfile profile)
 {
-	const auto preset = GetUpscalePreset(profile, streamline.featureDLSS);
+	const auto preset = GetUpscalePreset(profile);
 	settings.renderAtUpscaleRes = true;
 	settings.qualityMode = preset.qualityMode;
 	settings.vrRenderScale = 0.0f;
+	// Only fills the gap (never overrides an existing DLSS-or-FSR choice); Quality never
+	// forces one. GetUpscaleMethod() reads upscaleMethod/upscaleMethodNoDLSS depending on
+	// DLSS availability -- write whichever field it reads.
+	if (profile != PerfProfile::Quality) {
+		const auto currentMethod = GetUpscaleMethod();
+		const bool needsUpscaler = currentMethod != UpscaleMethod::kDLSS && currentMethod != UpscaleMethod::kFSR;
+		if (needsUpscaler) {
+			if (streamline.featureDLSS)
+				settings.upscaleMethod = (uint)UpscaleMethod::kDLSS;
+			else
+				settings.upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
+		}
+	}
 	// Foveation is VR-only (DrawFoveationControls/IsRuntimeSupported); leave it alone on Flat.
 	if (globals::game::isVR) {
 		foveatedRender.settings.enabled = preset.foveation ? 1 : 0;
-		if (preset.foveation)
-			settings.upscaleMethod = (uint)UpscaleMethod::kDLSS;
-		// Full Eye is 0-coverage by definition (FoveatedRender::GetFoveationProfile); shrink
-		// it so Performance isn't a silent no-op.
-		foveatedRender.subrectController.ApplyPresetByName(preset.foveation ? FoveatedRender::kPresetCenter75 : FoveatedRender::kPresetFullEye);
+		if (preset.foveation) {
+			foveatedRender.settings.dlssMode = (uint)preset.dlssMode;
+			foveatedRender.settings.stretchMode = (uint)preset.stretchMode;
+			foveatedRender.settings.peripheryAAMode = (uint)preset.peripheryAAMode;
+			foveatedRender.settings.subrectBlendMode = (uint)preset.subrectBlendMode;
+			// A user-dragged custom crop is sticky across profile switches -- never
+			// silently overwrite it with a preset region.
+			if (!foveatedRender.subrectController.HasCustomCrop())
+				foveatedRender.subrectController.ApplyPresetByName(preset.cropPresetName);
+		}
 	}
 }
 
 bool Upscaling::MatchesPerformanceProfile(PerfProfile profile) const
 {
-	const auto preset = GetUpscalePreset(profile, streamline.featureDLSS);
+	const auto preset = GetUpscalePreset(profile);
 	if (!(settings.renderAtUpscaleRes &&
 			settings.vrRenderScale == 0.0f &&
 			settings.qualityMode == preset.qualityMode)) {
 		return false;
+	}
+	// Match on "any redirecting method", not a hardcoded expected one -- ApplyPerformanceProfile
+	// never overrides an existing DLSS-or-FSR choice.
+	if (profile != PerfProfile::Quality) {
+		const auto method = GetUpscaleMethod();
+		if (method != UpscaleMethod::kDLSS && method != UpscaleMethod::kFSR) {
+			return false;
+		}
 	}
 	if (!globals::game::isVR) {
 		return true;
@@ -413,19 +493,56 @@ bool Upscaling::MatchesPerformanceProfile(PerfProfile profile) const
 	if ((foveatedRender.settings.enabled != 0) != preset.foveation) {
 		return false;
 	}
-	// ApplyPerformanceProfile also sets DLSS and a region preset in VR; require
-	// both here via the same preset-name mapping, not a second hardcoded UV table.
-	if (preset.foveation && settings.upscaleMethod != (uint)UpscaleMethod::kDLSS) {
+	if (!preset.foveation) {
+		return true;
+	}
+	if (foveatedRender.settings.dlssMode != (uint)preset.dlssMode ||
+		foveatedRender.settings.stretchMode != (uint)preset.stretchMode ||
+		foveatedRender.settings.peripheryAAMode != (uint)preset.peripheryAAMode ||
+		foveatedRender.settings.subrectBlendMode != (uint)preset.subrectBlendMode) {
 		return false;
 	}
-	const char* expectedPresetName = preset.foveation ? FoveatedRender::kPresetCenter75 : FoveatedRender::kPresetFullEye;
-	const auto expectedUV = foveatedRender.subrectController.FindPresetUV(expectedPresetName);
+	// A sticky custom crop still counts as "matching" -- ApplyPerformanceProfile
+	// deliberately leaves it alone rather than forcing the preset region.
+	if (foveatedRender.subrectController.HasCustomCrop()) {
+		return true;
+	}
+	const auto expectedUV = foveatedRender.subrectController.FindPresetUV(preset.cropPresetName);
 	if (!expectedUV) {
 		return false;
 	}
 	const auto& currentUV = foveatedRender.subrectController.GetUV();
 	return currentUV.x == expectedUV->x && currentUV.y == expectedUV->y &&
 	       currentUV.w == expectedUV->w && currentUV.h == expectedUV->h;
+}
+
+std::string Upscaling::GetProfilePreviewText(PerfProfile profile) const
+{
+	if (!globals::game::isVR)
+		return "";
+	const auto preset = GetUpscalePreset(profile);
+	if (!preset.foveation)
+		return T(TKEY("profile_preview_foveation_off"), "Foveation off (Full Eye)");
+	// ApplyPerformanceProfile leaves a custom crop alone rather than switching to the
+	// preset region -- the preview must match, or it promises a crop change that won't happen.
+	const std::string cropLabel = foveatedRender.subrectController.HasCustomCrop() ?
+	                                  T(TKEY("profile_preview_custom_crop"), "custom crop preserved") :
+	                                  preset.cropPresetName;
+	const char* dlssModeName = FoveatedRender::DlssModeName(preset.dlssMode);
+	const char* stretchModeName = FoveatedRender::StretchModeName(preset.stretchMode);
+	const char* peripheryAAName = FoveatedRender::PeripheryAAModeName(preset.peripheryAAMode);
+	const char* blendModeName = FoveatedRender::SubrectBlendModeName(preset.subrectBlendMode);
+	return std::vformat(T(TKEY("profile_preview_format"), "Foveation: {} / {} / {} / {} / {} blend"),
+		std::make_format_args(cropLabel, dlssModeName, stretchModeName, peripheryAAName, blendModeName));
+}
+
+void Upscaling::RegisterUxActions()
+{
+	FEATURE_COMMAND("applyFoveationPreset",
+		"Apply a named foveation crop preset (see openshaders.feature get shortName=Upscaling -> foveatedRender.CropPresets[].name, e.g. \"Center 75%\") -- the same code path as clicking the preset dropdown, including right-eye auto-mirror. Params: name (string).",
+		[](Feature*, const json& args) {
+			foveatedRender.subrectController.ApplyPresetByName(args.value("name", std::string{}));
+		});
 }
 
 void Upscaling::DrawSettings()
@@ -605,10 +722,56 @@ void Upscaling::DrawSettings()
 
 	if (!globals::game::isVR) {
 		if (ImGui::TreeNodeEx(T(TKEY("frame_generation"), "Frame Generation"), ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text("%s", T(TKEY("frame_generation_desc"), "Frame Generation interpolates real frames with generated ones for a smoother experience"));
-			ImGui::Text("%s", T(TKEY("frame_generation_tech"), "Uses AMD FSR Frame Generation technology"));
-			if (HasFrameGenModule())
-				ImGui::Text("%s", T(TKEY("frame_generation_available"), "AMD FSR Frame Generation is available."));
+			ImGui::Text("%s", T(TKEY("frame_generation_desc"),
+								  "Frame Generation interpolates real frames with generated ones for a smoother experience"));
+
+			bool fgEnabled = settings.frameGenerationMode != 0;
+			if (ImGui::Checkbox(T(TKEY("frame_generation"), "Frame Generation"), &fgEnabled))
+				settings.frameGenerationMode = fgEnabled ? 1 : 0;
+			Util::UI::RestartGatedAnnotate(bootSnapshot, settings, &Settings::frameGenerationMode,
+				T(TKEY("frame_generation_tooltip"),
+					"Interpolate real frames with generated ones for a smoother experience. Uses NVIDIA\n"
+					"DLSS-G or AMD FSR Frame Generation depending on the adapter and preference below.\n"
+					"Requires a D3D11-to-D3D12 proxy swapchain which can introduce compatibility issues;\n"
+					"in particular, frame generation works only in windowed mode."));
+
+			auto fgMethod = GetFrameGenMethod();
+			if (fgMethod == FrameGenMethod::kDLSSG) {
+				ImGui::TextColored(Util::Colors::GetSuccess(), "%s", T(TKEY("frame_generation_dlssg_active"), "Using NVIDIA DLSS Frame Generation (Auto)"));
+			} else if (fgMethod == FrameGenMethod::kFSR) {
+				if (streamlineDX12.featureDLSSG)
+					ImGui::TextColored(Util::Colors::GetInfo(), "%s", T(TKEY("frame_generation_fsr_active_preferred"), "Using AMD FSR Frame Generation (Preferred)"));
+				else
+					ImGui::TextColored(Util::Colors::GetInfo(), "%s", T(TKEY("frame_generation_fsr_active"), "Using AMD FSR Frame Generation (Auto)"));
+			} else {
+				if (streamlineDX12.featureDLSSG)
+					ImGui::Text("%s", T(TKEY("frame_generation_dlssg_available"),
+										  "NVIDIA DLSS Frame Generation is available."));
+				else if (fidelityFX.featureFSR3FG)
+					ImGui::Text("%s", T(TKEY("frame_generation_fsr_available"),
+										  "AMD FSR Frame Generation is available."));
+			}
+
+			if (streamlineDX12.featureDLSSG) {
+				ImGui::Checkbox(T(TKEY("prefer_fsr_frame_gen"), "Prefer AMD FSR Frame Generation"), &settings.preferFSRFrameGen);
+				Util::UI::RestartGatedAnnotate(bootSnapshot, settings, &Settings::preferFSRFrameGen,
+					T(TKEY("prefer_fsr_frame_gen_tooltip"),
+						"Uses AMD FSR3 Frame Generation instead of NVIDIA DLSS-G. This is a workaround for\n"
+						"cases where DLSS-G initializes successfully but produces no interpolated frames.\n"
+						"Restart required to apply."));
+			}
+
+			if (fgMethod == FrameGenMethod::kDLSSG) {
+				int multiplier = static_cast<int>(settings.dlssgFramesToGenerate) + 1;
+				int maxMultiplier = static_cast<int>(streamlineDX12.dlssgMaxFramesToGenerate) + 1;
+				if (ImGui::SliderInt(T(TKEY("dlssg_frame_multiplier"), "DLSS-G Frame Multiplier"), &multiplier, 2, maxMultiplier))
+					settings.dlssgFramesToGenerate = static_cast<uint>(multiplier - 1);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("dlssg_frame_multiplier_tooltip"), "How many total frames are shown per rendered frame. Higher values generate more frames."));
+			} else if (fgMethod == FrameGenMethod::kFSR) {
+				ImGui::Text("%s", T(TKEY("fsr_frame_gen_fixed_multiplier"), "AMD FSR Frame Generation: Fixed 2x"));
+			}
+
 			ImGui::Text("%s", T(TKEY("frame_generation_proxy_note"), "Requires a D3D11 to D3D12 proxy which can create compatibility issues"));
 
 			if (!isWindowed) {
@@ -622,15 +785,6 @@ void Upscaling::DrawSettings()
 			if (fidelityFXMissing) {
 				Util::Text::Warning(T(TKEY("fg_warn_fidelityfx_missing"), "Warning: FidelityFX DLLs are not loaded"));
 			}
-
-			bool fgEnabled = settings.frameGenerationMode != 0;
-			if (ImGui::Checkbox(T(TKEY("frame_generation"), "Frame Generation"), &fgEnabled))
-				settings.frameGenerationMode = fgEnabled ? 1 : 0;
-			Util::UI::RestartGatedAnnotate(bootSnapshot, settings, &Settings::frameGenerationMode,
-				T(TKEY("frame_generation_tooltip"),
-					"Interpolate real frames with generated ones for a smoother experience. Uses AMD FSR Frame\n"
-					"Generation. Requires a D3D11-to-D3D12 proxy swapchain which can introduce compatibility\n"
-					"issues; in particular, frame generation works only in windowed mode."));
 
 			if (!frameGenerationDx12PathActive)
 				ImGui::BeginDisabled();
@@ -662,20 +816,22 @@ void Upscaling::DrawSettings()
 		}
 	}
 
-	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx(T(TKEY("nvidia_reflex"), "NVIDIA Reflex"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		const bool reflexBlockedByFrameGeneration = frameGenerationDx12PathActive;
-		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
-		const bool reflexControlsAvailable = reflexAvailable && !reflexBlockedByFrameGeneration;
-		const bool markerOptimizationAvailable = reflexControlsAvailable && streamline.featurePCL;
-		if (reflexBlockedByFrameGeneration) {
-			ImGui::TextDisabled("%s", T(TKEY("reflex_blocked_by_fg"), "Reflex is unavailable while the DX12 frame-generation swapchain is active."));
+	const bool reflexSupported = streamline.reflexSupportedOnCurrentAdapter || streamlineDX12.reflexSupportedOnCurrentAdapter;
+	if (reflexSupported && ImGui::TreeNodeEx(T(TKEY("nvidia_reflex"), "NVIDIA Reflex"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		const bool usingDX12Reflex = UsesDLSSGFrameGen();
+		auto& activeReflex = usingDX12Reflex ? streamlineDX12 : streamline;
+		const bool reflexAvailable = activeReflex.initialized && activeReflex.featureReflex;
+		const bool markerOptimizationAvailable = reflexAvailable && activeReflex.featurePCL;
+
+		if (usingDX12Reflex) {
+			ImGui::Text("%s", T(TKEY("reflex_via_dx12"), "Reflex is running via DX12 (DLSS Frame Generation active)."));
 		}
 
 		if (!reflexAvailable) {
 			ImGui::TextDisabled("%s", T(TKEY("reflex_not_available"), "Reflex is not available. Ensure sl.reflex.dll is present and restart."));
 		}
 
-		if (!reflexControlsAvailable)
+		if (!reflexAvailable)
 			ImGui::BeginDisabled();
 
 		ImGui::Checkbox(T(TKEY("low_latency_mode"), "Low Latency Mode"), &settings.reflexLowLatencyMode);
@@ -733,7 +889,7 @@ void Upscaling::DrawSettings()
 		if (!settings.reflexUseFPSLimit)
 			ImGui::EndDisabled();
 
-		if (!reflexControlsAvailable)
+		if (!reflexAvailable)
 			ImGui::EndDisabled();
 
 		ImGui::TreePop();
@@ -888,7 +1044,7 @@ void Upscaling::DrawSettings()
 
 		ImGui::Separator();
 		Util::DrawDllVersionTable(T(TKEY("ffx_dll_table_title"), "AMD FidelityFX DLLs (click to open folder)"), FidelityFX::PluginDir, FidelityFX::dllVersions, "ffx_dll_versions");
-		Util::DrawDllVersionTable(T(TKEY("sl_dll_table_title"), "NVIDIA Streamline DLLs (click to open folder)"), Streamline::PluginDir, Streamline::dllVersions, "sl_dll_versions");
+		Util::DrawDllVersionTable(T(TKEY("sl_dll_table_title"), "NVIDIA Streamline DLLs (click to open folder)"), streamline.pluginDir.c_str(), Streamline::dllVersions, "sl_dll_versions");
 		ImGui::TreePop();
 	}
 }
@@ -1298,8 +1454,11 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		}
 	}
 
-	// Motion vector copy texture is only needed for DLSS
-	if (a_upscalemethod == UpscaleMethod::kDLSS) {
+	// Motion vector copy texture: DLSS's standard path always needs a per-frame snapshot
+	// to dilate; FSR's standard path reads the engine's motion vectors directly and only
+	// needs the copy when the foveated route (per-eye crop) is actually reachable.
+	if (a_upscalemethod == UpscaleMethod::kDLSS ||
+		(a_upscalemethod == UpscaleMethod::kFSR && foveatedRender.IsLoaded())) {
 		if (!motionVectorCopyTexture) {
 			auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 
@@ -1314,7 +1473,9 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			motionVectorCopyTexture->CreateSRV(srvDesc);
 			motionVectorCopyTexture->CreateUAV(uavDesc);
 		}
+	}
 
+	if (a_upscalemethod == UpscaleMethod::kDLSS) {
 		// RCAS sharpener texture - matches kMAIN format for HDR sharpening
 		if (!sharpenerTexture) {
 			main.texture->GetDesc(&texDesc);
@@ -1373,8 +1534,12 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		runtimeFsrDepthTexture = nullptr;
 	}
 
-	// Motion vector copy texture is only needed for DLSS - destroy when switching away from DLSS
-	if (a_upscalemethod != UpscaleMethod::kDLSS) {
+	// Motion vector copy texture is needed for DLSS and FSR's foveated route - mirror
+	// CreateUpscalingTextureResources' allocation condition exactly, or a DLSS->FSR
+	// switch with foveation not loaded leaks the DLSS-allocated texture (nothing
+	// destroys it, and CreateUpscalingTextureResources also skips reallocating it).
+	if (a_upscalemethod != UpscaleMethod::kDLSS &&
+		!(a_upscalemethod == UpscaleMethod::kFSR && foveatedRender.IsLoaded())) {
 		if (motionVectorCopyTexture) {
 			motionVectorCopyTexture->srv = nullptr;
 			motionVectorCopyTexture->uav = nullptr;
@@ -1383,6 +1548,10 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			delete motionVectorCopyTexture;
 			motionVectorCopyTexture = nullptr;
 		}
+	}
+
+	// RCAS sharpener texture is DLSS-only - destroy when switching away from DLSS
+	if (a_upscalemethod != UpscaleMethod::kDLSS) {
 		if (sharpenerTexture) {
 			sharpenerTexture->srv = nullptr;
 			sharpenerTexture->uav = nullptr;
@@ -2040,11 +2209,6 @@ void Upscaling::SetupResources()
 		dx12SwapChain.CreateSharedResources();
 
 	copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
-
-	// Setup HDR resources only when the HDR Display feature is loaded
-	if (globals::features::hdrDisplay.loaded) {
-		globals::features::hdrDisplay.SetupResources();
-	}
 }
 
 void Upscaling::ClearShaderCache()
@@ -2162,6 +2326,11 @@ void Upscaling::TimerSleepQPC(int64_t targetQPC)
 
 void Upscaling::FrameLimiter()
 {
+	// The SL pacer owns presentation when DLSS-G is active; host-side blocking here
+	// starves its flip queue and every interpolated frame gets dropped.
+	if (UsesDLSSGFrameGen())
+		return;
+
 	if (d3d12SwapChainActive) {
 		// Use frame latency waitable object if available for better frame pacing
 		HANDLE waitableObject = GetFrameLatencyWaitableObject();
@@ -2171,8 +2340,11 @@ void Upscaling::FrameLimiter()
 
 		if (settings.frameLimitMode) {
 			static constexpr int64_t kNanosecondsPerSecond = 1000000000LL;
-			static constexpr double kFrameGenerationRateScale = 0.5;
-			const double frameRateScale = ShouldUseFrameGenerationThisFrame() ? kFrameGenerationRateScale : 1.0;
+			// The real-frame target must scale with the active multiplier or every
+			// configuration paces identically to 2x.
+			const double frameRateScale = ShouldUseFrameGenerationThisFrame() ?
+			                                  1.0 / static_cast<double>(GetFrameGenerationMultiplier()) :
+			                                  1.0;
 			int64_t targetFrameTimeNS = int64_t(static_cast<double>(kNanosecondsPerSecond) / (refreshRate * frameRateScale));
 			int64_t targetFrameTicks = (targetFrameTimeNS * qpf.QuadPart) / kNanosecondsPerSecond;
 
@@ -2255,14 +2427,18 @@ bool Upscaling::IsFrameGenerationDx12PathActive() const
 
 bool Upscaling::IsFrameGenerationActive() const
 {
-	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && fidelityFX.isFrameGenActive;
+	if (!IsFrameGenerationDx12PathActive() || !settings.frameGenerationMode)
+		return false;
+	if (dx12SwapChain.useDLSSG)
+		// featureDLSSG is a one-time boot flag; lastDLSSGStatus is live per-session.
+		return streamlineDX12.featureDLSSG && streamlineDX12.lastDLSSGStatus == sl::DLSSGStatus::eOk;
+	return fidelityFX.isFrameGenActive;
 }
 
 bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 {
-	auto* ui = globals::game::ui;
 	auto* state = globals::state;
-	const bool menuOpen = (ui && ui->GameIsPaused()) || (state && state->IsMainOrLoadingMenuOpen(ui));
+	const bool menuOpen = state && state->IsPausedOrMenuOpen(globals::game::ui);
 	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
 }
 
@@ -2279,27 +2455,6 @@ bool Upscaling::IsUpscalingActive() const
 
 	// resolutionScale.x represents renderWidth / displayWidth.
 	return resolutionScale.x < .99f;
-}
-
-/**
- * @brief Retrieves the current frame time for frame generation.
- *
- * Returns the frame time from the D3D12 swap chain if frame generation is active; otherwise, returns 0.
- *
- * @return float The current frame time in seconds, or 0 if frame generation is inactive.
- */
-float Upscaling::GetFrameGenerationFrameTime() const
-{
-	if (!IsFrameGenerationActive())
-		return 0.0f;
-
-	// Get the current frame time from D3D12 swapchain
-	if (dx12SwapChain.swapChain) {
-		// Get frame time from the D3D12 SwapChain
-		return GetFrameTime();
-	}
-
-	return 0.0f;
 }
 
 // Unified interface methods
@@ -2321,8 +2476,15 @@ void Upscaling::LoadUpscalingSDKs()
 
 	// Initialize upscaling SDK components during plugin startup
 	// This ensures all SDKs are available before any D3D device creation
-	streamline.LoadInterposer();
-	fidelityFX.LoadFFX();  // Only for frame generation now
+	streamline.LoadInterposer();  // DX11: DLSS + Reflex + PCL
+
+	streamlineDX12.renderAPI = sl::RenderAPI::eD3D12;
+	streamlineDX12.pluginDir = L"Data\\Shaders\\Upscaling\\StreamlineDX12";
+	streamlineDX12.interposerDllName = L"sl.interposer.dll";
+	streamlineDX12.instanceTag = "DX12";
+	streamlineDX12.LoadInterposer();
+
+	fidelityFX.LoadFFX();  // AMD FSR frame generation
 }
 
 HANDLE Upscaling::GetFrameLatencyWaitableObject() const
@@ -2364,7 +2526,49 @@ void Upscaling::PostBackendDevice()
 // Module availability methods
 bool Upscaling::HasFrameGenModule() const
 {
-	return fidelityFX.featureFSR3FG;
+	// Only suppress DLSS-G when FSR3 is actually reachable to fall back to.
+	const bool userPrefersReachableFsr = settings.preferFSRFrameGen && fidelityFX.featureFSR3FG;
+	return fidelityFX.featureFSR3FG || (streamlineDX12.featureDLSSG && !userPrefersReachableFsr);
+}
+
+Upscaling::FrameGenMethod Upscaling::GetFrameGenMethod() const
+{
+	if (!d3d12SwapChainActive)
+		return FrameGenMethod::kNone;
+	if (dx12SwapChain.useDLSSG)
+		return FrameGenMethod::kDLSSG;
+	return FrameGenMethod::kFSR;
+}
+
+bool Upscaling::UsesDLSSGFrameGen() const
+{
+	return d3d12SwapChainActive && dx12SwapChain.useDLSSG;
+}
+
+uint Upscaling::GetFrameGenerationMultiplier() const
+{
+	if (!UsesDLSSGFrameGen())
+		return 2;
+	// Clamp to the hardware max like Streamline::ConfigureDLSSG does, or a stale
+	// settings value would desync FrameLimiter's pacing from the real multiplier.
+	const uint32_t clamped = std::clamp<uint32_t>(settings.dlssgFramesToGenerate, 0, streamlineDX12.dlssgMaxFramesToGenerate);
+	return clamped + 1;
+}
+
+json Upscaling::GetDiagnostics()
+{
+	json diagnostics = json::object();
+	const auto method = GetFrameGenMethod();
+	diagnostics["frameGenMethod"] = method == FrameGenMethod::kDLSSG ? "DLSSG" :
+	                                method == FrameGenMethod::kFSR   ? "FSR" :
+	                                                                   "None";
+	diagnostics["frameGenActive"] = IsFrameGenerationActive();
+	diagnostics["frameGenMultiplier"] = GetFrameGenerationMultiplier();
+	if (method == FrameGenMethod::kDLSSG) {
+		diagnostics["dlssgStatus"] = std::string(magic_enum::enum_name(streamlineDX12.lastDLSSGStatus));
+		diagnostics["dlssgFramesPresentedLastQuery"] = streamlineDX12.lastDLSSGFramesPresented;
+	}
+	return diagnostics;
 }
 
 // Proxy interface methods
@@ -2381,6 +2585,11 @@ void Upscaling::SetProxyD3D11DeviceContext(ID3D11DeviceContext* context)
 void Upscaling::CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc)
 {
 	dx12SwapChain.CreateSwapChain(adapter, swapChainDesc);
+}
+
+void Upscaling::CreateProxySwapChainDirect(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc)
+{
+	dx12SwapChain.CreateSwapChainDirect(adapter, swapChainDesc);
 }
 
 void Upscaling::CreateProxyInterop()
@@ -2556,6 +2765,29 @@ void Upscaling::Upscale()
 	{
 		CS_GPU_PASS("Upscaling::Upscale");
 
+		// Opt-in FoveatedRender route, shared by kDLSS/kFSR; falls through to the
+		// standard path on failure. Menu-skip is required: in menus the world stops
+		// producing fresh motion vectors/depth while kMAIN keeps changing (UI
+		// composites), so the subrect route would accumulate history against stale data.
+		auto tryFoveatedRoute = [&](ID3D11Resource* a_depth, const char* a_methodLabel) -> bool {
+			auto* ui = globals::game::ui;
+			auto* st = globals::state;
+			const bool menuOpen = st && st->IsPausedOrMenuOpen(ui);
+			if (!(FoveatedRenderImpl::Bridge::IsRouteActive() && globals::game::isVR && !menuOpen))
+				return false;
+			if (!FoveatedRenderImpl::Preprocess::EncodeUpscalingTextures(*this))
+				return false;
+			const bool routeHandled = FoveatedRenderImpl::Core::ExecuteFoveatedRoute(streamline,
+				main.texture, a_depth,
+				reactiveMaskTexture->resource.get(),
+				transparencyCompositionMaskTexture->resource.get(),
+				motionVectorCopyTexture->resource.get());
+			if (!routeHandled) {
+				logger::warn("[FOVEATED] route preflight failed — falling through to standard {} path", a_methodLabel);
+			}
+			return routeHandled;
+		};
+
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
 			// VR-only workaround: a worldspace/cell transition causes ~2-3ms persistent GPU-time
 			// regression in the DLSS feature that only clears on a manual mode/preset toggle.
@@ -2566,38 +2798,8 @@ void Upscaling::Upscale()
 				streamline.DestroyDLSSResources();
 			}
 
-			// PR-3 MVP-B: opt-in FoveatedRender route. When active, runs the
-			// per-eye DLSS dispatch with optional foveal subrect through
-			// FoveatedRenderImpl::Core; falls through to dev's standard path on
-			// any failure so users always see DLSS output (graceful
-			// degradation — no black frames if the enhancer preflights bad).
-			//
-			// Menu-skip: in menus the world stops producing fresh motion
-			// vectors and depth, but kMAIN keeps changing (UI plate composites).
-			// The route's subrect DLSS evaluate then accumulates temporal
-			// history against stale neighbourhood data and the subrect region
-			// renders as visible reconstruction garbage. Standard full-eye DLSS
-			// (the fall-through below) is robust to this because it reconstructs
-			// across the whole image — the foveated crop is what makes the
-			// stale-history bleed visible. Same menu-open predicate dev uses
-			// at Upscaling.cpp:1748 for ShouldUseFrameGenerationThisFrame.
-			auto* ui = globals::game::ui;
-			auto* st = globals::state;
-			const bool menuOpen = (ui && ui->GameIsPaused()) || (st && st->IsMainOrLoadingMenuOpen(ui));
-			bool routeHandled = false;
-			if (FoveatedRenderImpl::Bridge::IsRouteActive() && globals::game::isVR && !menuOpen) {
-				if (FoveatedRenderImpl::Preprocess::EncodeUpscalingTextures(*this)) {
-					routeHandled = FoveatedRenderImpl::Core::ExecuteVRDlssCore(streamline,
-						main.texture,
-						globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture,
-						reactiveMaskTexture->resource.get(),
-						transparencyCompositionMaskTexture->resource.get(),
-						motionVectorCopyTexture->resource.get());
-					if (!routeHandled) {
-						logger::warn("[FOVEATED] route preflight failed — falling through to standard DLSS path");
-					}
-				}
-			}
+			const bool routeHandled = tryFoveatedRoute(
+				globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture, "DLSS");
 			if (!routeHandled) {
 				streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorCopyTexture->resource.get());
 			}
@@ -2611,7 +2813,11 @@ void Upscaling::Upscale()
 			ID3D11Resource* fsrColorOut = (perfMode.IsHookActive() && perfMode.GetTestTexture()) ?
 			                                  static_cast<ID3D11Resource*>(perfMode.GetTestTexture()) :
 			                                  nullptr;
-			fidelityFX.Upscale(main.texture, fsrDepth, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR, fsrColorOut);
+
+			const bool routeHandled = tryFoveatedRoute(fsrDepth, "FSR");
+			if (!routeHandled) {
+				fidelityFX.Upscale(main.texture, fsrDepth, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR, fsrColorOut);
+			}
 		}
 	}
 }

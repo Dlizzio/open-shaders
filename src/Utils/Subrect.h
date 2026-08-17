@@ -26,6 +26,9 @@ namespace Util::Subrect
 		float y = 0.0f;
 		float w = 1.0f;
 		float h = 1.0f;
+
+		/** @brief True when this region covers the full frame (no crop). */
+		bool IsFullEye() const { return w >= 0.999f && h >= 0.999f; }
 	};
 
 	/** @brief A sub-region of a texture expressed in absolute pixel coordinates. */
@@ -96,6 +99,16 @@ namespace Util::Subrect
 		 */
 		void SeedDefaultPresets(std::vector<Preset> defaults);
 
+		/**
+		 * @brief Add any seeded default not yet in the live preset list to it, so a
+		 * preset name added to SeedDefaultPresets after a user already has a persisted
+		 * (non-empty) preset list still shows up in the DrawEditor dropdown -- not just
+		 * on demand via ApplyPresetByName. Skips names in `seenDefaultNames` (a default
+		 * the user explicitly deleted stays deleted). Does not change the current
+		 * selection. Call after both SeedDefaultPresets and LoadSettings.
+		 */
+		void MaterializeNewDefaults();
+
 		// Toggles right-eye UV tracking. Off by default (mono).
 		// When enabled, edits to the primary UV auto-mirror to the right-eye
 		// UV (around x=0.5), and SaveSettings emits the extra right-eye keys.
@@ -143,6 +156,14 @@ namespace Util::Subrect
 		/** @brief Get the current crop region in UV coordinates. */
 		const UVRegion& GetUV() const { return currentUV; }
 		const UVRegion& GetRightEyeUV() const { return stereoEnabled ? currentRightUV : currentUV; }
+
+		/** @brief True while the user is actively drag-resizing the crop region. */
+		bool IsDragging() const { return isDraggingCrop; }
+
+		/** @brief True when the current crop isn't one of the named presets (a user-dragged
+		 *  region) -- callers that apply presets programmatically (e.g. a performance-tier
+		 *  profile) use this to avoid silently overwriting it. */
+		bool HasCustomCrop() const { return selectedPresetIndex < 0 || selectedPresetIndex >= static_cast<int>(presets.size()); }
 
 		/**
 		 * @brief Apply a seeded/named preset by exact name match (e.g. for a caller driving

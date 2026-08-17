@@ -601,6 +601,7 @@ void State::SaveToJson(nlohmann::json& settings)
 	json advanced;
 	advanced["Dump Shaders"] = shaderCache->IsDump();
 	advanced["Log Level"] = logLevel;
+	advanced["Developer Mode"] = enableDeveloperMode;
 	advanced["Shader Defines"] = shaderDefinesString;
 	advanced["Compiler Threads"] = shaderCache->compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
@@ -668,6 +669,8 @@ void State::LoadFromJson(nlohmann::json& settings)
 			if (newLogLevel != logLevel)
 				SetLogLevel(newLogLevel);
 		}
+		if (advanced.contains("Developer Mode") && advanced["Developer Mode"].is_boolean())
+			enableDeveloperMode = advanced["Developer Mode"];
 		if (advanced.contains("Shader Defines") && advanced["Shader Defines"].is_string())
 			SetDefines(advanced["Shader Defines"]);
 		if (advanced.contains("Compiler Threads") && advanced["Compiler Threads"].is_number_integer())
@@ -861,7 +864,7 @@ bool State::IsShaderEnabled(const RE::BSShader& a_shader)
 
 bool State::IsDeveloperMode()
 {
-	return GetLogLevel() <= spdlog::level::debug;
+	return enableDeveloperMode || GetLogLevel() <= spdlog::level::debug;
 }
 
 void State::ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties& a_properties)
@@ -1436,11 +1439,4 @@ void State::LoadTheme()
 bool State::HasDirectionalShadows() const
 {
 	return !Util::IsInterior() || globals::features::interiorSun.IsActiveInteriorSun();
-}
-
-void State::SaveTheme()
-{
-	// SelectedThemePreset is now persisted via SettingsUser.json (State::Save)
-	// Keep this function as a no-op for backward compatibility and to avoid writing separate theme files.
-	logger::info("SaveTheme() no longer writes SettingsTheme.json; SelectedThemePreset is saved with SettingsUser.json");
 }

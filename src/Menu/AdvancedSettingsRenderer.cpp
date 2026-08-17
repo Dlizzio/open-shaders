@@ -653,7 +653,7 @@ void AdvancedSettingsRenderer::RenderLoggingControls()
 		globals::state->SetLogLevel(static_cast<spdlog::level::level_enum>(item_current));
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T("menu.advanced.log_level_tooltip", "Log level. Trace is most verbose. Default is info."));
+		ImGui::Text("%s", T("menu.advanced.log_level_tooltip", "Log level. Trace is most verbose. Default is info. Debug and Trace also enable Developer Mode."));
 	}
 
 	ImGui::Columns(2, nullptr, false);
@@ -1009,6 +1009,24 @@ void AdvancedSettingsRenderer::RenderDisableAtBootSection(const std::function<vo
 
 void AdvancedSettingsRenderer::RenderTestingSection()
 {
+	auto state = globals::state;
+
+	if (ImGui::Checkbox(T("menu.advanced.enable_developer_mode", "Enable Developer Mode"), &state->enableDeveloperMode)) {
+		logger::info("Developer Mode {}", state->enableDeveloperMode ? "enabled" : "disabled");
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("menu.advanced.enable_developer_mode_tooltip",
+							  "Unlocks developer-only options and tooling. "
+							  "Also enabled automatically when Log Level is debug or trace. "
+							  "Use at your own risk."));
+	}
+	if (!state->enableDeveloperMode && state->GetLogLevel() <= spdlog::level::debug) {
+		ImGui::TextDisabled("%s", T("menu.advanced.developer_mode_via_log_level",
+									  "Currently active because Log Level is debug/trace."));
+	}
+
+	ImGui::Spacing();
+
 	// A/B Testing settings
 	auto* abTestingManager = ABTestingManager::GetSingleton();
 	abTestingManager->DrawSettingsUI();

@@ -142,6 +142,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+				globals::state->startupMenuInitializationComplete.store(true, std::memory_order_release);
 			}
 
 			break;
@@ -173,6 +174,10 @@ bool Load()
 	if (privateProfileRedirectorVersion.has_value() && privateProfileRedirectorVersion.value().compare(REL::Version(0, 6, 2)) == std::strong_ordering::less) {
 		stl::report_and_fail("Old version of PrivateProfileRedirector detected, 0.6.2+ required if using it."sv);
 	}
+
+	// Frame generation is flatrim-only; the DRS reset must precede any D3D device.
+	if (!REL::Module::IsVR())
+		Streamline::EnsureDriverProfileAllowsDLSSG();
 
 	auto messaging = SKSE::GetMessagingInterface();
 	messaging->RegisterListener("SKSE", MessageHandler);
@@ -206,7 +211,8 @@ bool Load()
 		L"Data/SKSE/Plugins/TAASharpen.dll",
 		L"Data/SKSE/Plugins/NVIDIA_Reflex.dll",
 		L"Data/SKSE/Plugins/MARA.dll",
-		L"Data/SKSE/Plugins/NativeWaterLightStabilizer.dll"
+		L"Data/SKSE/Plugins/NativeWaterLightStabilizer.dll",
+		L"Data/SKSE/Plugins/DynamicWetness.dll"
 	};
 
 	for (const auto dll : incompatibleDLLs) {

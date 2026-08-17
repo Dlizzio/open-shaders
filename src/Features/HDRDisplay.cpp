@@ -824,7 +824,10 @@ void HDRDisplay::RestoreFramebuffer()
 
 bool HDRDisplay::IsFGCompositingThisFrame() const
 {
-	return globals::features::upscaling.ShouldUseFrameGenerationThisFrame();
+	auto& upscaling = globals::features::upscaling;
+	// DLSS-G's direct swap chain has no post-interpolation UI recomposite (FSR's wrapper
+	// does), so its real frames must keep the HUD baked in.
+	return upscaling.ShouldUseFrameGenerationThisFrame() && !upscaling.UsesDLSSGFrameGen();
 }
 
 HDRDisplay::D3D12UIBufferMode HDRDisplay::GetD3D12UIBufferMode()
@@ -1597,10 +1600,9 @@ float4 HDRDisplay::GetSharedDataHDR() const
 		return { 0.0f, 0.0f, 0.0f, 0.0f };
 
 	auto* state = globals::state;
-	const bool isMainOrLoading = state->isMainMenuOpen || state->isLoadingMenuOpen;
 	auto* ui = globals::game::ui;
-	const bool inMenuOrPause =
-		ui && (ui->GameIsPaused() || state->isMainMenuOpen || state->isLoadingMenuOpen || state->isMapMenuOpen);
+	const bool isMainOrLoading = state->IsMainOrLoadingMenuOpen(ui);
+	const bool inMenuOrPause = state->IsPausedOrMenuOpen(ui);
 
 	float menuSceneEncoding = kHdrMenuSceneGameplay;
 	if (isMainOrLoading) {
@@ -1619,8 +1621,8 @@ float4 HDRDisplay::GetSharedDataHDR() const
 
 HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 {
-	bool isMainOrLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 	auto* ui = globals::game::ui;
+	bool isMainOrLoadingMenu = globals::state->IsMainOrLoadingMenuOpen(ui);
 	bool skipUIComposite = IsFGCompositingThisFrame();
 
 	// Linear Lighting keeps the pipeline linear throughout.
