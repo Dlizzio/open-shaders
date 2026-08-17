@@ -7,11 +7,23 @@ namespace
 {
 	constexpr float GOLDEN_RATIO_FRACTION = 1.0f / std::numbers::phi_v<float>;
 	constexpr size_t APERTURE_DIRECTION_BINS = 256;
+	constexpr size_t MAX_BOKEH_SHAPE_DIMENSION = 1024;
 
 	float Fract(float value)
 	{
 		return value - std::floor(value);
 	}
+}
+
+void BokehResources::ClearShapeSlot(int index)
+{
+	if (index < 0 || index >= MAX_SHAPES)
+		return;
+
+	texBokehShapes[index].reset();
+	shapeSampleBuffers[index].reset();
+	shapeSampleRadiusScales[index] = 1.0f;
+	shapeSampleMaxRadii[index] = 1.0f;
 }
 
 void BokehResources::Setup()
@@ -55,6 +67,8 @@ bool BokehResources::LoadTextureFromFile(const std::filesystem::path& path, int 
 	if (index < 0 || index >= MAX_SHAPES)
 		return false;
 
+	ClearShapeSlot(index);
+
 	auto device = globals::d3d::device;
 
 	DirectX::ScratchImage image;
@@ -75,6 +89,18 @@ bool BokehResources::LoadTextureFromFile(const std::filesystem::path& path, int 
 	const auto& metadata = image.GetMetadata();
 	if (metadata.dimension != DirectX::TEX_DIMENSION_TEXTURE2D || metadata.arraySize != 1) {
 		logger::warn("BokehResources: Bokeh shape must be a single 2D texture: {}", path.string());
+		return false;
+	}
+	if (metadata.width > MAX_BOKEH_SHAPE_DIMENSION || metadata.height > MAX_BOKEH_SHAPE_DIMENSION) {
+		logger::warn(
+			"BokehResources: Bokeh shape exceeds the maximum {}x{} dimensions: {}",
+			MAX_BOKEH_SHAPE_DIMENSION,
+			MAX_BOKEH_SHAPE_DIMENSION,
+			path.string());
+		return false;
+	}
+	if (DirectX::IsPlanar(metadata.format)) {
+		logger::warn("BokehResources: Planar bokeh shape formats are not supported: {}", path.string());
 		return false;
 	}
 
@@ -106,13 +132,19 @@ bool BokehResources::LoadTextureFromFile(const std::filesystem::path& path, int 
 		texBokehShapes[index]->CreateSRV(srvDesc);
 	} catch (std::runtime_error& e) {
 		logger::warn("BokehResources: Error creating texture view for bokeh shape {}: {}", path.string(), e.what());
-		texBokehShapes[index].reset();
+		ClearShapeSlot(index);
 		return false;
 	}
 
-	if (!BuildShapeSamples(image, index)) {
-		logger::warn("BokehResources: Failed to generate gather samples for bokeh shape {}", path.string());
-		texBokehShapes[index].reset();
+	try {
+		if (!BuildShapeSamples(image, index)) {
+			logger::warn("BokehResources: Failed to generate gather samples for bokeh shape {}", path.string());
+			ClearShapeSlot(index);
+			return false;
+		}
+	} catch (std::runtime_error& e) {
+		logger::warn("BokehResources: Error generating gather samples for bokeh shape {}: {}", path.string(), e.what());
+		ClearShapeSlot(index);
 		return false;
 	}
 	return true;

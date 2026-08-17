@@ -68,6 +68,7 @@ struct BokehResources
 	const char* GetShapeName(int index) const;
 
 private:
+	void ClearShapeSlot(int index);
 	bool LoadTextureFromFile(const std::filesystem::path& path, int index);
 	bool BuildShapeSamples(const DirectX::ScratchImage& image, int index);
 };
