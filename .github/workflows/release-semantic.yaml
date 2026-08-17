@@ -32,19 +32,52 @@ concurrency:
     cancel-in-progress: false
 
 jobs:
+    # origin/main's tip is always a sound "last validated state" baseline: main only
+    # ever advances via this same validated-release-promotion path.
+    check-changes:
+        name: Check for shader/build changes since main
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        outputs:
+            hlsl-should-build: ${{ steps.check.outputs.hlsl-should-build }}
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+
+            - name: Resolve baseline and target SHAs
+              id: resolve
+              env:
+                  TARGET_REF: ${{ inputs.ff_target || github.sha }}
+              run: |
+                  set -euo pipefail
+                  git fetch origin main "${TARGET_REF}"
+                  echo "main_sha=$(git rev-parse origin/main)" >> "$GITHUB_OUTPUT"
+                  echo "target_sha=$(git rev-parse "${TARGET_REF}")" >> "$GITHUB_OUTPUT"
+
+            - name: Check for build/shader changes
+              id: check
+              uses: ./.github/actions/check-build-changes
+              with:
+                  base-sha: ${{ steps.resolve.outputs.main_sha }}
+                  head-sha: ${{ steps.resolve.outputs.target_sha }}
+
     # Gate the version cut on the release-parity shader validation the cache build
     # enforces (/O3 + default-install profile). Shader-only (no C++ build), so it adds
     # zero PR-phase cost and runs once per release cut. Catches /O3-only warnings (e.g.
     # X4000 uninitialized return) before semantic-release tags a version whose caches
     # would then fail to build. Validates the about-to-be-released ref: ff_target in
     # promotion mode, else the dispatched SHA.
+    # check-changes skip is binary, never partial: it either runs this full pass or none of it.
     validate-shaders:
+        needs: check-changes
         uses: ./.github/workflows/_shared-build.yaml
         with:
             ref: ${{ inputs.ff_target || github.sha }}
             repository: ${{ github.repository }}
             run-cpp: false
-            run-shader-validation: true
+            run-shader-validation: ${{ needs.check-changes.outputs.hlsl-should-build != 'false' }}
             run-shader-tests: false
             run-cpp-tests: false
             release-parity-validation: true
