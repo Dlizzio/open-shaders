@@ -1,4 +1,4 @@
-// Physical Glare — animated tear-film phase applied to a cached aperture
+// Physical Glare - animated tear-film phase applied to a cached aperture
 
 Texture2D<float2> TexApertureBase : register(t0);
 RWTexture2D<float2> RWTexAperture : register(u0);

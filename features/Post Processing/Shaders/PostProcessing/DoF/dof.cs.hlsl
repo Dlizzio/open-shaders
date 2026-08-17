@@ -114,6 +114,7 @@
 #include "Common/Game.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/VR.hlsli"
 
 #if defined(GATHER_RING_COUNT)
 #	include "PostProcessing/DoF/dof_gather_kernel.hlsli"
@@ -289,7 +290,8 @@ float3 AccentuateWhites(float3 fragment)
 // In: pixelVector which is the current pixel converted into a vector where (0,0) is the center of the screen.
 float2 ApplyPetzvalMorph(float2 pointOffset, float2 texcoord)
 {
-	float2 centeredUV = texcoord;
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(texcoord);
+	float2 centeredUV = Stereo::ConvertFromStereoUV(texcoord, eyeIndex);
 	float2 fromCenter = centeredUV - 0.5f;
 	float distanceFromCenter = length(fromCenter);
 	float radius = saturate(distanceFromCenter * 2.0f);
@@ -314,15 +316,60 @@ float CalculateSampleWeight(float sampleRadiusInPixels, float ringDistanceInPixe
 	return saturate(sampleRadiusInPixels - (ringDistanceInPixels * NearFarDistanceCompensation) + 0.5);
 }
 
-// Clamps a texel coordinate to the buffer.
-int2 ClampToBuffer(int2 coord)
+uint GetEyeIndexFromPixel(uint2 coord, uint2 dimensions)
 {
-	return clamp(coord, int2(0, 0), int2(SharedData::BufferDim.xy) - 1);
+	return Stereo::GetEyeIndexFromTexCoord((coord + 0.5f) / float2(dimensions));
 }
 
-int2 ClampToHalfRes(int2 coord)
+float2 ClampSampleToEye(float2 uv, uint eyeIndex)
 {
-	return clamp(coord, int2(0, 0), int2(HalfResDim) - 1);
+#if defined(VR)
+	return saturate(Stereo::ClampToEyeUV(uv, eyeIndex));
+#else
+	return uv;
+#endif
+}
+
+// Clamps a texel coordinate to the source buffer without crossing the VR eye seam.
+int2 ClampToBuffer(int2 coord, uint eyeIndex)
+{
+	return Stereo::ClampToEyeBounds(coord, eyeIndex, SharedData::BufferDim.xy);
+}
+
+int2 ClampToHalfRes(int2 coord, uint eyeIndex)
+{
+	return Stereo::ClampToEyeBounds(coord, eyeIndex, HalfResDim);
+}
+
+uint2 GetReducedOutputDim(uint2 sourceDim)
+{
+	uint2 outputDim = max(uint2(1, 1), (sourceDim + 1u) / 2u);
+#if defined(VR)
+	outputDim.x = 2u * max(1u, ((sourceDim.x / 2u) + 1u) / 2u);
+#endif
+	return outputDim;
+}
+
+int2 GetReductionBase(uint2 outputCoord, uint eyeIndex, uint2 sourceDim, uint2 outputDim)
+{
+	int2 base = int2(outputCoord) * 2;
+#if defined(VR)
+	const uint sourceEyeWidth = sourceDim.x / 2u;
+	const uint outputEyeWidth = outputDim.x / 2u;
+	base.x = int((outputCoord.x - eyeIndex * outputEyeWidth) * 2u + eyeIndex * sourceEyeWidth);
+#endif
+	return base;
+}
+
+int2 GetCoCTileBase(uint2 tileCoord, uint eyeIndex)
+{
+	int2 base = int2(tileCoord) * COC_TILE_SIZE_FULLRES;
+#if defined(VR)
+	const uint tileEyeWidth = CoCTileDim.x / 2u;
+	const uint fullEyeWidth = (uint)SharedData::BufferDim.x / 2u;
+	base.x = int((tileCoord.x - eyeIndex * tileEyeWidth) * COC_TILE_SIZE_FULLRES + eyeIndex * fullEyeWidth);
+#endif
+	return base;
 }
 
 // Fetches the (min, max) signed CoC of the tile a gather group lives in. `Gid` is SV_GroupID, which
@@ -350,21 +397,24 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 
 	fragment *= weight[0];
 	float2 factorToUse = offsetWeight * PostBlurSmoothing;
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(texcoord);
 
 	for (int i = 1; i < 6; ++i) {
 		float2 coordOffset = factorToUse * offset[i];
 		float weightSample = weight[i];
-		float sampleCoC = TexCoCInput.SampleLevel(LinearSampler, texcoord + coordOffset, 0).r;
+		float2 uvPos = ClampSampleToEye(texcoord + coordOffset, eyeIndex);
+		float2 uvNeg = ClampSampleToEye(texcoord - coordOffset, eyeIndex);
+		float sampleCoC = TexCoCInput.SampleLevel(LinearSampler, uvPos, 0).r;
 		float maskFactor = abs(sampleCoC) < onePixelInCoC;
 
 		fragment += (originalFragment * maskFactor * weightSample) +
-		            (source.SampleLevel(LinearSampler, texcoord + coordOffset, 0) * (1 - maskFactor) * weightSample);
+		            (source.SampleLevel(LinearSampler, uvPos, 0) * (1 - maskFactor) * weightSample);
 
-		sampleCoC = TexCoCInput.SampleLevel(LinearSampler, texcoord - coordOffset, 0).r;
+		sampleCoC = TexCoCInput.SampleLevel(LinearSampler, uvNeg, 0).r;
 		maskFactor = abs(sampleCoC) < onePixelInCoC;
 
 		fragment += (originalFragment * maskFactor * weightSample) +
-		            (source.SampleLevel(LinearSampler, texcoord - coordOffset, 0) * (1 - maskFactor) * weightSample);
+		            (source.SampleLevel(LinearSampler, uvNeg, 0) * (1 - maskFactor) * weightSample);
 	}
 	return fragment;
 }
@@ -396,13 +446,15 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 	if (any(DTid >= CoCTileDim))
 		return;
 
-	int2 base = int2(DTid) * COC_TILE_SIZE_FULLRES;
+	uint eyeIndex = GetEyeIndexFromPixel(DTid, CoCTileDim);
+	int2 base = GetCoCTileBase(DTid, eyeIndex);
 	float2 minMax = float2(1e4f, -1e4f);
 	[loop] for (int y = 0; y < COC_TILE_SIZE_FULLRES; y += 2)
 	{
 		[loop] for (int x = 0; x < COC_TILE_SIZE_FULLRES; x += 2)
 		{
 			float2 uv = (float2(base + int2(x, y)) + 1.0f) * SharedData::BufferDim.zw;
+			uv = ClampSampleToEye(uv, eyeIndex);
 			float4 g = TexCoCInput.GatherRed(LinearSampler, uv);
 			minMax.x = min(minMax.x, min(min(g.x, g.y), min(g.z, g.w)));
 			minMax.y = max(minMax.y, max(max(g.x, g.y), max(g.z, g.w)));
@@ -422,12 +474,13 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 		return;
 
 	int radius = (int)TileDilateRadius;
-	int maxX = (int)CoCTileDim.x - 1;
+	uint eyeIndex = GetEyeIndexFromPixel(DTid, CoCTileDim);
 	float2 minMax = float2(1e4f, -1e4f);
 	float nearReachPx = 0.0f;
 	[loop] for (int i = -radius; i <= radius; ++i)
 	{
-		float4 s = TexCoCTile[uint2(clamp((int)DTid.x + i, 0, maxX), DTid.y)];
+		int2 sampleCoord = Stereo::ClampToEyeBounds(int2(DTid) + int2(i, 0), eyeIndex, CoCTileDim);
+		float4 s = TexCoCTile[sampleCoord];
 		minMax.x = min(minMax.x, s.x);
 		minMax.y = max(minMax.y, s.y);
 		nearReachPx = max(nearReachPx, s.z - abs((float)i) * COC_TILE_SIZE_FULLRES * 0.70710678f);
@@ -498,12 +551,13 @@ float3 ReduceColorWithCoC(float3 tapColor[4], float tapCoC[4], float outCoC, flo
 	if (any(DTid >= HalfResDim))
 		return;
 
-	int2 base = int2(DTid) * 2;
+	uint eyeIndex = GetEyeIndexFromPixel(DTid, HalfResDim);
+	int2 base = GetReductionBase(DTid, eyeIndex, uint2(SharedData::BufferDim.xy), HalfResDim);
 	float3 tapColor[4];
 	float tapCoC[4];
 	[unroll] for (int i = 0; i < 4; ++i)
 	{
-		int2 p = ClampToBuffer(base + int2(i & 1, i >> 1));
+		int2 p = ClampToBuffer(base + int2(i & 1, i >> 1), eyeIndex);
 		tapColor[i] = TexColor[p].rgb;
 		tapCoC[i] = TexCoCInput[p].r;
 	}
@@ -520,12 +574,13 @@ float3 ReduceColorWithCoC(float3 tapColor[4], float tapCoC[4], float outCoC, flo
 	if (any(DTid >= HalfResDim))
 		return;
 
-	int2 base = int2(DTid) * 2;
+	uint eyeIndex = GetEyeIndexFromPixel(DTid, HalfResDim);
+	int2 base = GetReductionBase(DTid, eyeIndex, uint2(SharedData::BufferDim.xy), HalfResDim);
 	float3 tapColor[4];
 	float tapCoC[4];
 	[unroll] for (int i = 0; i < 4; ++i)
 	{
-		int2 p = ClampToBuffer(base + int2(i & 1, i >> 1));
+		int2 p = ClampToBuffer(base + int2(i & 1, i >> 1), eyeIndex);
 		tapColor[i] = TexColor[p].rgb;
 		tapCoC[i] = TexCoCInput[p].r;
 	}
@@ -550,17 +605,18 @@ float3 ReduceColorWithCoC(float3 tapColor[4], float tapCoC[4], float outCoC, flo
 	uint sourceWidth;
 	uint sourceHeight;
 	TexColor.GetDimensions(sourceWidth, sourceHeight);
-	uint2 outputDim = max(uint2(1, 1), (uint2(sourceWidth, sourceHeight) + 1u) / 2u);
+	uint2 sourceDim = uint2(sourceWidth, sourceHeight);
+	uint2 outputDim = GetReducedOutputDim(sourceDim);
 	if (any(DTid >= outputDim))
 		return;
 
-	int2 base = int2(DTid) * 2;
-	int2 sourceMax = int2(sourceWidth, sourceHeight) - 1;
+	uint eyeIndex = GetEyeIndexFromPixel(DTid, outputDim);
+	int2 base = GetReductionBase(DTid, eyeIndex, sourceDim, outputDim);
 	float3 tapColor[4];
 	float tapCoC[4];
 	[unroll] for (int i = 0; i < 4; ++i)
 	{
-		int2 p = clamp(base + int2(i & 1, i >> 1), int2(0, 0), sourceMax);
+		int2 p = Stereo::ClampToEyeBounds(base + int2(i & 1, i >> 1), eyeIndex, float2(sourceWidth, sourceHeight));
 		tapColor[i] = TexColor[p].rgb;
 		tapCoC[i] = TexReduceCoCInput[p].r;
 	}
@@ -581,15 +637,16 @@ float3 ReduceColorWithCoC(float3 tapColor[4], float tapCoC[4], float outCoC, flo
 	uint sourceWidth;
 	uint sourceHeight;
 	TexColor.GetDimensions(sourceWidth, sourceHeight);
-	uint2 outputDim = max(uint2(1, 1), (uint2(sourceWidth, sourceHeight) + 1u) / 2u);
+	uint2 sourceDim = uint2(sourceWidth, sourceHeight);
+	uint2 outputDim = GetReducedOutputDim(sourceDim);
 	if (any(DTid >= outputDim))
 		return;
 
-	int2 base = int2(DTid) * 2;
-	int2 sourceMax = int2(sourceWidth, sourceHeight) - 1;
+	uint eyeIndex = GetEyeIndexFromPixel(DTid, outputDim);
+	int2 base = GetReductionBase(DTid, eyeIndex, sourceDim, outputDim);
 	float3 color = 0.0f;
 	[unroll] for (int i = 0; i < 4; ++i)
-		color += TexColor[clamp(base + int2(i & 1, i >> 1), int2(0, 0), sourceMax)].rgb;
+		color += TexColor[Stereo::ClampToEyeBounds(base + int2(i & 1, i >> 1), eyeIndex, float2(sourceWidth, sourceHeight))].rgb;
 	RWTexOut[DTid] = float4(color * 0.25f, 1.0f);
 }
 
@@ -735,6 +792,7 @@ void AccumulateFarGatherSample(
 	uint sampleIndex,
 	float2 rotation,
 	float2 texcoord,
+	uint eyeIndex,
 	float kernelRadiusInPixels,
 	float mip,
 	float colorRadius,
@@ -745,7 +803,7 @@ void AccumulateFarGatherSample(
 	AdaptiveBokehSample bokeh = GetAdaptiveBokehSample(sampleIndex, rotation);
 	float ringDistanceInPixels = bokeh.normalizedDistance * kernelRadiusInPixels;
 	float2 unitOffset = ApplyPetzvalMorph(bokeh.offset, texcoord);
-	float2 tapCoords = texcoord + unitOffset * kernelRadiusInPixels * SharedData::BufferDim.zw;
+	float2 tapCoords = ClampSampleToEye(texcoord + unitOffset * kernelRadiusInPixels * SharedData::BufferDim.zw, eyeIndex);
 	float sampleRadius = SampleGatherCoC(tapCoords, mip);
 	float ringWeight = lerp(bokeh.radialWeight, 1.0f, centerWeight);
 	float weight = (sampleRadius >= 0.0f) * ringWeight *
@@ -762,6 +820,7 @@ void AccumulateNearGatherSample(
 	uint sampleIndex,
 	float2 rotation,
 	float2 texcoord,
+	uint eyeIndex,
 	float kernelRadiusInPixels,
 	float mip,
 	float centerWeight,
@@ -770,7 +829,7 @@ void AccumulateNearGatherSample(
 {
 	AdaptiveBokehSample bokeh = GetAdaptiveBokehSample(sampleIndex, rotation);
 	float2 unitOffset = ApplyPetzvalMorph(bokeh.offset, texcoord);
-	float2 tapCoords = texcoord + unitOffset * kernelRadiusInPixels * SharedData::BufferDim.zw;
+	float2 tapCoords = ClampSampleToEye(texcoord + unitOffset * kernelRadiusInPixels * SharedData::BufferDim.zw, eyeIndex);
 	float weight = lerp(bokeh.radialWeight, 1.0f, smoothstep(0.0f, 1.0f, centerWeight)) * bokeh.coverage;
 	colorSum += SampleGatherColor(tapCoords, mip) * bokeh.tint * weight;
 	weightSum += weight;
@@ -794,6 +853,7 @@ void AccumulateNearGatherSample(
 	}
 
 	float2 texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(texcoord);
 	float kernelRadiusInPixels = colorRadius * FarPlaneMaxBlur * cocToPixels;
 	float mip = GetGatherMip(kernelRadiusInPixels);
 	float centerWeight = saturate(1.0f - BokehBusyFactor);
@@ -809,8 +869,8 @@ void AccumulateNearGatherSample(
 	[unroll] for (int i = 0; i < GATHER_SAMPLE_PAIR_COUNT; ++i)
 	{
 		uint2 pair = GatherSamplePairs[i];
-		AccumulateFarGatherSample(pair.x, rotation, texcoord, kernelRadiusInPixels, mip, colorRadius, centerWeight, colorSum, weightSum);
-		AccumulateFarGatherSample(pair.y, rotation, texcoord, kernelRadiusInPixels, mip, colorRadius, centerWeight, colorSum, weightSum);
+		AccumulateFarGatherSample(pair.x, rotation, texcoord, eyeIndex, kernelRadiusInPixels, mip, colorRadius, centerWeight, colorSum, weightSum);
+		AccumulateFarGatherSample(pair.y, rotation, texcoord, eyeIndex, kernelRadiusInPixels, mip, colorRadius, centerWeight, colorSum, weightSum);
 	}
 
 	color.rgb = colorSum / max(weightSum, 1e-4f);
@@ -832,7 +892,8 @@ void AccumulateNearGatherSample(
 
 	float pixelCoC = TexCoCHalf[DTid];
 	float2 texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	float kernelRadiusInPixels = SampleNearReachPixels(texcoord, pixelCoC);
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(texcoord);
+	float kernelRadiusInPixels = SampleNearReachPixels(ClampSampleToEye(texcoord, eyeIndex), pixelCoC);
 	if (kernelRadiusInPixels <= 1.0f) {
 		color.a = 0.0f;
 		RWTexOut[DTid] = color;
@@ -853,8 +914,8 @@ void AccumulateNearGatherSample(
 	[unroll] for (int i = 0; i < GATHER_SAMPLE_PAIR_COUNT; ++i)
 	{
 		uint2 pair = GatherSamplePairs[i];
-		AccumulateNearGatherSample(pair.x, rotation, texcoord, kernelRadiusInPixels, mip, centerWeight, colorSum, weightSum);
-		AccumulateNearGatherSample(pair.y, rotation, texcoord, kernelRadiusInPixels, mip, centerWeight, colorSum, weightSum);
+		AccumulateNearGatherSample(pair.x, rotation, texcoord, eyeIndex, kernelRadiusInPixels, mip, centerWeight, colorSum, weightSum);
+		AccumulateNearGatherSample(pair.y, rotation, texcoord, eyeIndex, kernelRadiusInPixels, mip, centerWeight, colorSum, weightSum);
 	}
 
 	float blurredCoCInPixels = kernelRadiusInPixels / max(NearPlaneMaxBlur, 1e-4f);
@@ -884,6 +945,7 @@ void AccumulateNearGatherSample(
 		numberOfRings = max(numberOfRings - 1.0f, 2.0f);
 
 	float2 texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(texcoord);
 
 	const float pointsFirstRing = 7;  // each ring has a multiple of this value of sample points.
 	float colorRadius = TexCoCHalf[DTid].r;
@@ -919,7 +981,7 @@ void AccumulateNearGatherSample(
 			if (useShape)
 				shapeTap = GetShapeTap(angle, shapeRingDistance);
 			pointOffset = ApplyPetzvalMorph(pointOffset, texcoord);
-			float2 tapCoords = float2(texcoord + (pointOffset * currentRingRadiusCoords));
+			float2 tapCoords = ClampSampleToEye(texcoord + (pointOffset * currentRingRadiusCoords), eyeIndex);
 			float sampleRadius = TexCoCHalf.SampleLevel(LinearSampler, tapCoords, 0).r;
 			float4 tap = 0;
 			float weight = (sampleRadius >= 0) * ringWeight * CalculateSampleWeight(sampleRadius * FarPlaneMaxBlur * cocToPixels, ringDistanceInPixels) * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
@@ -952,10 +1014,11 @@ void AccumulateNearGatherSample(
 	}
 
 	float2 texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
+	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(texcoord);
 
 	float pixelCoC = TexCoCHalf[DTid];
 	float kernelRadiusInPixels = max(
-		TexCoCTileDilated.SampleLevel(LinearSampler, texcoord, 0).z / max(BokehMaxRadius, 1.0f),
+		TexCoCTileDilated.SampleLevel(LinearSampler, ClampSampleToEye(texcoord, eyeIndex), 0).z / max(BokehMaxRadius, 1.0f),
 		max(-pixelCoC, 0.0f) * NearPlaneMaxBlur * cocToPixels);
 
 	if (kernelRadiusInPixels <= 1.0f) {
@@ -987,7 +1050,7 @@ void AccumulateNearGatherSample(
 			if (useShape)
 				shapeTap = GetShapeTap(angle, shapeRingDistance);
 			pointOffset = ApplyPetzvalMorph(pointOffset, texcoord);
-			float2 tapCoords = float2(texcoord + (pointOffset * currentRingRadiusCoords));
+			float2 tapCoords = ClampSampleToEye(texcoord + (pointOffset * currentRingRadiusCoords), eyeIndex);
 			float sampleWeight = weight * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
 			if (sampleWeight > 0) {
 				float4 tap = TexColor.SampleLevel(LinearSampler, tapCoords, 0);
@@ -1041,10 +1104,11 @@ float4 Median9(float4 samples[9])
 float4 GatherMedianAt(Texture2D<float4> inputTexture, uint2 pixel)
 {
 	float4 samples[9];
+	uint eyeIndex = GetEyeIndexFromPixel(pixel, HalfResDim);
 	[unroll] for (int i = 0; i < 9; ++i)
 	{
 		int2 offset = int2(i % 3, i / 3) - 1;
-		samples[i] = inputTexture[ClampToHalfRes(int2(pixel) + offset)];
+		samples[i] = inputTexture[ClampToHalfRes(int2(pixel) + offset, eyeIndex)];
 	}
 	return Median9(samples);
 }

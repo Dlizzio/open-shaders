@@ -105,11 +105,11 @@ void PostProcessing::DrawSettings()
 
 	if (tonemapTakenByEffects11) {
 		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
+		const SKSE::stl::scope_exit restoreTextColor([]() noexcept { ImGui::PopStyleColor(); });
 		ImGui::TextWrapped("%s", T("feature.post_processing.tonemap_owned_by_effects11",
 									 "Tonemapping is currently handled by Effects 11. Post Processing effects that run "
 									 "before tonemapping still apply. To use Post Processing tonemapping instead, either "
 									 "disable Effects 11 or enable its \"UseOriginalPostProcessing\" setting."));
-		ImGui::PopStyleColor();
 	}
 
 	ImGui::Separator();
@@ -675,9 +675,7 @@ void PostProcessing::SetupResources()
 
 void PostProcessing::Reset()
 {
-	// Cleared per frame rather than only at the end of PreProcess: when Effects11 owns the
-	// tonemap (or the pipeline is bypassed) PreProcess never runs, and a stale flag would
-	// make the next frame we do run read from the wrong buffer.
+	// PreProcess may not run while bypassed or owned by Effects11, so clear refraction each frame.
 	isrefraction = false;
 
 	for (auto& pipe : pipeline) {
@@ -786,9 +784,7 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
 
 	auto& upscaling = globals::features::upscaling;
 
-	// This runs before the HDR chain, so ISRefraction still has kMAIN_COPY bound as a render
-	// target. D3D11 silently nulls any SRV of a resource that is also an output, which would
-	// make the pipeline sample black instead of the scene.
+	// ISRefraction can leave kMAIN_COPY bound, which makes D3D11 null its SRV when sampled.
 	globals::d3d::context->OMSetRenderTargets(0, nullptr, nullptr);
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 
@@ -835,8 +831,7 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
 
 void PostProcessing::ClearBorderMotionVectorsForFrameGen()
 {
-	// Effects11 owns the image, so no letterbox is drawn and zeroing its motion vectors
-	// would hand frame generation a band of static pixels over live scene content.
+	// Effects11 skips the letterbox, so its motion vectors must remain live scene data.
 	if (bypass || IsTonemapOwnedByEffects11())
 		return;
 
@@ -862,9 +857,7 @@ PostProcessing::Settings PostProcessing::GetCommonBufferData()
 {
 	Settings data = settings;
 
-	// Effects11 outputs gamma-space SDR from its own tonemapper. Leaving this flag set would
-	// make ISHDR take its passthrough branch and HDROutputCS treat the scene as linear and
-	// already display-mapped, skipping AutoHDR and the BT.2020 conversion.
+	// Only Post Processing may advertise its linear, already-tonemapped output to consumers.
 	if (globals::state->GetTonemapOwner() != State::TonemapOwner::kPostProcessing)
 		data.DisableVanillaTonemapping = 0;
 

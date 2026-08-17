@@ -1,11 +1,36 @@
 ﻿#include "DoF.h"
 
 #include "Features/PostProcessing.h"
+#include "GpuPass.h"
 #include "Menu.h"
 #include "State.h"
 #include "Util.h"
 
 #include "I18n/I18n.h"
+
+namespace
+{
+	uint ReduceDoFWidth(uint width, bool roundUp = true)
+	{
+		const uint roundOffset = roundUp ? 1u : 0u;
+		if (!globals::game::isVR)
+			return std::max(1u, (width + roundOffset) / 2u);
+
+		assert(width % 2u == 0u);
+		const uint eyeWidth = width / 2u;
+		return 2u * std::max(1u, (eyeWidth + roundOffset) / 2u);
+	}
+
+	uint GetDoFTileWidth(uint halfWidth)
+	{
+		if (!globals::game::isVR)
+			return std::max(1u, (halfWidth + 7u) / 8u);
+
+		assert(halfWidth % 2u == 0u);
+		const uint eyeWidth = halfWidth / 2u;
+		return 2u * std::max(1u, (eyeWidth + 7u) / 8u);
+	}
+}
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DoF::Settings,
@@ -41,7 +66,7 @@ void DoF::DrawSettings()
 	ImGui::Checkbox(T("feature.post_processing.do_f.auto_focus", "Auto Focus"), &settings.AutoFocus);
 
 	if (settings.AutoFocus) {
-		ImGui::SliderFloat2(T("feature.post_processing.do_f.focus_point", "Focus Point"), &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat2(T("feature.post_processing.do_f.focus_point_xy", "Focus Point X/Y"), &settings.FocusCoord.x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 	ImGui::SliderFloat(T("feature.post_processing.do_f.transition_speed", "Transition Speed"), &settings.TransitionSpeed, 0.1f, 1.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.manual_focus", "Manual Focus"), &settings.ManualFocusPlane, 0.1f, 150.0f, "%.2f m");
@@ -62,7 +87,7 @@ void DoF::DrawSettings()
 		ImGui::Combo(T("feature.post_processing.do_f.gather_quality", "Gather Quality"), &settings.GatherQuality, "Performance (4 rings)\0Quality (5 rings)\0");
 	if (!settings.UseAdaptiveGather)
 		ImGui::SliderFloat(T("feature.post_processing.do_f.blur_quality", "Compatibility Blur Quality"), &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
-	ImGui::SliderFloat(T("feature.post_processing.do_f.near_far_plane_distance_compenation", "Near-Far Plane Distance Compenation"), &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.post_processing.do_f.near_far_plane_distance_compensation", "Near-Far Plane Distance Compensation"), &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.bokeh_busy_factor", "Bokeh Busy Factor"), &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.petzval_strength", "Petzval Strength"), &settings.PetzvalStrength, 0.0f, 2.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.highlight_boost", "Highlight Boost"), &settings.HighlightBoost, 0.0f, 1.0f, "%.2f");
@@ -98,32 +123,35 @@ void DoF::DrawSettings()
 	}
 
 	if (ImGui::CollapsingHeader(T("feature.post_processing.do_f.debug", "Debug"))) {
+		const float uiScale = Util::GetUIScale();
+		const float focusPreviewScale = 64.0f * uiScale;
 		static float debugRescale = .3f;
+		const float debugTextureScale = debugRescale * uiScale;
 		ImGui::Text(T("feature.post_processing.do_f.debug_distance", "Debug Distance: %f"), debugDistance);
 		ImGui::Text(T("feature.post_processing.do_f.debug_focus_plane", "Debug Focus Plane: %f"), debugFocusPlane);
 		ImGui::SliderFloat(T("feature.post_processing.do_f.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
 
-		BUFFER_VIEWER_NODE(texFocus, 64.0f)
-		BUFFER_VIEWER_NODE(texPreFocus, 64.0f)
+		BUFFER_VIEWER_NODE(texFocus, focusPreviewScale)
+		BUFFER_VIEWER_NODE(texPreFocus, focusPreviewScale)
 
-		BUFFER_VIEWER_NODE(texCoC, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCHalf, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTile, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileTmp, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileDilated, debugRescale)
-		BUFFER_VIEWER_NODE(texPreBlurred, debugRescale)
-		BUFFER_VIEWER_NODE(texGatherColor[0], debugRescale)
-		BUFFER_VIEWER_NODE(texGatherColor[1], debugRescale)
-		BUFFER_VIEWER_NODE(texGatherColor[2], debugRescale)
-		BUFFER_VIEWER_NODE(texGatherCoC[0], debugRescale)
-		BUFFER_VIEWER_NODE(texGatherCoC[1], debugRescale)
-		BUFFER_VIEWER_NODE(texGatherCoC[2], debugRescale)
-		BUFFER_VIEWER_NODE(texFarBlurred, debugRescale)
-		BUFFER_VIEWER_NODE(texNearBlurred, debugRescale)
+		BUFFER_VIEWER_NODE(texCoC, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCHalf, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCTile, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCTileTmp, debugTextureScale)
+		BUFFER_VIEWER_NODE(texCoCTileDilated, debugTextureScale)
+		BUFFER_VIEWER_NODE(texPreBlurred, debugTextureScale)
+		BUFFER_VIEWER_NODE(texGatherColor[0], debugTextureScale)
+		BUFFER_VIEWER_NODE(texGatherColor[1], debugTextureScale)
+		BUFFER_VIEWER_NODE(texGatherColor[2], debugTextureScale)
+		BUFFER_VIEWER_NODE(texGatherCoC[0], debugTextureScale)
+		BUFFER_VIEWER_NODE(texGatherCoC[1], debugTextureScale)
+		BUFFER_VIEWER_NODE(texGatherCoC[2], debugTextureScale)
+		BUFFER_VIEWER_NODE(texFarBlurred, debugTextureScale)
+		BUFFER_VIEWER_NODE(texNearBlurred, debugTextureScale)
 
-		BUFFER_VIEWER_NODE(texBlurredFiltered, debugRescale)
-		BUFFER_VIEWER_NODE(texPostSmooth, debugRescale)
-		BUFFER_VIEWER_NODE(texPostSmooth2, debugRescale)
+		BUFFER_VIEWER_NODE(texBlurredFiltered, debugTextureScale)
+		BUFFER_VIEWER_NODE(texPostSmooth, debugTextureScale)
+		BUFFER_VIEWER_NODE(texPostSmooth2, debugTextureScale)
 	}
 }
 
@@ -259,7 +287,7 @@ void DoF::SetupResources()
 		texPostSmooth2->CreateUAV(uavDesc);
 
 		D3D11_TEXTURE2D_DESC texDescHalf = texDesc;
-		texDescHalf.Width = std::max(1u, texDescHalf.Width / 2u);
+		texDescHalf.Width = ReduceDoFWidth(texDescHalf.Width, false);
 		texDescHalf.Height = std::max(1u, texDescHalf.Height / 2u);
 
 		texPreBlurred = eastl::make_unique<Texture2D>(texDescHalf, "DoF::SetupColor");
@@ -280,7 +308,7 @@ void DoF::SetupResources()
 
 		D3D11_TEXTURE2D_DESC texDescGather = texDescHalf;
 		for (size_t i = 0; i < texGatherColor.size(); ++i) {
-			texDescGather.Width = std::max(1u, (texDescGather.Width + 1u) / 2u);
+			texDescGather.Width = ReduceDoFWidth(texDescGather.Width);
 			texDescGather.Height = std::max(1u, (texDescGather.Height + 1u) / 2u);
 			texGatherColor[i] = eastl::make_unique<Texture2D>(texDescGather, std::format("DoF::GatherColor{}", i + 1).c_str());
 			texGatherColor[i]->CreateSRV(srvDesc);
@@ -302,7 +330,7 @@ void DoF::SetupResources()
 
 		texDescGather = texDescHalf;
 		for (size_t i = 0; i < texGatherCoC.size(); ++i) {
-			texDescGather.Width = std::max(1u, (texDescGather.Width + 1u) / 2u);
+			texDescGather.Width = ReduceDoFWidth(texDescGather.Width);
 			texDescGather.Height = std::max(1u, (texDescGather.Height + 1u) / 2u);
 			texDescGather.Format = DXGI_FORMAT_R16_FLOAT;
 			texGatherCoC[i] = eastl::make_unique<Texture2D>(texDescGather, std::format("DoF::GatherCoC{}", i + 1).c_str());
@@ -315,7 +343,7 @@ void DoF::SetupResources()
 		// typed UAV stores on D3D11 feature level 11_0 hardware.
 		D3D11_TEXTURE2D_DESC texDescTile = texDesc;
 		texDescTile.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-		texDescTile.Width = std::max(1u, (texDesc.Width / 2 + 7) / 8);
+		texDescTile.Width = GetDoFTileWidth(texDescHalf.Width);
 		texDescTile.Height = std::max(1u, (texDesc.Height / 2 + 7) / 8);
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDescTile = srvDesc;
@@ -446,13 +474,22 @@ void DoF::CompileComputeShaders()
 // Thanks Ershin!
 RE::NiPoint3 DoF::GetCameraPos()
 {
-	auto player = RE::PlayerCharacter::GetSingleton();
-	auto playerCamera = RE::PlayerCamera::GetSingleton();
+	auto player = globals::game::player;
+	auto playerCamera = globals::game::playerCamera;
 	RE::NiPoint3 ret;
 
-	if (playerCamera->currentState == playerCamera->GetRuntimeData().cameraStates[RE::CameraStates::kFirstPerson] ||
-		playerCamera->currentState == playerCamera->GetRuntimeData().cameraStates[RE::CameraStates::kThirdPerson] ||
-		playerCamera->currentState == playerCamera->GetRuntimeData().cameraStates[RE::CameraStates::kMount]) {
+	// GetRuntimeData() and GetVRRuntimeData() return differently-laid-out structs
+	// (VR_RUNTIME_DATA shifts cameraStates by 8 bytes), and VR's CameraStates enum
+	// inserts kVR before kThirdPerson/kMount, shifting their VR-equivalent values
+	// to kVRThirdPerson/kVRMount -- both the struct and the indices must match runtime.
+	const auto isVehicleOrBodyCamera = [&](const auto& runtimeData, RE::CameraState thirdPersonState, RE::CameraState mountState) {
+		return playerCamera->currentState == runtimeData.cameraStates[RE::CameraStates::kFirstPerson] ||
+		       playerCamera->currentState == runtimeData.cameraStates[thirdPersonState] ||
+		       playerCamera->currentState == runtimeData.cameraStates[mountState];
+	};
+	if (globals::game::isVR ?
+			isVehicleOrBodyCamera(*playerCamera->GetVRRuntimeData(), RE::CameraStates::kVRThirdPerson, RE::CameraStates::kVRMount) :
+			isVehicleOrBodyCamera(playerCamera->GetRuntimeData(), RE::CameraStates::kThirdPerson, RE::CameraStates::kMount)) {
 		RE::NiNode* root = playerCamera->cameraRoot.get();
 		if (root) {
 			ret.x = root->world.translate.x;
@@ -559,10 +596,10 @@ void DoF::Draw(TextureInfo& inout_tex)
 	debugFocusPlane = manualFocus;
 	state->BeginPerfEvent("Depth of Field");
 
-	const uint halfResX = std::max(1u, (uint)res.x / 2);
-	const uint halfResY = std::max(1u, (uint)res.y / 2);
-	const uint tileDimX = std::max(1u, (halfResX + 7) / 8);
-	const uint tileDimY = std::max(1u, (halfResY + 7) / 8);
+	const uint halfResX = texPreBlurred->desc.Width;
+	const uint halfResY = texPreBlurred->desc.Height;
+	const uint tileDimX = texCoCTile->desc.Width;
+	const uint tileDimY = texCoCTile->desc.Height;
 	const size_t gatherQuality = (size_t)std::clamp(settings.GatherQuality, 0, 1);
 	UpdateProceduralBokehSamples();
 
@@ -665,8 +702,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	// Calculate CoC
 	{
-		globals::profiler->BeginPass("PostProcessing::DoF::CoC");
-		state->BeginPerfEvent("Calculate CoC");
+		CS_GPU_PASS("PostProcessing::DoF::CoC");
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(1) = texPreFocus->srv.get();
 		srvs.at(2) = depthSRV;
@@ -677,8 +713,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		context->CSSetShader(CalculateCoCCS.get(), nullptr, 0);
 		context->Dispatch(dispatchWidth, dispatchHeight, 1);
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	resetViews();
@@ -686,8 +720,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 	// Half res downsample of colour + CoC (bilateral). Everything the gather kernels read is half res
 	// from here on.
 	{
-		globals::profiler->BeginPass("PostProcessing::DoF::Downsample");
-		state->BeginPerfEvent("Downsample");
+		CS_GPU_PASS("PostProcessing::DoF::Downsample");
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(3) = texCoC->srv.get();
 		uavs.at(0) = texPreBlurred->uav.get();
@@ -700,15 +733,12 @@ void DoF::Draw(TextureInfo& inout_tex)
 		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
 		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// CoC-aware color pyramid for the fixed gather. Each tap can cover a footprint comparable to
 	// the spacing between samples instead of always reading a single half-resolution texel.
 	if (useAdaptiveGather) {
-		globals::profiler->BeginPass("PostProcessing::DoF::GatherReduce");
-		state->BeginPerfEvent("Gather Reduce");
+		CS_GPU_PASS("PostProcessing::DoF::GatherReduce");
 		for (size_t i = 0; i < texGatherColor.size(); ++i) {
 			auto* sourceColor = i == 0 ? texPreBlurred.get() : texGatherColor[i - 1].get();
 			auto* sourceCoC = i == 0 ? texCoCHalf.get() : texGatherCoC[i - 1].get();
@@ -723,14 +753,11 @@ void DoF::Draw(TextureInfo& inout_tex)
 			context->Dispatch((texGatherColor[i]->desc.Width + 7u) >> 3, (texGatherColor[i]->desc.Height + 7u) >> 3, 1);
 			resetViews();
 		}
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// CoC tile flatten + separable min/max/reach propagation, at 1/16 of full resolution.
 	{
-		globals::profiler->BeginPass("PostProcessing::DoF::CoCTile");
-		state->BeginPerfEvent("CoC Tile");
+		CS_GPU_PASS("PostProcessing::DoF::CoCTile");
 		srvs.at(3) = texCoC->srv.get();
 		uavs.at(3) = texCoCTile->uav.get();
 
@@ -763,39 +790,36 @@ void DoF::Draw(TextureInfo& inout_tex)
 		context->Dispatch(dispatchWidthTile, dispatchHeightTile, 1);
 
 		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// Gather
 	{
-		globals::profiler->BeginPass("PostProcessing::DoF::FarBlur");
-		state->BeginPerfEvent("Far Blur");
-		srvs.at(0) = texPreBlurred->srv.get();
-		srvs.at(9) = texCoCHalf->srv.get();
-		srvs.at(10) = texCoCTile->srv.get();
-		if (useAdaptiveGather) {
-			for (size_t i = 0; i < texGatherColor.size(); ++i) {
-				srvs.at(12 + i) = texGatherColor[i]->srv.get();
-				srvs.at(15 + i) = texGatherCoC[i]->srv.get();
-			}
-			srvs.at(19) = bokehSampleSRV;
-			if (bokehMode == 1)
+		{
+			CS_GPU_PASS("PostProcessing::DoF::FarBlur");
+			srvs.at(0) = texPreBlurred->srv.get();
+			srvs.at(9) = texCoCHalf->srv.get();
+			srvs.at(10) = texCoCTile->srv.get();
+			if (useAdaptiveGather) {
+				for (size_t i = 0; i < texGatherColor.size(); ++i) {
+					srvs.at(12 + i) = texGatherColor[i]->srv.get();
+					srvs.at(15 + i) = texGatherCoC[i]->srv.get();
+				}
+				srvs.at(19) = bokehSampleSRV;
+				if (bokehMode == 1)
+					srvs.at(8) = customShapeSRV;
+			} else if (bokehMode == 1) {
 				srvs.at(8) = customShapeSRV;
-		} else if (bokehMode == 1) {
-			srvs.at(8) = customShapeSRV;
+			}
+			uavs.at(0) = texFarBlurred->uav.get();
+
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+			context->CSSetShader(useAdaptiveGather ? FarGatherCS[gatherQuality].get() : FarBlurCS.get(), nullptr, 0);
+			context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
+
+			resetViews();
 		}
-		uavs.at(0) = texFarBlurred->uav.get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-
-		context->CSSetShader(useAdaptiveGather ? FarGatherCS[gatherQuality].get() : FarBlurCS.get(), nullptr, 0);
-		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
-
-		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 
 		srvs.at(0) = texFarBlurred->srv.get();
 		srvs.at(9) = texCoCHalf->srv.get();
@@ -803,20 +827,19 @@ void DoF::Draw(TextureInfo& inout_tex)
 		if (useAdaptiveGather) {
 			// The near layer gathers the already resolved far result, so give it a matching color-only
 			// pyramid while reusing the setup CoC pyramid for footprint selection.
-			globals::profiler->BeginPass("PostProcessing::DoF::GatherReduceNear");
-			state->BeginPerfEvent("Gather Reduce Near");
-			for (size_t i = 0; i < texGatherColor.size(); ++i) {
-				auto* sourceColor = i == 0 ? texFarBlurred.get() : texGatherColor[i - 1].get();
-				srvs.at(0) = sourceColor->srv.get();
-				uavs.at(0) = texGatherColor[i]->uav.get();
-				context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-				context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-				context->CSSetShader(ReduceColorCS.get(), nullptr, 0);
-				context->Dispatch((texGatherColor[i]->desc.Width + 7u) >> 3, (texGatherColor[i]->desc.Height + 7u) >> 3, 1);
-				resetViews();
+			{
+				CS_GPU_PASS("PostProcessing::DoF::GatherReduceNear");
+				for (size_t i = 0; i < texGatherColor.size(); ++i) {
+					auto* sourceColor = i == 0 ? texFarBlurred.get() : texGatherColor[i - 1].get();
+					srvs.at(0) = sourceColor->srv.get();
+					uavs.at(0) = texGatherColor[i]->uav.get();
+					context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+					context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+					context->CSSetShader(ReduceColorCS.get(), nullptr, 0);
+					context->Dispatch((texGatherColor[i]->desc.Width + 7u) >> 3, (texGatherColor[i]->desc.Height + 7u) >> 3, 1);
+					resetViews();
+				}
 			}
-			state->EndPerfEvent();
-			globals::profiler->EndPass();
 			srvs.at(0) = texFarBlurred->srv.get();
 			srvs.at(9) = texCoCHalf->srv.get();
 			srvs.at(11) = texCoCTileDilated->srv.get();
@@ -831,27 +854,25 @@ void DoF::Draw(TextureInfo& inout_tex)
 			srvs.at(8) = customShapeSRV;
 		}
 
-		globals::profiler->BeginPass("PostProcessing::DoF::NearBlur");
-		state->BeginPerfEvent("Near Blur");
-		uavs.at(0) = texNearBlurred->uav.get();
+		{
+			CS_GPU_PASS("PostProcessing::DoF::NearBlur");
+			uavs.at(0) = texNearBlurred->uav.get();
 
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-		context->CSSetShader(useAdaptiveGather ? NearGatherCS[gatherQuality].get() : NearBlurCS.get(), nullptr, 0);
-		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
+			context->CSSetShader(useAdaptiveGather ? NearGatherCS[gatherQuality].get() : NearBlurCS.get(), nullptr, 0);
+			context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
-		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
+			resetViews();
+		}
 	}
 
 	// Component-wise median removes isolated gather noise without rounding off the aperture as the
 	// old tent blur did. Apply it to both convolution layers; setup color is dead after near gather
 	// and serves as the near-layer destination without another allocation.
 	{
-		globals::profiler->BeginPass("PostProcessing::DoF::GatherPostfilter");
-		state->BeginPerfEvent("Gather Postfilter");
+		CS_GPU_PASS("PostProcessing::DoF::GatherPostfilter");
 		srvs.at(0) = texFarBlurred->srv.get();
 		srvs.at(6) = texNearBlurred->srv.get();
 		uavs.at(0) = texBlurredFiltered->uav.get();
@@ -864,8 +885,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
 		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// Post Smoothing only touches out of focus highlights; when it's disabled the combiner can write
@@ -874,8 +893,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	// Combiner
 	{
-		globals::profiler->BeginPass("PostProcessing::DoF::Combiner");
-		state->BeginPerfEvent("Combiner");
+		CS_GPU_PASS("PostProcessing::DoF::Combiner");
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(3) = texCoC->srv.get();
 		srvs.at(5) = texBlurredFiltered->srv.get();
@@ -889,14 +907,11 @@ void DoF::Draw(TextureInfo& inout_tex)
 		context->Dispatch(dispatchWidth, dispatchHeight, 1);
 
 		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// Post Smooth
 	if (doPostSmoothing) {
-		globals::profiler->BeginPass("PostProcessing::DoF::PostSmooth");
-		state->BeginPerfEvent("Post Smooth");
+		CS_GPU_PASS("PostProcessing::DoF::PostSmooth");
 		srvs.at(0) = texPostSmooth->srv.get();
 		srvs.at(3) = texCoC->srv.get();
 		uavs.at(0) = texPostSmooth2->uav.get();
@@ -921,8 +936,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 		context->Dispatch(dispatchWidth, dispatchHeight, 1);
 
 		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	samplers.fill(nullptr);

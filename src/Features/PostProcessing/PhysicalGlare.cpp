@@ -2,7 +2,9 @@
 
 #include "Features/LinearLighting.h"
 #include "Globals.h"
+#include "GpuPass.h"
 #include "I18n/I18n.h"
+#include "PostProcessingUI.h"
 #include "State.h"
 #include "Util.h"
 
@@ -76,13 +78,56 @@ void PhysicalGlare::DrawSettings()
 		ImGui::Text(T("feature.post_processing.physical_glare.overall_glare_intensity", "Overall glare intensity."));
 
 	{
-		const char* modeNames[] = { "Lens (N-polygon)", "Pupil (Circle)" };
-		ImGui::Combo(T("feature.post_processing.physical_glare.aperture_mode", "Aperture Mode"), &settings.ApertureMode, modeNames, 2);
+		const char* modeNames[] = {
+			T("feature.post_processing.physical_glare.lens_n_polygon", "Lens (N-polygon)"),
+			T("feature.post_processing.physical_glare.pupil_circle", "Pupil (Circle)")
+		};
+		ImGui::Combo(T("feature.post_processing.physical_glare.aperture_mode", "Aperture Mode"), &settings.ApertureMode, modeNames, IM_ARRAYSIZE(modeNames));
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(T("feature.post_processing.physical_glare.lens_camera_lens_polygon_starburst_pupil_circular_human", "Lens: camera lens polygon starburst. Pupil: circular human eye aperture."));
 	}
 
+	ImGui::SliderFloat(T("feature.post_processing.physical_glare.aperture_rotation", "Aperture Rotation"), &settings.ApertureRotation, -180.f, 180.f, "%.1f deg");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.physical_glare.rotation_angle_of_the_aperture", "Rotation angle of the aperture."));
+
+	ImGui::SliderFloat(T("feature.post_processing.physical_glare.adapt_speed", "Adapt Speed"), &settings.AdaptSpeed, 0.5f, 10.f, "%.1f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.physical_glare.how_fast_the_glare_adapts_to_brightness_changes", "How fast the glare adapts to brightness changes."));
+
+	PostProcessingUI::FFTResolutionCombo(T("feature.post_processing.physical_glare.fft_resolution", "FFT Resolution"), settings.FFTResolution);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.physical_glare.resolution_of_the_fft_convolution_higher_sharper_starburst", "Resolution of the FFT convolution. Higher = sharper starburst but more expensive."));
+
+	ImGui::SliderFloat(T("feature.post_processing.physical_glare.padding_ratio", "Padding Ratio"), &settings.PaddingRatio, 0.f, 0.25f, "%.3f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(
+			T("feature.post_processing.physical_glare.zero_padding_per_side_to_prevent_fft_wrap",
+				"Zero-padding per side to prevent FFT wrap-around.\n"
+				"0.25 = paper default (50%% effective resolution).\n"
+				"0.1  = 80%% effective (recommended for high-res).\n"
+				"0.0  = 100%% (maximum sharpness, may wrap at edges).\n"
+				"Lower = sharper glare on high-res screens."));
+
+	ImGui::SliderFloat(T("feature.post_processing.physical_glare.kernel_scale", "Kernel Scale"), &settings.KernelScale, 0.01f, 1.f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(
+			T("feature.post_processing.physical_glare.scale_of_the_glare_kernel_size_on_screen",
+				"Scale of the glare kernel size on screen.\n"
+				"1.0 = default. Smaller = more concentrated glare.\n"
+				"Does not affect aperture physics."));
+
+	ImGui::SliderFloat(T("feature.post_processing.physical_glare.fresnel_exponent", "Fresnel Exponent"), &settings.FresnelExponent, 0.f, 80.f, "%.1f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.physical_glare.fresnel_phase_at_aperture_edge_radians_paper_eq", "Fresnel phase at aperture edge (radians). Paper eq 2.12: e^(i*pi/(lambda*z) * r^2).\nHigher = more Fresnel rings. 0 = pure Fraunhofer (no rings)."));
+
+	ImGui::SliderFloat(T("feature.post_processing.physical_glare.chromatic_spread", "Chromatic Spread"), &settings.ChromaticSpread, 0.f, 3.f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.physical_glare.multiplier_on_wavelength_dependent_uv_scaling_paper_section", "Multiplier on wavelength-dependent UV scaling (paper section 2.3: lambda/575nm).\n1.0 = physically correct. Higher = more rainbow spread. 0 = monochrome."));
+
 	if (settings.ApertureMode == 0) {
+		ImGui::SeparatorText(T("feature.post_processing.physical_glare.lens_n_polygon", "Lens (N-polygon)"));
+
 		ImGui::SliderInt(T("feature.post_processing.physical_glare.aperture_blades", "Aperture Blades"), &settings.ApertureBlades, 3, 10);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(T("feature.post_processing.physical_glare.number_of_aperture_blades_controls_starburst_pattern", "Number of aperture blades. Controls starburst pattern."));
@@ -139,11 +184,9 @@ void PhysicalGlare::DrawSettings()
 		}
 	}
 
-	ImGui::SliderFloat(T("feature.post_processing.physical_glare.aperture_rotation", "Aperture Rotation"), &settings.ApertureRotation, -180.f, 180.f, "%.1f deg");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.physical_glare.rotation_angle_of_the_aperture", "Rotation angle of the aperture."));
-
 	if (settings.ApertureMode == 1) {
+		ImGui::SeparatorText(T("feature.post_processing.physical_glare.pupil_circle", "Pupil (Circle)"));
+
 		ImGui::SliderFloat(T("feature.post_processing.physical_glare.scatter_strength", "Scatter Strength"), &settings.ScatterStrength, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(T("feature.post_processing.physical_glare.opacity_of_scatter_particles_in_pupil_mode_paper", "Opacity of scatter particles in pupil mode (paper section 2.4).\n0 = transparent (no scatter), 1 = fully opaque."));
@@ -240,67 +283,22 @@ void PhysicalGlare::DrawSettings()
 		}
 	}
 
-	ImGui::SliderFloat(T("feature.post_processing.physical_glare.adapt_speed", "Adapt Speed"), &settings.AdaptSpeed, 0.5f, 10.f, "%.1f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.physical_glare.how_fast_the_glare_adapts_to_brightness_changes", "How fast the glare adapts to brightness changes."));
+	ImGui::SeparatorText(T("feature.post_processing.physical_glare.psf_shaping", "PSF Shaping"));
 
-	{
-		const char* resNames[] = { "128", "256", "512", "1024" };
-		int resValues[] = { 128, 256, 512, 1024 };
-		int curIdx = 1;
-		for (int i = 0; i < 4; i++)
-			if (resValues[i] == settings.FFTResolution)
-				curIdx = i;
-
-		if (ImGui::Combo(T("feature.post_processing.physical_glare.fft_resolution", "FFT Resolution"), &curIdx, resNames, 4))
-			settings.FFTResolution = resValues[curIdx];
-
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(T("feature.post_processing.physical_glare.resolution_of_the_fft_convolution_higher_sharper_starburst", "Resolution of the FFT convolution. Higher = sharper starburst but more expensive."));
-	}
-
-	ImGui::SliderFloat(T("feature.post_processing.physical_glare.padding_ratio", "Padding Ratio"), &settings.PaddingRatio, 0.f, 0.25f, "%.3f");
+	ImGui::SliderFloat(T("feature.post_processing.physical_glare.psf_sharpness", "PSF Sharpness"), &settings.PSFSharpness, 0.2f, 1.f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(
-			T("feature.post_processing.physical_glare.zero_padding_per_side_to_prevent_fft_wrap",
-				"Zero-padding per side to prevent FFT wrap-around.\n"
-				"0.25 = paper default (50%% effective resolution).\n"
-				"0.1  = 80%% effective (recommended for high-res).\n"
-				"0.0  = 100%% (maximum sharpness, may wrap at edges).\n"
-				"Lower = sharper glare on high-res screens."));
+			T("feature.post_processing.physical_glare.dynamic_range_compression_exponent_paper_table_3_9",
+				"Dynamic range compression exponent (paper Table 3.9: 0.45).\n"
+				"Lower = wider/softer glare, higher = concentrated near light source.\n"
+				"Increase if glare looks too blurry/spreads too far."));
 
-	ImGui::SliderFloat(T("feature.post_processing.physical_glare.kernel_scale", "Kernel Scale"), &settings.KernelScale, 0.01f, 1.f, "%.2f");
+	ImGui::SliderFloat(T("feature.post_processing.physical_glare.psf_noise_floor", "PSF Noise Floor"), &settings.PSFNoiseFloor, 0.f, 0.01f, "%.4f");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(
-			T("feature.post_processing.physical_glare.scale_of_the_glare_kernel_size_on_screen",
-				"Scale of the glare kernel size on screen.\n"
-				"1.0 = default. Smaller = more concentrated glare.\n"
-				"Does not affect aperture physics."));
-
-	ImGui::SliderFloat(T("feature.post_processing.physical_glare.fresnel_exponent", "Fresnel Exponent"), &settings.FresnelExponent, 0.f, 80.f, "%.1f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.physical_glare.fresnel_phase_at_aperture_edge_radians_paper_eq", "Fresnel phase at aperture edge (radians). Paper eq 2.12: e^(i*pi/(lambda*z) * r^2).\nHigher = more Fresnel rings. 0 = pure Fraunhofer (no rings)."));
-
-	ImGui::SliderFloat(T("feature.post_processing.physical_glare.chromatic_spread", "Chromatic Spread"), &settings.ChromaticSpread, 0.f, 3.f, "%.2f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.physical_glare.multiplier_on_wavelength_dependent_uv_scaling_paper_section", "Multiplier on wavelength-dependent UV scaling (paper section 2.3: lambda/575nm).\n1.0 = physically correct. Higher = more rainbow spread. 0 = monochrome."));
-
-	if (ImGui::CollapsingHeader(T("feature.post_processing.physical_glare.psf_shaping", "PSF Shaping"))) {
-		ImGui::SliderFloat(T("feature.post_processing.physical_glare.psf_sharpness", "PSF Sharpness"), &settings.PSFSharpness, 0.2f, 1.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				T("feature.post_processing.physical_glare.dynamic_range_compression_exponent_paper_table_3_9",
-					"Dynamic range compression exponent (paper Table 3.9: 0.45).\n"
-					"Lower = wider/softer glare, higher = concentrated near light source.\n"
-					"Increase if glare looks too blurry/spreads too far."));
-
-		ImGui::SliderFloat(T("feature.post_processing.physical_glare.psf_noise_floor", "PSF Noise Floor"), &settings.PSFNoiseFloor, 0.f, 0.01f, "%.4f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(
-				T("feature.post_processing.physical_glare.threshold_to_remove_low_level_fft_noise_from",
-					"Threshold to remove low-level FFT noise from the PSF.\n"
-					"Paper default: 0.001. Higher = cleaner glare wings."));
-	}
+			T("feature.post_processing.physical_glare.threshold_to_remove_low_level_fft_noise_from",
+				"Threshold to remove low-level FFT noise from the PSF.\n"
+				"Paper default: 0.001. Higher = cleaner glare wings."));
 
 	if (ImGui::CollapsingHeader(T("feature.post_processing.physical_glare.debug", "Debug"))) {
 		if (texGlarePacked)
@@ -355,7 +353,8 @@ void PhysicalGlare::CreateFFTTextures(uint resolution)
 	// FFT ping-pong textures (RG32F) for 3 channels
 	for (int ch = 0; ch < 3; ch++) {
 		for (int pp = 0; pp < 2; pp++) {
-			texFFT[ch][pp] = eastl::make_unique<Texture2D>(texDesc);
+			auto resourceName = std::format("PostProcessing::PhysicalGlare::FFT{}::PingPong{}", ch, pp);
+			texFFT[ch][pp] = eastl::make_unique<Texture2D>(texDesc, resourceName.c_str());
 			texFFT[ch][pp]->CreateSRV(srvDesc);
 			texFFT[ch][pp]->CreateUAV(uavDesc);
 		}
@@ -363,12 +362,13 @@ void PhysicalGlare::CreateFFTTextures(uint resolution)
 
 	// PSF FFT cache (RG32F) for 3 channels
 	for (int ch = 0; ch < 3; ch++) {
-		texPSF_FFT[ch] = eastl::make_unique<Texture2D>(texDesc);
+		auto resourceName = std::format("PostProcessing::PhysicalGlare::PSF{}", ch);
+		texPSF_FFT[ch] = eastl::make_unique<Texture2D>(texDesc, resourceName.c_str());
 		texPSF_FFT[ch]->CreateSRV(srvDesc);
 		texPSF_FFT[ch]->CreateUAV(uavDesc);
 	}
 
-	texApertureBase = eastl::make_unique<Texture2D>(texDesc);
+	texApertureBase = eastl::make_unique<Texture2D>(texDesc, "PostProcessing::PhysicalGlare::ApertureBase");
 	texApertureBase->CreateSRV(srvDesc);
 	texApertureBase->CreateUAV(uavDesc);
 
@@ -379,7 +379,7 @@ void PhysicalGlare::CreateFFTTextures(uint resolution)
 	srvDesc.Format = packedDesc.Format;
 	uavDesc.Format = packedDesc.Format;
 
-	texGlarePacked = eastl::make_unique<Texture2D>(packedDesc);
+	texGlarePacked = eastl::make_unique<Texture2D>(packedDesc, "PostProcessing::PhysicalGlare::PackedGlare");
 	texGlarePacked->CreateSRV(srvDesc);
 	texGlarePacked->CreateUAV(uavDesc);
 }
@@ -391,7 +391,7 @@ void PhysicalGlare::SetupResources()
 
 	logger::debug("PhysicalGlare: Creating buffers...");
 	{
-		glareCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<GlareCB>());
+		glareCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<GlareCB>(), "PostProcessing::PhysicalGlare::Constants");
 	}
 
 	logger::debug("PhysicalGlare: Creating FFT textures...");
@@ -423,7 +423,7 @@ void PhysicalGlare::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.MiscFlags = 0;
 
-		texOutput = eastl::make_unique<Texture2D>(texDesc);
+		texOutput = eastl::make_unique<Texture2D>(texDesc, "PostProcessing::PhysicalGlare::Output");
 		texOutput->CreateSRV(srvDesc);
 		texOutput->CreateUAV(uavDesc);
 	}
@@ -440,6 +440,7 @@ void PhysicalGlare::SetupResources()
 			.MaxLOD = D3D11_FLOAT32_MAX
 		};
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, linearSampler.put()));
+		Util::SetResourceName(linearSampler.get(), "PostProcessing::PhysicalGlare::LinearSampler");
 
 		D3D11_SAMPLER_DESC wrapSamplerDesc = {
 			.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
@@ -451,6 +452,7 @@ void PhysicalGlare::SetupResources()
 			.MaxLOD = D3D11_FLOAT32_MAX
 		};
 		DX::ThrowIfFailed(device->CreateSamplerState(&wrapSamplerDesc, wrapSampler.put()));
+		Util::SetResourceName(wrapSampler.get(), "PostProcessing::PhysicalGlare::WrapSampler");
 	}
 
 	CompileComputeShaders();
@@ -883,105 +885,104 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 
 	// ========== Step 1: Regenerate PSF if parameters changed ==========
 	if (NeedsPSFRegeneration()) {
-		globals::profiler->BeginPass("PostProcessing::PhysicalGlare::PSF");
+		CS_GPU_PASS("PostProcessing::PhysicalGlare::PSF");
 		GeneratePSF();
 
 		// Re-update CB because GeneratePSF() overwrites it with DeltaTime=0
 		glareCB->Update(cbData);
 		cb = glareCB->CB();
 		context->CSSetConstantBuffers(1, 1, &cb);
-		globals::profiler->EndPass();
 	}
 
 	// ========== Step 2: Threshold + downsample scene into FFT textures ==========
-	globals::profiler->BeginPass("PostProcessing::PhysicalGlare::FFT");
 	{
-		// We write R, G, B channels into texFFT[0..2][0]
-		ID3D11ShaderResourceView* srv = inout_tex.srv;
-		std::array<ID3D11UnorderedAccessView*, 3> uavs = {
-			texFFT[0][0]->uav.get(),
-			texFFT[1][0]->uav.get(),
-			texFFT[2][0]->uav.get()
-		};
+		CS_GPU_PASS("PostProcessing::PhysicalGlare::FFT");
+		{
+			// We write R, G, B channels into texFFT[0..2][0]
+			ID3D11ShaderResourceView* srv = inout_tex.srv;
+			std::array<ID3D11UnorderedAccessView*, 3> uavs = {
+				texFFT[0][0]->uav.get(),
+				texFFT[1][0]->uav.get(),
+				texFFT[2][0]->uav.get()
+			};
 
-		context->CSSetShaderResources(0, 1, &srv);
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(thresholdCS.get(), nullptr, 0);
-		context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
+			context->CSSetShaderResources(0, 1, &srv);
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(thresholdCS.get(), nullptr, 0);
+			context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
 
-		srv = nullptr;
-		uavs.fill(nullptr);
-		context->CSSetShaderResources(0, 1, &srv);
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-	}
+			srv = nullptr;
+			uavs.fill(nullptr);
+			context->CSSetShaderResources(0, 1, &srv);
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		}
 
-	// ========== Step 3: Forward FFT on scene (per channel) ==========
-	const uint fftVariant = GetFFTVariant(currentFFTResolution);
-	for (int ch = 0; ch < 3; ch++) {
-		// Row FFT: texFFT[ch][0] -> texFFT[ch][1]
-		DispatchFFT(fftRowCS[fftVariant].get(), texFFT[ch][0].get(), texFFT[ch][1].get(), currentFFTResolution);
-		// Col FFT: texFFT[ch][1] -> texFFT[ch][0]
-		DispatchFFT(fftColCS[fftVariant].get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
-	}
+		// ========== Step 3: Forward FFT on scene (per channel) ==========
+		const uint fftVariant = GetFFTVariant(currentFFTResolution);
+		for (int ch = 0; ch < 3; ch++) {
+			// Row FFT: texFFT[ch][0] -> texFFT[ch][1]
+			DispatchFFT(fftRowCS[fftVariant].get(), texFFT[ch][0].get(), texFFT[ch][1].get(), currentFFTResolution);
+			// Col FFT: texFFT[ch][1] -> texFFT[ch][0]
+			DispatchFFT(fftColCS[fftVariant].get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
+		}
 
-	// ========== Step 4: Frequency-domain multiply (scene * PSF) ==========
-	{
-		std::array<ID3D11ShaderResourceView*, 6> srvs = {
-			texFFT[0][0]->srv.get(),
-			texPSF_FFT[0]->srv.get(),
-			texFFT[1][0]->srv.get(),
-			texPSF_FFT[1]->srv.get(),
-			texFFT[2][0]->srv.get(),
-			texPSF_FFT[2]->srv.get(),
-		};
-		std::array<ID3D11UnorderedAccessView*, 3> uavs = {
-			texFFT[0][1]->uav.get(), texFFT[1][1]->uav.get(), texFFT[2][1]->uav.get()
-		};
+		// ========== Step 4: Frequency-domain multiply (scene * PSF) ==========
+		{
+			std::array<ID3D11ShaderResourceView*, 6> srvs = {
+				texFFT[0][0]->srv.get(),
+				texPSF_FFT[0]->srv.get(),
+				texFFT[1][0]->srv.get(),
+				texPSF_FFT[1]->srv.get(),
+				texFFT[2][0]->srv.get(),
+				texPSF_FFT[2]->srv.get(),
+			};
+			std::array<ID3D11UnorderedAccessView*, 3> uavs = {
+				texFFT[0][1]->uav.get(), texFFT[1][1]->uav.get(), texFFT[2][1]->uav.get()
+			};
 
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(multiplyCS.get(), nullptr, 0);
-		context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(multiplyCS.get(), nullptr, 0);
+			context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
 
-		srvs.fill(nullptr);
-		uavs.fill(nullptr);
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-	}
+			srvs.fill(nullptr);
+			uavs.fill(nullptr);
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		}
 
-	// ========== Step 5: Inverse FFT (per channel) ==========
-	for (int ch = 0; ch < 3; ch++) {
-		// Row IFFT: texFFT[ch][1] -> texFFT[ch][0]
-		DispatchFFT(fftRowInvCS[fftVariant].get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
-		// Col IFFT: texFFT[ch][0] -> texFFT[ch][1]
-		DispatchFFT(fftColInvCS[fftVariant].get(), texFFT[ch][0].get(), texFFT[ch][1].get(), currentFFTResolution);
-	}
-	globals::profiler->EndPass();
+		// ========== Step 5: Inverse FFT (per channel) ==========
+		for (int ch = 0; ch < 3; ch++) {
+			// Row IFFT: texFFT[ch][1] -> texFFT[ch][0]
+			DispatchFFT(fftRowInvCS[fftVariant].get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
+			// Col IFFT: texFFT[ch][0] -> texFFT[ch][1]
+			DispatchFFT(fftColInvCS[fftVariant].get(), texFFT[ch][0].get(), texFFT[ch][1].get(), currentFFTResolution);
+		}
+		// Pack the three real components into one RGBA32F texture. Filtering this
+		// texture is channel-wise identical to filtering the three R32F sources.
+		{
+			std::array<ID3D11ShaderResourceView*, 3> srvs = {
+				texFFT[0][1]->srv.get(),
+				texFFT[1][1]->srv.get(),
+				texFFT[2][1]->srv.get(),
+			};
+			ID3D11UnorderedAccessView* uav = texGlarePacked->uav.get();
 
-	// Pack the three real components into one RGBA32F texture. Filtering this
-	// texture is channel-wise identical to filtering the three R32F sources.
-	{
-		std::array<ID3D11ShaderResourceView*, 3> srvs = {
-			texFFT[0][1]->srv.get(),
-			texFFT[1][1]->srv.get(),
-			texFFT[2][1]->srv.get(),
-		};
-		ID3D11UnorderedAccessView* uav = texGlarePacked->uav.get();
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			context->CSSetShader(packCS.get(), nullptr, 0);
+			context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
 
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-		context->CSSetShader(packCS.get(), nullptr, 0);
-		context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
-
-		srvs.fill(nullptr);
-		uav = nullptr;
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			srvs.fill(nullptr);
+			uav = nullptr;
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		}
 	}
 
 	// ========== Step 6: Composite (upsample + add to scene) ==========
-	globals::profiler->BeginPass("PostProcessing::PhysicalGlare::Composite");
 	{
+		CS_GPU_PASS("PostProcessing::PhysicalGlare::Composite");
 		// t0 = scene, t1 = packed RGB IFFT result,
 		// u0 = output
 		std::array<ID3D11ShaderResourceView*, 2> srvs = {
@@ -1012,7 +1013,6 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 	cb = nullptr;
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetShader(nullptr, nullptr, 0);
-	globals::profiler->EndPass();
 
 	state->EndPerfEvent();
 }

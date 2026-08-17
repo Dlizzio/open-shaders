@@ -46,7 +46,7 @@ void BokehResources::Setup()
 			.MaxLOD = D3D11_FLOAT32_MAX
 		};
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, bokehSampler.put()));
-		Util::SetResourceName(bokehSampler.get(), "Post Processing Bokeh Sampler");
+		Util::SetResourceName(bokehSampler.get(), "PostProcessing::Bokeh::Sampler");
 	}
 }
 
@@ -80,7 +80,7 @@ bool BokehResources::LoadTextureFromFile(const std::filesystem::path& path, int 
 		return false;
 	}
 
-	auto resourceName = std::format("Post Processing Bokeh Shape {}", index);
+	auto resourceName = std::format("PostProcessing::Bokeh::Shape{}", index);
 	texBokehShapes[index] = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pRsrc), resourceName.c_str());
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
@@ -202,7 +202,7 @@ bool BokehResources::BuildShapeSamples(const DirectX::ScratchImage& image, int i
 		samples[i] = { x, y, std::clamp((normalizedRadius - 0.2f) * 1.25f, 0.0f, 1.0f), normalizedRadius };
 	}
 
-	auto bufferName = std::format("BokehResources::ShapeSamples{}", index);
+	auto bufferName = std::format("PostProcessing::Bokeh::ShapeSamples{}", index);
 	shapeSampleBuffers[index] = eastl::make_unique<StructuredBuffer>(
 		StructuredBufferDesc<ShapeSample>((uint64_t)GATHER_SAMPLE_COUNT, false, true), GATHER_SAMPLE_COUNT, bufferName.c_str());
 	shapeSampleBuffers[index]->CreateSRV();

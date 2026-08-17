@@ -1,6 +1,7 @@
 #include "LocalExposure.h"
 
 #include "Features/PostProcessing.h"
+#include "GpuPass.h"
 #include "HistogramAutoExposure.h"
 #include "I18n/I18n.h"
 #include "State.h"
@@ -74,9 +75,10 @@ void LocalExposure::DrawSettings()
 
 	if (ImGui::CollapsingHeader(T("feature.post_processing.local_exposure.debug", "Debug"))) {
 		static float debugRescale = .3f;
+		const float debugTextureScale = debugRescale * Util::GetUIScale();
 		ImGui::SliderFloat(T("feature.post_processing.local_exposure.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
-		BUFFER_VIEWER_NODE_TITLE(texBaseLuminance, "Edge-aware Base Log Luminance", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texLogLuminance, "Scene Log Luminance", debugRescale);
+		BUFFER_VIEWER_NODE_TITLE(texBaseLuminance, "Edge-aware Base Log Luminance", debugTextureScale);
+		BUFFER_VIEWER_NODE_TITLE(texLogLuminance, "Scene Log Luminance", debugTextureScale);
 	}
 }
 
@@ -118,6 +120,7 @@ void LocalExposure::SetupResources()
 	}
 
 	auto createMipViews = [](Texture2D& texture,
+							  const char* resourceName,
 							  DXGI_FORMAT format,
 							  uint mipCount,
 							  std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_MaxMips>& srvs,
@@ -130,12 +133,14 @@ void LocalExposure::SetupResources()
 			srvDesc.Texture2D.MostDetailedMip = i;
 			srvDesc.Texture2D.MipLevels = 1;
 			DX::ThrowIfFailed(device->CreateShaderResourceView(texture.resource.get(), &srvDesc, srvs[i].put()));
+			Util::SetResourceName(srvs[i].get(), "%s SRV mip%u", resourceName, i);
 
 			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 			uavDesc.Format = format;
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 			uavDesc.Texture2D.MipSlice = i;
 			DX::ThrowIfFailed(device->CreateUnorderedAccessView(texture.resource.get(), &uavDesc, uavs[i].put()));
+			Util::SetResourceName(uavs[i].get(), "%s UAV mip%u", resourceName, i);
 		}
 	};
 
@@ -151,7 +156,7 @@ void LocalExposure::SetupResources()
 		texDesc.Usage = D3D11_USAGE_DEFAULT;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
-		texLogLuminance = eastl::make_unique<Texture2D>(texDesc, "LocalExposure Log Luminance");
+		texLogLuminance = eastl::make_unique<Texture2D>(texDesc, "PostProcessing::LocalExposure::LogLuminance");
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC fullSrvDesc = {};
 		fullSrvDesc.Format = texDesc.Format;
@@ -160,7 +165,7 @@ void LocalExposure::SetupResources()
 		fullSrvDesc.Texture2D.MipLevels = numMips;
 		texLogLuminance->CreateSRV(fullSrvDesc);
 
-		createMipViews(*texLogLuminance, DXGI_FORMAT_R16_FLOAT, numMips, logLuminanceMipSRVs, logLuminanceMipUAVs);
+		createMipViews(*texLogLuminance, "PostProcessing::LocalExposure::LogLuminance", DXGI_FORMAT_R16_FLOAT, numMips, logLuminanceMipSRVs, logLuminanceMipUAVs);
 	}
 
 	// Create the edge-aware luminance grid.
@@ -174,7 +179,7 @@ void LocalExposure::SetupResources()
 		texDesc.Usage = D3D11_USAGE_DEFAULT;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
-		texLuminanceGrid = eastl::make_unique<Texture3D>(texDesc, "LocalExposure Luminance Grid");
+		texLuminanceGrid = eastl::make_unique<Texture3D>(texDesc, "PostProcessing::LocalExposure::LuminanceGrid");
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		srvDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
@@ -222,8 +227,8 @@ void LocalExposure::SetupResources()
 			texture->CreateUAV(uavDesc);
 		};
 
-		createBlurTexture(texBlurTemp, "LocalExposure Blur Temp");
-		createBlurTexture(texBlurredLuminance, "LocalExposure Blurred Luminance");
+		createBlurTexture(texBlurTemp, "PostProcessing::LocalExposure::BlurTemp");
+		createBlurTexture(texBlurredLuminance, "PostProcessing::LocalExposure::BlurredLuminance");
 	}
 
 	// Create output base-luminance texture (full resolution, R16F)
@@ -238,7 +243,7 @@ void LocalExposure::SetupResources()
 		texDesc.Usage = D3D11_USAGE_DEFAULT;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
-		texBaseLuminance = eastl::make_unique<Texture2D>(texDesc, "LocalExposure Base Luminance");
+		texBaseLuminance = eastl::make_unique<Texture2D>(texDesc, "PostProcessing::LocalExposure::BaseLuminance");
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		srvDesc.Format = DXGI_FORMAT_R16_FLOAT;
@@ -265,14 +270,16 @@ void LocalExposure::SetupResources()
 
 		auto device = globals::d3d::device;
 		DX::ThrowIfFailed(device->CreateSamplerState(&sampDesc, linearSampler.put()));
+		Util::SetResourceName(linearSampler.get(), "PostProcessing::LocalExposure::LinearSampler");
 
 		sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_MIRROR;
 		sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_MIRROR;
 		DX::ThrowIfFailed(device->CreateSamplerState(&sampDesc, mirrorSampler.put()));
+		Util::SetResourceName(mirrorSampler.get(), "PostProcessing::LocalExposure::MirrorSampler");
 	}
 
 	// Create constant buffer
-	localExposureCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<LocalExposureCB>());
+	localExposureCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<LocalExposureCB>(), "PostProcessing::LocalExposure::Constants");
 
 	CompileComputeShaders();
 }
@@ -383,8 +390,7 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 
 	// === Pass 1: Set up scene log luminance ===
 	{
-		globals::profiler->BeginPass("PostProcessing::LocalExposure::Setup");
-		state->BeginPerfEvent("Setup Log Luminance");
+		CS_GPU_PASS("PostProcessing::LocalExposure::Setup");
 
 		srvs[0] = inout_tex.srv;
 		uavs[0] = logLuminanceMipUAVs[0].get();
@@ -394,14 +400,11 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		context->Dispatch((fullW + 7) >> 3, (fullH + 7) >> 3, 1);
 
 		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// === Pass 2: Build the broad-base mip chain ===
 	{
-		globals::profiler->BeginPass("PostProcessing::LocalExposure::Pyramid");
-		state->BeginPerfEvent("Build Luminance Pyramid");
+		CS_GPU_PASS("PostProcessing::LocalExposure::Pyramid");
 
 		for (uint i = 1; i <= blurMip; i++) {
 			srvs[1] = logLuminanceMipSRVs[i - 1].get();
@@ -415,15 +418,11 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 			context->Dispatch((mipW + 7) >> 3, (mipH + 7) >> 3, 1);
 			resetViews();
 		}
-
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// === Pass 3: Blur broad luminance ===
 	{
-		globals::profiler->BeginPass("PostProcessing::LocalExposure::Blur");
-		state->BeginPerfEvent("Blur Broad Luminance");
+		CS_GPU_PASS("PostProcessing::LocalExposure::Blur");
 
 		srvs[1] = logLuminanceMipSRVs[blurMip].get();
 		uavs[0] = texBlurTemp->uav.get();
@@ -440,15 +439,11 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		context->CSSetShader(blurVerticalCS.get(), nullptr, 0);
 		context->Dispatch((blurWidth + 7) >> 3, (blurHeight + 7) >> 3, 1);
 		resetViews();
-
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// === Pass 4: Build the edge-aware luminance grid ===
 	{
-		globals::profiler->BeginPass("PostProcessing::LocalExposure::Grid");
-		state->BeginPerfEvent("Build Edge-aware Grid");
+		CS_GPU_PASS("PostProcessing::LocalExposure::Grid");
 
 		srvs[1] = logLuminanceMipSRVs[0].get();
 		uavs[1] = texLuminanceGrid->uav.get();
@@ -458,14 +453,11 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		context->Dispatch(texLuminanceGrid->desc.Width, texLuminanceGrid->desc.Height, 1);
 
 		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// === Pass 5: Resolve the base layer ===
 	{
-		globals::profiler->BeginPass("PostProcessing::LocalExposure::Resolve");
-		state->BeginPerfEvent("Resolve Base Luminance");
+		CS_GPU_PASS("PostProcessing::LocalExposure::Resolve");
 
 		srvs[1] = texLogLuminance->srv.get();
 		srvs[2] = texLuminanceGrid->srv.get();
@@ -477,8 +469,6 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		context->Dispatch((fullW + 7) >> 3, (fullH + 7) >> 3, 1);
 
 		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 
 	// Cleanup

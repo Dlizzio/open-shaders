@@ -529,20 +529,27 @@ bool Effects11::ReplacedTonemapperThisFrame() const
 	return tonemapReplacedFrame == globals::state->frameCount;
 }
 
-bool Effects11::HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
+bool Effects11::WantsTonemapOwnership()
 {
 	CheckCommonData();
 
-	auto& settingManager = SettingManager::GetSingleton();
 	auto& effectManager = EffectManager::GetSingleton();
+	if (!effectManager.IsInitialized())
+		return false;
 
-	if (enableEffect && !settingManager.GetValue<bool>("UseOriginalPostProcessing", "EFFECT")) {
-		auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
-		// Only claim the tonemap pass if the effect chain actually wrote the output
-		if (effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output])) {
-			tonemapReplacedFrame = globals::state->frameCount;
-			return true;
-		}
+	return enableEffect && !SettingManager::GetSingleton().GetValue<bool>("UseOriginalPostProcessing", "EFFECT");
+}
+
+bool Effects11::RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
+{
+	auto& effectManager = EffectManager::GetSingleton();
+	if (!effectManager.IsInitialized())
+		return false;
+
+	auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
+	if (effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output])) {
+		tonemapReplacedFrame = globals::state->frameCount;
+		return true;
 	}
 	return false;
 }

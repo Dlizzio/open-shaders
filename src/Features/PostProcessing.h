@@ -88,7 +88,7 @@ struct PostProcessing : Feature
 	 * @brief Whether Effects11 replaced the tonemap this frame.
 	 *
 	 * The pipeline's output is discarded in that case, so every entry point that would
-	 * write to a game render target must bail out rather than do work nothing consumes.
+	 * write to a game render target must bail out rather than perform unused work.
 	 */
 	bool IsTonemapOwnedByEffects11() const;
 
@@ -189,9 +189,7 @@ struct PostProcessing : Feature
 
 	/////////////////////////////////////////////////////////////////////////////////
 
-	// Tonemap-time entry is driven by PostProcessingExtensions::Main_HDRTonemapBlendCinematic_Render
-	// (Hooks.cpp), which arbitrates between this feature and Effects11. Only the refraction
-	// hook remains here, and it just flags which buffer the scene currently lives in.
+	// The shared tonemap hook arbitrates between this feature and Effects11.
 
 	struct BSImagespaceShaderRefraction_SetupTechnique
 	{
