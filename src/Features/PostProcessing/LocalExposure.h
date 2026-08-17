@@ -64,6 +64,7 @@ struct LocalExposure : public PostProcessFeature
 		float LogLuminanceMax;
 		float Padding1[2];
 	};
+	static_assert(sizeof(LocalExposureCB) == 80, "LocalExposureCB must match the HLSL layouts");
 
 	std::unique_ptr<ConstantBuffer> localExposureCB = nullptr;
 

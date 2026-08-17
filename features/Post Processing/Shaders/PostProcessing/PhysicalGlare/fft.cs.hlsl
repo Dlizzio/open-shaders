@@ -80,7 +80,7 @@ float2 Twiddle(uint k, uint N)
 // selected shader variant, so every launched thread contributes useful work.
 [numthreads(FFT_SIZE, 1, 1)] void CS_FFT(uint3 groupId : SV_GroupID, uint threadIdx : SV_GroupThreadID) {
 	uint lineIdx = groupId.x;  // which row or column
-	uint N = FFTResolution;
+	const uint N = FFT_SIZE;
 
 	// Load directly into bit-reversed order. This is identical to the previous
 	// load -> bit-reversal -> copy sequence, without two extra group barriers.

@@ -72,25 +72,44 @@ bool BokehResources::LoadTextureFromFile(const std::filesystem::path& path, int 
 		return false;
 	}
 
-	ID3D11Resource* pRsrc = nullptr;
+	const auto& metadata = image.GetMetadata();
+	if (metadata.dimension != DirectX::TEX_DIMENSION_TEXTURE2D || metadata.arraySize != 1) {
+		logger::warn("BokehResources: Bokeh shape must be a single 2D texture: {}", path.string());
+		return false;
+	}
+
+	winrt::com_ptr<ID3D11Resource> resource;
 	try {
-		DX::ThrowIfFailed(CreateTexture(device, image.GetImages(), image.GetImageCount(), image.GetMetadata(), &pRsrc));
+		DX::ThrowIfFailed(CreateTexture(device, image.GetImages(), image.GetImageCount(), metadata, resource.put()));
 	} catch (std::runtime_error& e) {
 		logger::warn("BokehResources: Error creating texture for bokeh shape {}: {}", path.string(), e.what());
 		return false;
 	}
 
-	auto resourceName = std::format("PostProcessing::Bokeh::Shape{}", index);
-	texBokehShapes[index] = eastl::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pRsrc), resourceName.c_str());
+	winrt::com_ptr<ID3D11Texture2D> texture;
+	if (FAILED(resource->QueryInterface(IID_PPV_ARGS(texture.put())))) {
+		logger::warn("BokehResources: Bokeh shape is not a 2D texture: {}", path.string());
+		return false;
+	}
 
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-		.Format = texBokehShapes[index]->desc.Format,
-		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-		.Texture2D = {
-			.MostDetailedMip = 0,
-			.MipLevels = 1 }
-	};
-	texBokehShapes[index]->CreateSRV(srvDesc);
+	auto resourceName = std::format("PostProcessing::Bokeh::Shape{}", index);
+	try {
+		texBokehShapes[index] = eastl::make_unique<Texture2D>(texture.detach(), resourceName.c_str());
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = texBokehShapes[index]->desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = {
+				.MostDetailedMip = 0,
+				.MipLevels = 1 }
+		};
+		texBokehShapes[index]->CreateSRV(srvDesc);
+	} catch (std::runtime_error& e) {
+		logger::warn("BokehResources: Error creating texture view for bokeh shape {}: {}", path.string(), e.what());
+		texBokehShapes[index].reset();
+		return false;
+	}
+
 	if (!BuildShapeSamples(image, index)) {
 		logger::warn("BokehResources: Failed to generate gather samples for bokeh shape {}", path.string());
 		texBokehShapes[index].reset();

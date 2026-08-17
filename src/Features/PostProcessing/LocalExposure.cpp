@@ -171,7 +171,13 @@ void LocalExposure::SetupResources()
 	// Create the edge-aware luminance grid.
 	{
 		D3D11_TEXTURE3D_DESC texDesc = {};
-		texDesc.Width = (fullW + s_GridTileSize - 1) / s_GridTileSize;
+		if (globals::game::isVR) {
+			assert(fullW % 2u == 0u);
+			const uint eyeWidth = fullW / 2u;
+			texDesc.Width = 2u * ((eyeWidth + s_GridTileSize - 1u) / s_GridTileSize);
+		} else {
+			texDesc.Width = (fullW + s_GridTileSize - 1u) / s_GridTileSize;
+		}
 		texDesc.Height = (fullH + s_GridTileSize - 1) / s_GridTileSize;
 		texDesc.Depth = s_GridDepth;
 		texDesc.MipLevels = 1;
