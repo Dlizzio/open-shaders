@@ -7,7 +7,6 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
-#include "../SceneSettingsUI.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
@@ -27,7 +26,6 @@ namespace
 		constexpr const char* kClouds = "Clouds";
 		constexpr const char* kFog = "Fog";
 		constexpr const char* kRecords = "Records";
-		constexpr const char* kSceneSettings = "Scene Settings";
 	}
 
 	namespace WeatherSetting
@@ -221,7 +219,6 @@ void WeatherWidget::DrawWidget()
 		const ImGuiTabItemFlags cloudsFlags = GetTabFlagsForOverride(WeatherTab::kClouds);
 		const ImGuiTabItemFlags fogFlags = GetTabFlagsForOverride(WeatherTab::kFog);
 		const ImGuiTabItemFlags recordsFlags = GetTabFlagsForOverride(WeatherTab::kRecords);
-		const ImGuiTabItemFlags sceneFlags = GetTabFlagsForOverride(WeatherTab::kSceneSettings);
 
 		if (ImGui::BeginTabItem(T(TKEY("basic"), WeatherTab::kBasic), nullptr, basicFlags)) {
 			BeginScrollableContent("##BasicScroll");
@@ -403,12 +400,6 @@ void WeatherWidget::DrawWidget()
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T("feature.scene_manager.weather.title", "Scene Settings"), nullptr, sceneFlags)) {
-			BeginScrollableContent("##SceneScroll");
-			SceneSettingsUI::DrawWeatherScenePanel(weather->GetFormID());
-			EndScrollableContent();
-			ImGui::EndTabItem();
-		}
 		ImGui::EndTabBar();
 	}
 	ImGui::End();
@@ -640,7 +631,6 @@ void WeatherWidget::SetWeatherValues()
 	}
 	weather->precipitationData = settings.precipitationData;
 	weather->referenceEffect = settings.referenceEffect;
-
 }
 
 void WeatherWidget::InitializeInheritFlags()

@@ -22,6 +22,10 @@ namespace SceneManagerUI
 			SceneSettingsUI::DrawLocationPanel();
 			ImGui::EndTabItem();
 		}
+		if (ImGui::BeginTabItem(T("feature.scene_manager.tab.weather", "Weather"))) {
+			SceneSettingsUI::DrawWeatherPanel();
+			ImGui::EndTabItem();
+		}
 
 		ImGui::EndTabBar();
 	}

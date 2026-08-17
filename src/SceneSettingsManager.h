@@ -8,8 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <map>
 #include <limits>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
@@ -76,7 +76,7 @@ public:
 
 	// --- Event Handler ---
 
-	/// Listens for LoadingMenu close to detect cell transitions.
+	/// Listens for LoadingMenu close so loaded locations apply without an in-world fade.
 	/// Defers reset work until the menu closes.
 	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 	{
@@ -117,14 +117,14 @@ public:
 
 	struct SettingEntry
 	{
-		std::string featureShortName;  // Feature's GetShortName()
-		std::vector<std::string> settingPath;  // Feature-owned subfeature/object path
-		std::string settingKey;        // Feature-owned scene setting key
-		std::string displayName;       // Cached UI label
-		json value;                    // Override value (bool, float, int, etc.)
-		json originalValue;            // Value at time of creation, for revert
+		std::string featureShortName;              // Feature's GetShortName()
+		std::vector<std::string> settingPath;      // Feature-owned subfeature/object path
+		std::string settingKey;                    // Feature-owned scene setting key
+		std::string displayName;                   // Cached UI label
+		json value;                                // Override value (bool, float, int, etc.)
+		json originalValue;                        // Value at time of creation, for revert
 		json serializedTemplate = json::object();  // Preserved forward-compatible fields
-		bool paused = false;           // Temporarily disabled
+		bool paused = false;                       // Temporarily disabled
 		EntrySource source = EntrySource::User;
 		std::string sourceFilename;                       // For overwrites: the filename it came from
 		std::filesystem::path sourcePath;                 // For overwrites: exact file path
@@ -183,8 +183,8 @@ public:
 	/// Called every frame from State::Update().
 	void Update();
 
-	/// Called by MenuOpenCloseEventHandler when a cell transition is detected.
-	void OnCellTransition();
+	/// Applies the new location immediately after a loading-screen transition.
+	void OnLoadingTransition();
 
 	/// Check if any scene settings are active for a given feature
 	bool HasActiveSettingsForFeature(const std::string& featureShortName) const;
@@ -408,7 +408,7 @@ public:
 
 	enum class LocationTargetType
 	{
-		Category,
+		Region,
 		Location,
 		Cell
 	};
@@ -431,8 +431,10 @@ public:
 		std::vector<SettingEntry> entries;
 	};
 
-	/// Return cached current targets in category, parent-location, and cell priority order.
+	/// Return cached current targets in region, parent-location, and cell priority order.
 	const std::vector<LocationTarget>& GetCurrentLocationTargets() const;
+	/// Return all region, location, and named cell targets available for persistent management.
+	const std::vector<LocationTarget>& GetLocationManagementTargets() const;
 	const LocationSceneConfig& GetLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	bool HasLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	bool AddLocationSetting(LocationTargetType type, const std::string& formKey, const std::string& name,
@@ -596,7 +598,7 @@ private:
 	static constexpr auto kDeferredSaveDelay = std::chrono::milliseconds(250);
 	static constexpr auto kDeferredSaveRetryDelay = std::chrono::seconds(2);
 
-	std::atomic<bool> queuedCellTransition = false;
+	std::atomic<bool> queuedLoadingTransition = false;
 
 	/// Float epsilon - changes smaller than this skip the LoadSettings call.
 	static constexpr float kBlendEpsilon = 1e-3f;
@@ -655,6 +657,15 @@ private:
 	};
 	std::map<std::string, ApplyFailureState> applyFailures;
 	std::map<std::string, ApplyFailureState> transitionApplyFailures;
+	struct PendingApplyVerification
+	{
+		std::uint32_t appliedFrame = 0;
+		std::vector<CatalogSceneSettingUpdate> updates;
+		size_t signature = 0;
+		bool transition = false;
+	};
+	std::map<std::string, PendingApplyVerification> pendingApplyVerifications;
+	std::map<std::string, json> featureApplyDocuments;
 	static constexpr auto kApplyRetryDelay = std::chrono::seconds(2);
 	bool resolverDirty = true;
 	bool resolverSuspended = false;
@@ -664,6 +675,7 @@ private:
 	bool lastResolvedInterior = false;
 	RE::FormID lastResolvedLocationId = 0;
 	RE::FormID lastResolvedCellId = 0;
+	RE::FormID lastResolvedWorldspaceId = 0;
 	float lastResolvedHour = -1.0f;
 	RE::FormID lastResolvedCurrentWeatherId = 0;
 	RE::FormID lastResolvedPreviousWeatherId = 0;
@@ -671,8 +683,11 @@ private:
 	mutable RE::FormID cachedPreviousWeatherId = 0;
 	mutable RE::FormID cachedTargetLocationId = 0;
 	mutable RE::FormID cachedTargetCellId = 0;
+	mutable RE::FormID cachedTargetRegionId = 0;
 	mutable bool locationTargetsCached = false;
 	mutable std::vector<LocationTarget> cachedLocationTargets;
+	mutable bool locationManagementTargetsCached = false;
+	mutable std::vector<LocationTarget> cachedLocationManagementTargets;
 
 	struct LocationTransition
 	{
@@ -720,7 +735,7 @@ private:
 	const PeriodSettingMap& BuildWeatherValueGroups(RE::FormID weatherId) const;
 
 	// --- Central runtime resolver ---
-	void ResolveAndApply(bool force = false);
+	void ResolveAndApply(bool force = false, bool allowLocationTransitions = true);
 	bool HasActiveSceneEntriesCached();
 	ResolvedSettingMap& BuildResolvedSettings(bool collectLocationTransitionDurations);
 	void ApplyResolvedSettings(const ResolvedSettingMap& resolved, bool forceRetry);
@@ -751,8 +766,11 @@ private:
 	static bool ResolvedValuesEqual(const json& lhs, const json& rhs);
 	static size_t GetCatalogUpdateSignature(std::string_view featureShortName,
 		std::span<const CatalogSceneSettingUpdate> updates);
-	static bool ApplyCatalogSceneSettings(
+	bool ApplyCatalogSceneSettings(
 		Feature& feature, const std::vector<CatalogSceneSettingUpdate>& updates);
+	void ScheduleApplyVerification(std::string_view featureShortName,
+		const std::vector<CatalogSceneSettingUpdate>& updates, size_t signature, bool transition);
+	void VerifyPendingApplies();
 
 	// --- Per-Location helpers ---
 	static std::string GetLocationConfigKey(LocationTargetType type, std::string_view formKey);

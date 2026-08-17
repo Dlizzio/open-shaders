@@ -29,10 +29,10 @@
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
+#include "Features/SceneManager.h"
 #include "Features/SceneSelector.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
-#include "Features/SceneManager.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -53,12 +53,9 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
-#include "Utils/Format.h"
-#include "WeatherManager.h"
-#include "WeatherVariableRegistry.h"
-
 #include "State.h"
 #include "TruePBR.h"
+#include "Utils/Format.h"
 
 void Feature::Load(json& o_json)
 {

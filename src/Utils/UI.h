@@ -486,16 +486,6 @@ namespace Util
 	 */
 	float GetCenterOffsetForContent(float contentWidth);
 
-	/** @brief Controls that respect the independent weather override registry. */
-	namespace WeatherUI
-	{
-		bool IsWeatherControlled(Feature* feature, const char* settingName);
-		bool SliderFloat(const char* label, Feature* feature, const char* settingName, float* value, float min, float max, const char* format = "%.3f");
-		bool Checkbox(const char* label, Feature* feature, const char* settingName, bool* value);
-		bool ColorEdit3(const char* label, Feature* feature, const char* settingName, float col[3]);
-		bool ColorEdit4(const char* label, Feature* feature, const char* settingName, float col[4]);
-	}
-
 	/**
 	 * Constraint-aware UI helpers
 	 * These functions automatically check if a setting is constrained by another feature
@@ -1806,6 +1796,9 @@ namespace Util
 	{
 	public:
 		FlyoutScope(FlyoutState& state, ImGuiID itemId, bool sourcePressed, const FlyoutStyle& style);
+		/// Opens a flyout anchored to an explicit source rectangle.
+		FlyoutScope(FlyoutState& state, ImGuiID itemId, bool sourcePressed,
+			const ImVec2& sourceMin, const ImVec2& sourceMax, const FlyoutStyle& style);
 		~FlyoutScope();
 
 		FlyoutScope(const FlyoutScope&) = delete;

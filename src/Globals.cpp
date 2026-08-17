@@ -26,10 +26,10 @@
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
+#include "Features/SceneManager.h"
 #include "Features/SceneSelector.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
-#include "Features/SceneManager.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -54,7 +54,6 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/Game.h"
-#include "WeatherManager.h"
 
 namespace globals
 {
@@ -191,7 +190,6 @@ namespace globals
 	Deferred* deferred = nullptr;
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
-	WeatherManager* weatherManager = nullptr;
 	SceneSettingsManager* sceneSettingsManager = nullptr;
 
 	static Profiler profilerInstance;
@@ -203,7 +201,6 @@ namespace globals
 		state = State::GetSingleton();
 		menu = Menu::GetSingleton();
 		deferred = Deferred::GetSingleton();
-		weatherManager = WeatherManager::GetSingleton();
 		sceneSettingsManager = SceneSettingsManager::GetSingleton();
 	}
 

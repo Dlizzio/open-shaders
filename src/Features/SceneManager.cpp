@@ -12,7 +12,7 @@ std::pair<std::string, std::vector<std::string>> SceneManager::GetFeatureSummary
 		{
 			T("feature.scene_manager.key_feature_1", "Blends exterior settings across time of day and weather transitions"),
 			T("feature.scene_manager.key_feature_2", "Applies interior settings separately from exterior settings"),
-			T("feature.scene_manager.key_feature_3", "Supports location and cell overrides with per-setting precedence"),
+			T("feature.scene_manager.key_feature_3", "Supports region, location, and cell overrides with per-setting precedence"),
 		},
 	};
 }

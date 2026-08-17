@@ -127,6 +127,7 @@ namespace SceneSettingsUI
 		bool addedMembersCached = false;
 		std::uint64_t cachedAddedRevision = 0;
 		bool shiftWasDown = false;
+		bool measureInitialLayout = false;
 		CopySettingState copy;
 
 		void Reset()
@@ -143,6 +144,7 @@ namespace SceneSettingsUI
 			addedMembersCached = false;
 			cachedAddedRevision = 0;
 			shiftWasDown = false;
+			measureInitialLayout = false;
 			copy.Reset();
 		}
 	};
@@ -260,7 +262,10 @@ namespace SceneSettingsUI
 	/// Draw the full Time of Day settings panel.
 	void DrawTimeOfDayPanel();
 
-	/// Draw the per-weather scene settings panel.
+	/// Draw the weather settings panel and target browser.
+	void DrawWeatherPanel();
+
+	/// Draw scene settings for one weather record.
 	void DrawWeatherScenePanel(RE::FormID weatherId);
 
 	/// Draw settings for the current location hierarchy or cell.

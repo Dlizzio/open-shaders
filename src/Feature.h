@@ -419,9 +419,6 @@ public:
 	 */
 	virtual WeatherAnalysisConfig GetWeatherAnalysisConfig() const { return {}; }
 
-	/** @brief Registers weather-controllable variables for this feature. */
-	virtual void RegisterWeatherVariables() {}
-
 	/**
 	 * @brief Returns constraints this feature imposes on other features' settings
 	 *

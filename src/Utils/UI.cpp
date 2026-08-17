@@ -10,8 +10,6 @@
 #include "Menu/ThemeManager.h"
 #include "PerfUtils.h"
 #include "ShaderCache.h"
-#include "WeatherManager.h"
-#include "WeatherVariableRegistry.h"
 
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
@@ -2680,82 +2678,6 @@ namespace Util
 		return clicked;
 	}
 
-	namespace WeatherUI
-	{
-		bool IsWeatherControlled(Feature* feature, const char* settingName)
-		{
-			if (!feature || !settingName)
-				return false;
-
-			auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			const std::string featureName = feature->GetShortName();
-			if (!registry->HasWeatherSupport(featureName))
-				return false;
-			if (registry->IsFeatureVariableInTransition(featureName, settingName))
-				return true;
-
-			const auto currentWeathers = globals::weatherManager->GetCurrentWeathers();
-			if (!currentWeathers.currentWeather)
-				return false;
-
-			json weatherSettings;
-			return globals::weatherManager->LoadSettingsFromWeather(
-					   currentWeathers.currentWeather, featureName, weatherSettings) &&
-			       weatherSettings.contains(settingName) && !weatherSettings[settingName].is_null();
-		}
-
-		namespace
-		{
-			void DrawControlledTooltip()
-			{
-				if (!ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-					return;
-
-				const auto currentWeathers = globals::weatherManager->GetCurrentWeathers();
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				Util::Text::Warning("%s", T("ui.weather_override_active", "Weather Override Active"));
-				ImGui::TextWrapped(
-					T("ui.weather_setting_controlled", "This setting is controlled by the current weather (%s)."),
-					currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
-			}
-
-			template <class Draw>
-			bool DrawControl(bool controlled, Draw&& draw)
-			{
-				const DisableGuard disabled(controlled);
-				const bool changed = std::forward<Draw>(draw)();
-				if (controlled)
-					DrawControlledTooltip();
-				return !controlled && changed;
-			}
-		}
-
-		bool SliderFloat(const char* label, Feature* feature, const char* settingName, float* value, float min, float max, const char* format)
-		{
-			return DrawControl(IsWeatherControlled(feature, settingName), [&] {
-				return ImGui::SliderFloat(label, value, min, max, format);
-			});
-		}
-
-		bool Checkbox(const char* label, Feature* feature, const char* settingName, bool* value)
-		{
-			return DrawControl(IsWeatherControlled(feature, settingName), [&] { return ImGui::Checkbox(label, value); });
-		}
-
-		bool ColorEdit3(const char* label, Feature* feature, const char* settingName, float col[3])
-		{
-			return DrawControl(IsWeatherControlled(feature, settingName), [&] { return ImGui::ColorEdit3(label, col); });
-		}
-
-		bool ColorEdit4(const char* label, Feature* feature, const char* settingName, float col[4])
-		{
-			return DrawControl(IsWeatherControlled(feature, settingName), [&] { return ImGui::ColorEdit4(label, col); });
-		}
-	}
-
 	bool InputComboWidget(
 		const char* label,
 		std::vector<InputCombo>& combo,
@@ -3042,11 +2964,13 @@ namespace Util
 			return pos;
 		}
 
-		bool BeginFlyoutImpl(FlyoutState& state, ImGuiID itemId, bool sourcePressed, const FlyoutStyle& flyoutStyle)
+		bool BeginFlyoutImpl(FlyoutState& state, ImGuiID itemId, bool sourcePressed,
+			const FlyoutStyle& flyoutStyle, const ImVec2* explicitSourceMin = nullptr,
+			const ImVec2* explicitSourceMax = nullptr)
 		{
 			const ImGuiID submittedItemId = ImGui::GetItemID();
-			const ImVec2 sourceMin = ImGui::GetItemRectMin();
-			const ImVec2 sourceMax = ImGui::GetItemRectMax();
+			const ImVec2 sourceMin = explicitSourceMin ? *explicitSourceMin : ImGui::GetItemRectMin();
+			const ImVec2 sourceMax = explicitSourceMax ? *explicitSourceMax : ImGui::GetItemRectMax();
 
 			const int currentFrame = ImGui::GetFrameCount();
 			if (state.lastFrame >= 0 && currentFrame > state.lastFrame + 1)
@@ -3217,6 +3141,13 @@ namespace Util
 		FlyoutState& flyoutState, ImGuiID itemId, bool sourcePressed, const FlyoutStyle& flyoutStyle)
 	{
 		if (BeginFlyoutImpl(flyoutState, itemId, sourcePressed, flyoutStyle))
+			state = &flyoutState;
+	}
+
+	FlyoutScope::FlyoutScope(FlyoutState& flyoutState, ImGuiID itemId, bool sourcePressed,
+		const ImVec2& sourceMin, const ImVec2& sourceMax, const FlyoutStyle& flyoutStyle)
+	{
+		if (BeginFlyoutImpl(flyoutState, itemId, sourcePressed, flyoutStyle, &sourceMin, &sourceMax))
 			state = &flyoutState;
 	}
 

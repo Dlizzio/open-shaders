@@ -17,8 +17,8 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
-#include "Features/SceneSelector.h"
 #include "Features/SceneManager.h"
+#include "Features/SceneSelector.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -37,8 +37,6 @@
 #include "Utils/Game.h"
 #include "Utils/SphericalHarmonics.h"
 #include "VRAPI/CSpluginapi.h"
-#include "WeatherManager.h"
-#include "WeatherVariableRegistry.h"
 
 #ifdef TRACY_ENABLE
 static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
@@ -65,23 +63,15 @@ void State::Draw()
 		globals::features::sceneManager.Update();
 
 	auto shaderCache = globals::shaderCache;
-	auto weatherManager = globals::weatherManager;
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
-	auto& csEditor = globals::features::csEditor;
-	auto& sceneSelector = globals::features::sceneSelector;
 	auto& skin = globals::features::skin;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
 	auto& volumetricShadows = globals::features::volumetricShadows;
 
 	if (shaderCache->IsEnabled()) {
-		if (csEditor.loaded || sceneSelector.loaded) {
-			ZoneScopedN("WeatherManager::UpdateFeatures");
-			weatherManager->UpdateFeatures();
-		}
-
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			ZoneScopedN("TerrainBlending::TerrainShaderHacks");
 			terrainBlending.TerrainShaderHacks();
@@ -312,8 +302,6 @@ void State::Setup()
 
 	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
 	globals::deferred->SetupResources();
-
-	globals::weatherManager->LoadPerWeatherSettingsFromDisk();
 }
 
 static std::string GetConfigPath(State::ConfigMode a_configMode)
@@ -531,8 +519,6 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 					// Load base feature settings from merged config (default + user)
 					feature->Load(settings);
 
-					feature->RegisterWeatherVariables();
-
 					// Apply feature-specific overrides on top (overrides take priority over user settings)
 					if (feature->UsesMainSettings() && overridesDiscovered > 0 && overrideManager->HasFeatureOverrides(featureName)) {
 						json featureJson;
@@ -557,7 +543,6 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 						}
 					}
 
-					WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(featureName);
 				} else {
 					logger::info("Feature '{}' is disabled at boot.", featureName);
 				}
