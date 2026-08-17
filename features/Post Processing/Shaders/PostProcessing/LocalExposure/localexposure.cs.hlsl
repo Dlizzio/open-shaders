@@ -50,16 +50,6 @@ SamplerState MirrorSampler : register(s1);
 RWTexture2D<float> RWTexOutput : register(u0);
 RWTexture3D<float2> RWTexLuminanceGrid : register(u1);
 
-float2 ClampLocalExposureUVToEye(float2 uv, uint eyeIndex, uint textureWidth)
-{
-#if defined(VR)
-	float halfTexel = 0.5 / max((float)textureWidth, 1.0);
-	float2 eyeBounds = eyeIndex == 0 ? float2(halfTexel, 0.5 - halfTexel) : float2(0.5 + halfTexel, 1.0 - halfTexel);
-	uv.x = clamp(uv.x, eyeBounds.x, eyeBounds.y);
-#endif
-	return uv;
-}
-
 float SceneLogLuminance(float3 color)
 {
 	float luminance = Color::RGBToLuminance(max(color, 0.0));
@@ -87,10 +77,10 @@ float SceneLogLuminance(float3 color)
 	float2 radius = 0.5 / float2(inputSize);
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 	float result = 0.0;
-	result += TexLogLuminance.SampleLevel(LinearSampler, ClampLocalExposureUVToEye(uv + float2(-radius.x, -radius.y), eyeIndex, inputSize.x), 0);
-	result += TexLogLuminance.SampleLevel(LinearSampler, ClampLocalExposureUVToEye(uv + float2(radius.x, -radius.y), eyeIndex, inputSize.x), 0);
-	result += TexLogLuminance.SampleLevel(LinearSampler, ClampLocalExposureUVToEye(uv + float2(-radius.x, radius.y), eyeIndex, inputSize.x), 0);
-	result += TexLogLuminance.SampleLevel(LinearSampler, ClampLocalExposureUVToEye(uv + float2(radius.x, radius.y), eyeIndex, inputSize.x), 0);
+	result += TexLogLuminance.SampleLevel(LinearSampler, Stereo::ClampToEyeUV(uv + float2(-radius.x, -radius.y), eyeIndex, inputSize), 0);
+	result += TexLogLuminance.SampleLevel(LinearSampler, Stereo::ClampToEyeUV(uv + float2(radius.x, -radius.y), eyeIndex, inputSize), 0);
+	result += TexLogLuminance.SampleLevel(LinearSampler, Stereo::ClampToEyeUV(uv + float2(-radius.x, radius.y), eyeIndex, inputSize), 0);
+	result += TexLogLuminance.SampleLevel(LinearSampler, Stereo::ClampToEyeUV(uv + float2(radius.x, radius.y), eyeIndex, inputSize), 0);
 	RWTexOutput[tid] = result * 0.25;
 }
 
@@ -109,7 +99,7 @@ float BlurLogLuminance(uint2 tid, float2 direction)
 	[loop] for (int offset = -kernelRadius; offset <= kernelRadius; offset++)
 	{
 		float weight = exp2(-0.72134752 * offset * offset / (sigma * sigma));
-		float2 sampleUV = ClampLocalExposureUVToEye(uv + direction * texelSize * offset, eyeIndex, outputSize.x);
+		float2 sampleUV = Stereo::ClampToEyeUV(uv + direction * texelSize * offset, eyeIndex, outputSize);
 		result += TexLogLuminance.SampleLevel(MirrorSampler, sampleUV, 0) * weight;
 		weightSum += weight;
 	}
@@ -215,7 +205,7 @@ groupshared uint ThreadGridLogSums[GRID_DEPTH][GRID_THREAD_SIZE * GRID_THREAD_SI
 	const uint gridEyeWidth = gridWidth / 2;
 	const float eyeLocalX = tid.x - eyeIndex * eyeWidth + 0.5;
 	gridUV.x = (eyeIndex * gridEyeWidth + eyeLocalX / GRID_TILE_SIZE) / gridWidth;
-	gridUV.xy = ClampLocalExposureUVToEye(gridUV.xy, eyeIndex, gridWidth);
+	gridUV.xy = Stereo::ClampToEyeUV(gridUV.xy, eyeIndex, uint2(gridWidth, gridHeight));
 #endif
 	gridUV.z = (normalizedLog * (gridDepth - 1) + 0.5) / gridDepth;
 
@@ -223,7 +213,7 @@ groupshared uint ThreadGridLogSums[GRID_DEPTH][GRID_THREAD_SIZE * GRID_THREAD_SI
 	uint blurredWidth;
 	uint blurredHeight;
 	TexBlurredLuminance.GetDimensions(blurredWidth, blurredHeight);
-	float broadBase = TexBlurredLuminance.SampleLevel(LinearSampler, ClampLocalExposureUVToEye(uv, eyeIndex, blurredWidth), 0);
+	float broadBase = TexBlurredLuminance.SampleLevel(LinearSampler, Stereo::ClampToEyeUV(uv, eyeIndex, uint2(blurredWidth, blurredHeight)), 0);
 	float bilateralBase = broadBase;
 	if (gridMoments.y >= 0.001)
 		bilateralBase = lerp(LogLuminanceMin, LogLuminanceMax, gridMoments.x / gridMoments.y);

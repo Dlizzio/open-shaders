@@ -5,7 +5,7 @@
 
 namespace
 {
-	constexpr float GOLDEN_RATIO_FRACTION = 0.61803398875f;
+	constexpr float GOLDEN_RATIO_FRACTION = 1.0f / std::numbers::phi_v<float>;
 	constexpr size_t APERTURE_DIRECTION_BINS = 256;
 
 	float Fract(float value)

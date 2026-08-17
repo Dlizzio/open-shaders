@@ -119,6 +119,14 @@ static const float kEps = 0.0001f;
 	ASSERT(AreEqual, Stereo::GetEyeIndexFromTexCoord(float2(1.0, 0.5)), 1u);
 }
 
+/// @tags vr, stereo, pixel
+/// GetEyeIndexFromPixel assigns the center texel of an odd width to the right eye
+[numthreads(1, 1, 1)] void TestGetEyeIndexFromPixelOddWidth() {
+	uint2 frameDim = uint2(189, 64);
+	ASSERT(AreEqual, Stereo::GetEyeIndexFromPixel(uint2(93, 0), frameDim), 0u);
+	ASSERT(AreEqual, Stereo::GetEyeIndexFromPixel(uint2(94, 0), frameDim), 1u);
+}
+
 	/// @tags vr, stereo, uv
 	/// GetEyeIndexFromTexCoord is consistent with ConvertToStereoUV output
 	[numthreads(1, 1, 1)] void TestEyeIndexConsistentWithStereoUV()
@@ -277,6 +285,18 @@ static const float kEps = 0.0001f;
 
 	float2 rightBorder = Stereo::ClampToEyeUV(float2(1.1, 0.5), 1);
 	ASSERT(IsTrue, abs(rightBorder.x - 1.0) < kEps);
+}
+
+/// @tags vr, stereo, sampling
+/// ClampToEyeUV keeps bilinear samples on texel centers for odd packed widths
+[numthreads(1, 1, 1)] void TestClampToEyeUVTexelCentersOddWidth() {
+	uint2 frameDim = uint2(189, 64);
+	float2 left = Stereo::ClampToEyeUV(float2(0.5, 0.25), 0, frameDim);
+	float2 right = Stereo::ClampToEyeUV(float2(0.49, 0.75), 1, frameDim);
+	ASSERT(IsTrue, abs(left.x - (93.5 / 189.0)) < kEps);
+	ASSERT(IsTrue, abs(right.x - (94.5 / 189.0)) < kEps);
+	ASSERT(IsTrue, abs(left.y - 0.25) < kEps);
+	ASSERT(IsTrue, abs(right.y - 0.75) < kEps);
 }
 
 	/// @tags vr, stereo, edge-detection

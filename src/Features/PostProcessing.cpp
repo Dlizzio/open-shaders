@@ -107,9 +107,9 @@ void PostProcessing::DrawSettings()
 		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
 		const SKSE::stl::scope_exit restoreTextColor([]() noexcept { ImGui::PopStyleColor(); });
 		ImGui::TextWrapped("%s", T("feature.post_processing.tonemap_owned_by_effects11",
-									 "Tonemapping is currently handled by Effects 11. Post Processing effects that run "
-									 "before tonemapping still apply. To use Post Processing tonemapping instead, either "
-									 "disable Effects 11 or enable its \"UseOriginalPostProcessing\" setting."));
+									 "Tonemapping is currently handled by Effects 11, so the Post Processing pipeline is "
+									 "paused. To use Post Processing instead, disable Effects 11 or enable its "
+									 "\"UseOriginalPostProcessing\" setting."));
 	}
 
 	ImGui::Separator();
@@ -853,7 +853,7 @@ bool PostProcessing::IsTonemapOwnedByEffects11() const
 	return globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11;
 }
 
-PostProcessing::Settings PostProcessing::GetCommonBufferData()
+PostProcessing::Settings PostProcessing::GetCommonBufferData() const
 {
 	Settings data = settings;
 

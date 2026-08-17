@@ -31,14 +31,6 @@ struct PostProcessing : Feature
 		uint pad[3];
 	} settings;
 
-	Settings GetCommonBufferData() const
-	{
-		auto data = settings;
-		if (!loaded)
-			data.DisableVanillaTonemapping = 0;
-		return data;
-	}
-
 	const std::string ppPresetPath = "Data\\SKSE\\Plugins\\CommunityShaders\\PostProcessing";
 
 	virtual inline std::string GetName() override { return "Post Processing"; }
@@ -99,7 +91,7 @@ struct PostProcessing : Feature
 	 * tonemap, so ISHDR and HDROutputCS do not assume a linear, already-tonemapped scene
 	 * when another feature produced the image.
 	 */
-	Settings GetCommonBufferData();
+	Settings GetCommonBufferData() const;
 
 	json pendingSettings = {};
 
