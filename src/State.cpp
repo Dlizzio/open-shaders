@@ -17,6 +17,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PostProcessing.h"
 #include "Features/SceneSelector.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -199,11 +200,35 @@ void State::Debug()
 	}
 }
 
+State::TonemapOwner State::GetTonemapOwner()
+{
+	static Util::FrameChecker tonemapOwnerFrameChecker;
+	static TonemapOwner cachedOwner = TonemapOwner::kVanilla;
+
+	if (!tonemapOwnerFrameChecker.IsNewFrame())
+		return cachedOwner;
+
+	auto& postProcessing = globals::features::postProcessing;
+
 #if defined(ENABLE_EFFECTS11)
+	auto& effects11 = globals::features::effects11;
+	if (effects11.loaded && !IsMainOrLoadingMenuOpen() && effects11.WantsTonemapOwnership())
+		cachedOwner = TonemapOwner::kEffects11;
+	else
+#endif
+		if (postProcessing.loaded && postProcessing.WantsTonemapOwnership())
+		cachedOwner = TonemapOwner::kPostProcessing;
+	else
+		cachedOwner = TonemapOwner::kVanilla;
+
+	return cachedOwner;
+}
+
 bool State::HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
 {
-	auto& effects11 = globals::features::effects11;
-	if (!effects11.loaded || !effects11.HandleTonemapRender(a_input, a_output))
+#if defined(ENABLE_EFFECTS11)
+	if (GetTonemapOwner() != TonemapOwner::kEffects11 ||
+		!globals::features::effects11.RenderTonemap(a_input, a_output))
 		return false;
 
 	auto renderer = globals::game::renderer;
@@ -221,13 +246,12 @@ bool State::HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_
 	stateData.depthStencil = static_cast<uint32_t>(-1);
 
 	return true;
-}
 #else
-bool State::HandlePostProcessing(RE::RENDER_TARGET, RE::RENDER_TARGET)
-{
+	(void)a_input;
+	(void)a_output;
 	return false;
-}
 #endif
+}
 
 /**
  * @brief Resets per-frame state and publishes frame counter to off-thread readers.

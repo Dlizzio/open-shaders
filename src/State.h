@@ -90,6 +90,17 @@ public:
 	/** @brief One-time post-D3D setup: creates resources, probes GPU caps, initializes features. */
 	void Setup();
 
+	/** Identifies the feature that owns the HDR tonemap pass for the current frame. */
+	enum class TonemapOwner
+	{
+		kVanilla,
+		kPostProcessing,
+		kEffects11
+	};
+
+	/** Resolves and caches the tonemap owner for the current frame. */
+	TonemapOwner GetTonemapOwner();
+	/** Dispatches the HDR tonemap pass when a feature replaces vanilla rendering. */
 	bool HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
 
 	/**
