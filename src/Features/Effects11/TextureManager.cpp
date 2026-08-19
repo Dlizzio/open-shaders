@@ -38,24 +38,13 @@ void TextureManager::SwapTextures(const std::string& name1, const std::string& n
 
 void TextureManager::CreateCommonTextures()
 {
-	UINT screenWidth = globals::game::graphicsState->screenWidth;
-	UINT screenHeight = globals::game::graphicsState->screenHeight;
-
-	commonTextureCache.insert({ "TextureHDRTemp", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureHDRTemp") });
-	commonTextureCache.insert({ "TextureHDRTemp2", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureHDRTemp2") });
-
-	commonTextureCache.insert({ "RenderTargetRGBA32", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R8G8B8A8_UNORM, "TextureManager::RenderTargetRGBA32") });
-	commonTextureCache.insert({ "RenderTargetRGBA64", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R16G16B16A16_UNORM, "TextureManager::RenderTargetRGBA64") });
-	commonTextureCache.insert({ "RenderTargetRGBA64F", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::RenderTargetRGBA64F") });
-	commonTextureCache.insert({ "RenderTargetR16F", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R16_FLOAT, "TextureManager::RenderTargetR16F") });
-	commonTextureCache.insert({ "RenderTargetR32F", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R32_FLOAT, "TextureManager::RenderTargetR32F") });
-	commonTextureCache.insert({ "RenderTargetRGB32F", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R11G11B10_FLOAT, "TextureManager::RenderTargetRGB32F") });
-
-	commonTextureCache.insert({ "TextureSDRTemp", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R10G10B10A2_UNORM, "TextureManager::TextureSDRTemp") });
-	commonTextureCache.insert({ "TextureSDRTemp2", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R10G10B10A2_UNORM, "TextureManager::TextureSDRTemp2") });
+	// graphicsState->screenWidth/Height is the mirror window's resolution, not the HMD render
+	// size on VR -- use globals::state->screenSize instead, or these textures are undersized.
+	UINT screenWidth = static_cast<UINT>(globals::state->screenSize.x);
+	UINT screenHeight = static_cast<UINT>(globals::state->screenSize.y);
+	CreateResizableTextures(screenWidth, screenHeight);
 
 	commonTextureCache.insert({ "TextureBloom", CreateTexture(1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureBloom") });
-	commonTextureCache.insert({ "TextureLens", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureLens") });
 
 	commonTextureCache.insert({ "TextureBloomTemp", CreateTexture(1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureBloomLensTemp") });
 
@@ -76,6 +65,36 @@ void TextureManager::CreateCommonTextures()
 	for (auto& [name, size] : fixedSizes) {
 		commonTextureCache[name] = CreateTexture(size, size, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::" + name);
 	}
+}
+
+// Recreates only the canvas-sized textures, leaving fixed-size ones (bloom mip chain,
+// 1x1 adaptation) untouched.
+void TextureManager::CreateResizableTextures(uint32_t width, uint32_t height)
+{
+	commonTextureCache["TextureHDRTemp"] = CreateTexture(width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureHDRTemp");
+	commonTextureCache["TextureHDRTemp2"] = CreateTexture(width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureHDRTemp2");
+
+	commonTextureCache["RenderTargetRGBA32"] = CreateTexture(width, height, DXGI_FORMAT_R8G8B8A8_UNORM, "TextureManager::RenderTargetRGBA32");
+	commonTextureCache["RenderTargetRGBA64"] = CreateTexture(width, height, DXGI_FORMAT_R16G16B16A16_UNORM, "TextureManager::RenderTargetRGBA64");
+	commonTextureCache["RenderTargetRGBA64F"] = CreateTexture(width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::RenderTargetRGBA64F");
+	commonTextureCache["RenderTargetR16F"] = CreateTexture(width, height, DXGI_FORMAT_R16_FLOAT, "TextureManager::RenderTargetR16F");
+	commonTextureCache["RenderTargetR32F"] = CreateTexture(width, height, DXGI_FORMAT_R32_FLOAT, "TextureManager::RenderTargetR32F");
+	commonTextureCache["RenderTargetRGB32F"] = CreateTexture(width, height, DXGI_FORMAT_R11G11B10_FLOAT, "TextureManager::RenderTargetRGB32F");
+
+	commonTextureCache["TextureSDRTemp"] = CreateTexture(width, height, DXGI_FORMAT_R10G10B10A2_UNORM, "TextureManager::TextureSDRTemp");
+	commonTextureCache["TextureSDRTemp2"] = CreateTexture(width, height, DXGI_FORMAT_R10G10B10A2_UNORM, "TextureManager::TextureSDRTemp2");
+
+	commonTextureCache["TextureLens"] = CreateTexture(width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureLens");
+
+	currentWidth = width;
+	currentHeight = height;
+}
+
+void TextureManager::EnsureSize(uint32_t width, uint32_t height)
+{
+	if (width == 0 || height == 0 || (width == currentWidth && height == currentHeight))
+		return;
+	CreateResizableTextures(width, height);
 }
 
 TextureManager::Texture TextureManager::CreateTexture(uint32_t width, uint32_t height, DXGI_FORMAT format, const std::string& debugName)

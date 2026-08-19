@@ -231,19 +231,7 @@ bool State::HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_
 		!globals::features::effects11.RenderTonemap(a_input, a_output))
 		return false;
 
-	auto renderer = globals::game::renderer;
-	auto& outputRT = renderer->GetRuntimeData().renderTargets[a_output];
-	globals::d3d::context->OMSetRenderTargets(1, &outputRT.RTV, nullptr);
-
-	auto shadowState = globals::game::shadowState;
-	auto& stateData = shadowState->GetRuntimeData();
-	stateData.renderTargets[0] = a_output;
-	stateData.setRenderTargetMode[0] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
-	for (int i = 1; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++) {
-		stateData.renderTargets[i] = RE::RENDER_TARGET::kNONE;
-		stateData.setRenderTargetMode[i] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
-	}
-	stateData.depthStencil = static_cast<uint32_t>(-1);
+	SetOutputRenderTarget(a_output);
 
 	return true;
 #else
@@ -251,6 +239,27 @@ bool State::HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_
 	(void)a_output;
 	return false;
 #endif
+}
+
+void State::SetOutputRenderTarget(RE::RENDER_TARGET a_output)
+{
+	auto renderer = globals::game::renderer;
+	auto& outputRT = renderer->GetRuntimeData().renderTargets[a_output];
+	globals::d3d::context->OMSetRenderTargets(1, &outputRT.RTV, nullptr);
+
+	auto shadowState = globals::game::shadowState;
+	auto applyStateData = [a_output](auto& stateData) {
+		stateData.renderTargets[0] = a_output;
+		stateData.setRenderTargetMode[0] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
+		for (int i = 1; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++) {
+			stateData.renderTargets[i] = RE::RENDER_TARGET::kNONE;
+			stateData.setRenderTargetMode[i] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
+		}
+		stateData.depthStencil = static_cast<uint32_t>(-1);
+	};
+	// VR's fields sit at different offsets (e.g. setRenderTargetMode at flat 0x48 vs VR 0x50);
+	// the flat accessor on VR corrupts adjacent RendererShadowState fields.
+	CALL_WITH_RUNTIME_DATA(shadowState, applyStateData);
 }
 
 /**

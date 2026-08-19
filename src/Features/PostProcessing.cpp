@@ -775,7 +775,7 @@ void PostProcessing::DrawBeforeUpscaling()
 	state->EndPerfEvent();
 }
 
-void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
+void PostProcessing::PreProcess(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
 {
 	if (bypass)
 		return;
@@ -827,6 +827,8 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
 	CopyToRenderTarget(gameTexMainAlt, useMainCopy ? mainConvertTex : mainCopyConvertTex, lastTexColor.tex, lastTexColor.srv);
 
 	isrefraction = false;
+
+	globals::state->SetOutputRenderTarget(a_output);
 }
 
 void PostProcessing::ClearBorderMotionVectorsForFrameGen()
