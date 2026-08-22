@@ -539,7 +539,7 @@ cbuffer PerGeometry : register(b2)
 #	if defined(LIGHTING)
 float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPosition, uint eyeIndex, inout float shadowVariance)
 {
-	float3 color = DLightColor.xyz * Color::EffectLightingMult();
+	float3 color = Color::Light(DLightColor.xyz) * (ENABLE_LL ? Math::PI : 1.0f) * Color::EffectLightingMult();
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
 	if (suppressExternalEmittance) {
 		color = ShadowSampling::GetAmbientLighting() + ShadowSampling::GetDirectionalLighting();
