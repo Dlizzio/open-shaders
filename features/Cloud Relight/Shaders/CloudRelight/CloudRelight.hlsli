@@ -12,9 +12,10 @@
 
 namespace CloudRelight
 {
+	static const float kMinimumTransmittance = 1e-3;
+
 	float GetOpticalDepth(float cloudDensity)
 	{
-		static const float kMinimumTransmittance = 1e-3;
 		return -log(max(1.0 - saturate(cloudDensity), kMinimumTransmittance));
 	}
 
