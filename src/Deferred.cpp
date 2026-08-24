@@ -12,6 +12,7 @@
 #include "Features/Effects11.h"
 #include "Features/IBL.h"
 #include "Features/LightLimitFix/ShadowCasterManager.h"
+#include "Features/LinearLighting.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -795,7 +796,9 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 
 	// Deferred blended decals
 
+	globals::features::linearLighting.BeginEffectCompatibility(LinearLighting::EffectCompatibilityScope::kBlendedDecals);
 	func(This, RenderFlags);
+	globals::features::linearLighting.EndEffectCompatibility();
 
 	deferred->EndDeferred();
 

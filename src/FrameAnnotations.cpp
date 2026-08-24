@@ -341,19 +341,6 @@ namespace FrameAnnotations
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct BSShaderAccumulator_RenderEffects
-	{
-		static void thunk(void* accumulator, uint32_t renderFlags)
-		{
-			globals::state->BeginPerfEvent("Effects");
-
-			func(accumulator, renderFlags);
-
-			globals::state->EndPerfEvent();
-		};
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	struct BSShaderAccumulator_RenderBatches
 	{
 		static void thunk(void* shaderAccumulator, uint32_t firstPass, uint32_t lastPass, uint32_t renderFlags, int groupIndex)
@@ -1082,7 +1069,6 @@ namespace FrameAnnotations
 		stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 		stl::detour_thunk<BSShaderAccumulator_RenderBatches>(REL::RelocationID(99963, 106609));
 		stl::detour_thunk<BSShaderAccumulator_RenderPersistentPassList>(REL::RelocationID(100840, 107630));
-		stl::detour_thunk<BSShaderAccumulator_RenderEffects>(REL::RelocationID(99940, 106585));
 	}
 
 	void OnDataLoaded()

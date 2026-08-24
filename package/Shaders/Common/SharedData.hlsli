@@ -273,8 +273,6 @@ namespace SharedData
 		float ambientGamma;
 		float fogGamma;
 		float fogAlphaGamma;
-		float effectGamma;
-		float effectAlphaGamma;
 		float skyGamma;
 		float waterGamma;
 		float vlGamma;
@@ -282,12 +280,6 @@ namespace SharedData
 		float vanillaDiffuseColorMult;
 		float emitColorMult;
 		float glowmapMult;
-		float effectLightingMult;
-		float membraneEffectMult;
-		float bloodEffectMult;
-		float projectedEffectMult;
-		float deferredEffectMult;
-		float otherEffectMult;
 		float2 pad0;
 	};
 

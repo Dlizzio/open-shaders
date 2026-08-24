@@ -3232,6 +3232,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
 
+	if (SharedData::linearLightingSettings.enableLinearLighting &&
+		(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget)) {
+		psout.Diffuse.xyz = Color::EffectLightToGamma(psout.Diffuse.xyz);
+	}
+
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
 	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting) {
 		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);

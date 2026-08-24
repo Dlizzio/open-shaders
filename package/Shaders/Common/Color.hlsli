@@ -34,6 +34,7 @@ cbuffer CSUtilityPerGeometry : register(b3)
 namespace Color
 {
 	static float GammaCorrectionValue = 2.2;
+	static const float EffectGamma = 1.8;
 	static const uint PointLightFlagLinear = POINT_LIGHT_FLAG_LINEAR;
 	static const uint PointLightFlagSpot = POINT_LIGHT_FLAG_SPOT;
 	static const uint PointLightFlagOmnidirectionalBulb = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
@@ -145,6 +146,16 @@ namespace Color
 	float3 LinearToSkyrimGamma(float3 color)
 	{
 		return pow(abs(color), 1.0 / 1.6);
+	}
+
+	float3 EffectGammaToLinear(float3 color)
+	{
+		return pow(abs(color), EffectGamma);
+	}
+
+	float3 LinearToEffectGamma(float3 color)
+	{
+		return pow(abs(color), 1.0 / EffectGamma);
 	}
 
 	float3 SrgbToLinear(float3 color)
@@ -265,6 +276,16 @@ namespace Color
 #	endif
 	}
 
+	float3 EffectLight(float3 color, bool isLinear = false)
+	{
+		return ENABLE_LL ? GamutTransform(isLinear ? color : EffectGammaToLinear(color)) : color;
+	}
+
+	float3 EffectLightToGamma(float3 color)
+	{
+		return ENABLE_LL ? LinearToEffectGamma(ENABLE_ACEScg ? AP1TosRGB(color) : color) : color;
+	}
+
 	float3 DirectionalLight(float3 color, bool isLinear = false)
 	{
 		return Light(color, isLinear) *
@@ -291,6 +312,13 @@ namespace Color
 	{
 		return Light(color, isLinear) *
 		       ((ENABLE_LL && !isLinear) ? Math::PI : 1.0f) *
+		       GetPointLightMultiplier(isLinear) *
+		       GetPointLightTypeMultiplier(isLinear, lightFlags);
+	}
+
+	float3 EffectPointLight(float3 color, bool isLinear = false, uint lightFlags = 0)
+	{
+		return EffectLight(color, isLinear) *
 		       GetPointLightMultiplier(isLinear) *
 		       GetPointLightTypeMultiplier(isLinear, lightFlags);
 	}
@@ -338,35 +366,7 @@ namespace Color
 
 	float3 Effect(float3 color)
 	{
-		return ENABLE_LL ? GamutTransform(pow(abs(color), SharedData::linearLightingSettings.effectGamma)) : color;
-	}
-
-	float3 EffectMult(float3 color)
-	{
-		if (ENABLE_LL) {
-#	if defined(MEMBRANE)
-			color *= SharedData::linearLightingSettings.membraneEffectMult;
-#	elif defined(BLOOD)
-			color *= SharedData::linearLightingSettings.bloodEffectMult;
-#	elif defined(PROJECTED_UV)
-			color *= SharedData::linearLightingSettings.projectedEffectMult;
-#	elif defined(DEFERRED)
-			color *= SharedData::linearLightingSettings.deferredEffectMult;
-#	else
-			color *= SharedData::linearLightingSettings.otherEffectMult;
-#	endif
-		}
 		return color;
-	}
-
-	float EffectLightingMult()
-	{
-		return ENABLE_LL ? SharedData::linearLightingSettings.effectLightingMult : 1.0f;
-	}
-
-	float EffectAlpha(float alpha)
-	{
-		return ENABLE_LL ? pow(abs(alpha), SharedData::linearLightingSettings.effectAlphaGamma) : alpha;
 	}
 
 	float3 Sky(float3 color)
