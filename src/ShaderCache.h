@@ -4,6 +4,7 @@
 #include <deque>
 #include <efsw/efsw.hpp>
 #include <functional>
+#include <optional>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -342,6 +343,10 @@ namespace SIE
 		void MarkPhaseStarted();
 		/** @brief Resets all task queues and counters for a fresh compilation pass. */
 		void Clear();
+		/** @brief Atomically advances the generation counter without touching queues/counters.
+		 *  Call before ShaderCache::Clear()'s map-wipe locks so a worker's write-site check
+		 *  (see MakeAndAdd*Shader) sees the new value once it can observe the wipe. */
+		void BumpGeneration() { generation.fetch_add(1, std::memory_order_release); }
 		/** @brief Drops the given task ids from the completed/in-progress bookkeeping so a
 		 *  scoped cache evict can re-enqueue them. Leaves queued work in availableTasks
 		 *  and does not touch progress counters. */
@@ -438,6 +443,10 @@ namespace SIE
 		ShaderCompilationTask::Status status;
 		system_clock::time_point compileTime = system_clock::now();
 		bool loadedFromDisk = false; /**< true when the shader blob was read from the disk cache rather than compiled */
+		/** Generation this entry was claimed/written under. Only meaningfully read for a
+		 *  Pending entry, to decide whether a stale writer's own claim still owns it
+		 *  (see AddCompletedShader); a Completed/Failed entry's stamp is never re-checked. */
+		uint64_t generation = 0;
 	};
 
 	class UpdateListener;
@@ -641,14 +650,14 @@ namespace SIE
 		*/
 		bool Clear(const std::string& a_path);
 
-		bool AddCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, ID3DBlob* a_blob, bool fromDisk = false);
+		bool AddCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, ID3DBlob* a_blob, bool fromDisk = false, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		enum class ClaimResult
 		{
 			CacheHit,  // Already compiled; use the returned blob
 			Claimed    // Claimed as Pending; caller must compile and call AddCompletedShader
 		};
-		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(const std::string& key);
+		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(const std::string& key, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		void ResolvePendingFailure(const std::string& key);
 
 		ID3DBlob* GetCompletedShader(const std::string& a_key);
@@ -692,11 +701,11 @@ namespace SIE
 		void ClearStandaloneComputeCache(std::wstring_view relativeDir);
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
 
@@ -1077,6 +1086,13 @@ namespace SIE
 		HANDLE managementThread = nullptr;
 
 	private:
+		/** @brief True when a_taskGeneration is set and no longer matches the live
+		 *  generation -- a Clear() invalidated this task while it was compiling. */
+		bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const
+		{
+			return a_taskGeneration && *a_taskGeneration != compilationSet.generation.load(std::memory_order_acquire);
+		}
+
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
 
 		/** @brief Releases one compiled shader from memory and, unless a_deleteDiskBlob is

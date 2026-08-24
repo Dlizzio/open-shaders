@@ -40,6 +40,9 @@ find_package(directxtk CONFIG REQUIRED)
 # Input.h uses magic_enum for device enum handling.
 find_package(magic_enum CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
+# test_generationclaim.cpp uses <thread>/<latch>; MSVC links this in
+# implicitly, but Threads::Threads keeps the target portable to other toolchains.
+find_package(Threads REQUIRED)
 
 add_executable(cpp_tests
     test_main.cpp
@@ -59,6 +62,7 @@ add_executable(cpp_tests
     test_contenthash.cpp
     test_shadercachemanifest.cpp
     test_shadercacheclear.cpp
+    test_generationclaim.cpp
     test_settingspatch.cpp
     # Stub I18n::Get so units-under-test that call T() (Subrect's DrawEditor)
     # link without pulling the translation loader into the test binary.
@@ -94,6 +98,7 @@ target_link_libraries(cpp_tests PRIVATE
     Microsoft::DirectXTK
     magic_enum::magic_enum
     xxHash::xxhash
+    Threads::Threads
 )
 
 # windows.h (pulled in via d3d11.h) defines min/max macros that break the
