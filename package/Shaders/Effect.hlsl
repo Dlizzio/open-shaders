@@ -543,12 +543,14 @@ float3 GetEffectDirectionalLighting()
 	       intensity * SharedData::csUtilitySettings.directionalLightMult;
 }
 
-void ExtractEffectLighting(float3 inputColor, float3 ambientLighting, out float3 dirColor, out float3 ambientColor)
+void ExtractEffectLightingReference(
+	float3 inputReference,
+	float3 ambientReference,
+	float3 directionalReference,
+	out float3 dirColor,
+	out float3 ambientColor)
 {
 	// Preserve the engine's DALC-tinted shadow model before decoding the completed mixture.
-	float3 inputReference = Color::EffectLightToGamma(inputColor);
-	float3 ambientReference = Color::EffectLightToGamma(ambientLighting);
-	float3 directionalReference = Color::EffectLightToGamma(GetEffectDirectionalLighting());
 	float inputLuminance = Color::RGBToLuminance(inputReference);
 	float ambientLuminance = Color::RGBToLuminance(ambientReference);
 	float directionalLuminance = Color::RGBToLuminance(directionalReference);
@@ -561,11 +563,33 @@ void ExtractEffectLighting(float3 inputColor, float3 ambientLighting, out float3
 	dirColor = max(0.0, inputReference - ambientColor);
 }
 
+void ExtractEffectLighting(float3 inputColor, float3 ambientLighting, out float3 dirColor, out float3 ambientColor)
+{
+	ExtractEffectLightingReference(
+		Color::EffectLightToGamma(inputColor),
+		Color::EffectLightToGamma(ambientLighting),
+		Color::EffectLightToGamma(GetEffectDirectionalLighting()),
+		dirColor,
+		ambientColor);
+}
+
 #	if defined(LIGHTING)
-float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPosition, uint eyeIndex, inout float shadowVariance)
+float3 GetLightingColor(
+	float3 msPosition,
+	float3 worldPosition,
+	float2 screenPosition,
+	uint eyeIndex,
+	float lightingInfluence,
+	out float3 shadowedWeatherReference,
+	out float3 shadowedInfluencedWeatherReference,
+	out bool applyWeatherInfluenceToShadows,
+	inout float shadowVariance)
 {
 	float3 color = Color::EffectLight(DLightColor.xyz, true);
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
+	shadowedWeatherReference = 0.0;
+	shadowedInfluencedWeatherReference = 0.0;
+	applyWeatherInfluenceToShadows = false;
 
 #		if defined(SKYLIGHTING)
 	float skylightingDiffuse = 1.0;
@@ -583,13 +607,24 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 
 	float3 dirColor;
 	float3 ambientColor;
+	float3 influencedDirColor = 0.0;
+	float3 influencedAmbientColor = 0.0;
 	bool useWeatherEffectLighting = !suppressExternalEmittance;
 	if (useWeatherEffectLighting) {
 #		if defined(SKYLIGHTING) && !defined(INTERIOR)
-		ExtractEffectLighting(color, ShadowSampling::GetAmbientLighting(skylightingDiffuse), dirColor, ambientColor);
+		float3 effectAmbientLighting = ShadowSampling::GetAmbientLighting(skylightingDiffuse);
 #		else
-		ExtractEffectLighting(color, ShadowSampling::GetAmbientLighting(), dirColor, ambientColor);
+		float3 effectAmbientLighting = ShadowSampling::GetAmbientLighting();
 #		endif
+		float3 weatherReference = Color::EffectLightToGamma(color);
+		float3 ambientReference = Color::EffectLightToGamma(effectAmbientLighting);
+		float3 directionalReference = Color::EffectLightToGamma(GetEffectDirectionalLighting());
+		ExtractEffectLightingReference(weatherReference, ambientReference, directionalReference, dirColor, ambientColor);
+		applyWeatherInfluenceToShadows = lightingInfluence > 0.0 && lightingInfluence < 1.0;
+		if (applyWeatherInfluenceToShadows) {
+			float3 influencedReference = lerp(1.0.xxx, weatherReference, lightingInfluence);
+			ExtractEffectLightingReference(influencedReference, ambientReference, directionalReference, influencedDirColor, influencedAmbientColor);
+		}
 	} else {
 		dirColor = ShadowSampling::GetDirectionalLighting();
 #		if defined(SKYLIGHTING) && !defined(INTERIOR)
@@ -602,6 +637,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 #		if defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {
 		useWeatherEffectLighting = false;
+		applyWeatherInfluenceToShadows = false;
 		dirColor = ShadowSampling::GetDirectionalLighting();
 #			if defined(SKYLIGHTING) && !defined(INTERIOR)
 		ambientColor = ShadowSampling::GetAmbientLighting(skylightingDiffuse);
@@ -638,10 +674,15 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	shadowVariance = 1.0 - sqrt(saturate(fwidth(dirShadow)));
 
 	dirColor *= dirShadow;
+	if (applyWeatherInfluenceToShadows)
+		influencedDirColor *= dirShadow;
 
 #		if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
-		dirColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
+		float sunlightFogAttenuation = ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
+		dirColor *= sunlightFogAttenuation;
+		if (applyWeatherInfluenceToShadows)
+			influencedDirColor *= sunlightFogAttenuation;
 	}
 #		endif
 
@@ -657,10 +698,24 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 		ambientColor = Color::IrradianceToGamma(ambientColor);
 		if (useWeatherEffectLighting)
 			ambientColor = Color::EffectLightToGamma(ambientColor);
+		if (applyWeatherInfluenceToShadows) {
+			influencedAmbientColor = Color::EffectLight(influencedAmbientColor);
+			influencedAmbientColor = Color::IrradianceToLinear(influencedAmbientColor);
+			influencedAmbientColor *= skylightingDiffuse;
+			influencedAmbientColor = Color::IrradianceToGamma(influencedAmbientColor);
+			influencedAmbientColor = Color::EffectLightToGamma(influencedAmbientColor);
+		}
 	}
 #		endif
 
-	color = useWeatherEffectLighting ? Color::EffectLight(dirColor + ambientColor) : dirColor + ambientColor;
+	if (useWeatherEffectLighting) {
+		shadowedWeatherReference = dirColor + ambientColor;
+		color = Color::EffectLight(shadowedWeatherReference);
+		if (applyWeatherInfluenceToShadows)
+			shadowedInfluencedWeatherReference = influencedDirColor + influencedAmbientColor;
+	} else {
+		color = dirColor + ambientColor;
+	}
 
 #		if defined(LIGHT_LIMIT_FIX)
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld))
@@ -787,6 +842,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float lightingInfluence = LightingInfluence.x;
 	float3 propertyColor = Color::Effect(PropertyColor.xyz);
+	float3 shadowedWeatherReference = 0.0;
+	float3 shadowedInfluencedWeatherReference = 0.0;
+	bool applyWeatherInfluenceToShadows = false;
 	float shadowVariance = 1.0;
 
 	float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.Position.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
@@ -813,7 +871,16 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if defined(LIGHTING)
-	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xy, eyeIndex, shadowVariance);
+	propertyColor = GetLightingColor(
+		input.MSPosition.xyz,
+		input.WorldPosition.xyz,
+		input.Position.xy,
+		eyeIndex,
+		lightingInfluence,
+		shadowedWeatherReference,
+		shadowedInfluencedWeatherReference,
+		applyWeatherInfluenceToShadows,
+		shadowVariance);
 
 #		if defined(LIGHT_LIMIT_FIX)
 	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
@@ -882,6 +949,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		endif
 	propertyColor = Color::EffectLightToGamma(propertyColor);
+	if (applyWeatherInfluenceToShadows) {
+		propertyColor = shadowedInfluencedWeatherReference +
+		                lightingInfluence * (propertyColor - shadowedWeatherReference);
+		lightingInfluence = 1.0;
+	}
 #	elif defined(MEMBRANE)
 	propertyColor *= 0;
 	lightingInfluence = 0;
