@@ -8,6 +8,7 @@
 #include "LocalExposure.h"
 #include "PhysicalGlare.h"
 
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -62,19 +63,24 @@ void Composite::SetupResources()
 
 void Composite::ClearShaderCache()
 {
-	for (auto& shader : compositeShaders) {
-		if (shader) {
-			shader->Release();
-			shader.detach();
+	BumpShaderGeneration();
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto& shader : compositeShaders) {
+			if (shader) {
+				shader->Release();
+				shader.detach();
+			}
 		}
 	}
 
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/Composite");
 	CompileComputeShaders();
 }
 
 void Composite::CompileComputeShaders()
 {
-	auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\Composite\\composite.cs.hlsl");
+	std::vector<ComputeShaderCompileInfo> shaderInfos;
 
 	// Compile all non-empty flag combinations (1..31)
 	for (uint flags = 1; flags < CompositeFlags::FLAG_COUNT; flags++) {
@@ -90,9 +96,10 @@ void Composite::CompileComputeShaders()
 		if (flags & LOCAL_EXPOSURE)
 			defines.push_back({ "HAS_LOCAL_EXPOSURE", "" });
 
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), defines, "cs_5_0", "CSComposite")))
-			compositeShaders[flags].attach(rawPtr);
+		shaderInfos.push_back({ &compositeShaders[flags], "composite.cs.hlsl", std::move(defines), "CSComposite" });
 	}
+
+	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\Composite", shaderInfos);
 }
 
 void Composite::Draw(TextureInfo& inout_tex)
@@ -120,13 +127,12 @@ void Composite::Draw(TextureInfo& inout_tex)
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 
+	if (!AllShadersReady({ &compositeShaders[flags] }))
+		return;
+
 	state->BeginPerfEvent("Composite");
 
 	ID3D11ComputeShader* shader = compositeShaders[flags].get();
-	if (!shader) {
-		state->EndPerfEvent();
-		return;
-	}
 
 	// Bind resources:
 	//   t0 = main color (inout_tex)
@@ -134,9 +140,10 @@ void Composite::Draw(TextureInfo& inout_tex)
 	//   t2 = flare texture (if available)
 	//   t3 = glare texture (if available)
 	//   t4 = adaptation buffer (if exposure enabled)
-	//   t5 = local exposure texture (if local exposure enabled)
+	//   t5 = local exposure base luminance (if local exposure enabled)
 	//   u0 = output
 	//   b1 = auto exposure constant buffer (if exposure enabled)
+	//   b2 = local exposure constant buffer (if local exposure enabled)
 	std::array<ID3D11ShaderResourceView*, 6> srvs = { nullptr };
 	std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
 
@@ -162,7 +169,10 @@ void Composite::Draw(TextureInfo& inout_tex)
 		context->CSSetConstantBuffers(1, 1, &cb);
 	}
 	if (hasLocalExposure) {
-		srvs[5] = localExposure->GetExposureSRV();
+		srvs[5] = localExposure->GetBaseLuminanceSRV();
+
+		ID3D11Buffer* cb = localExposure->GetConstantBuffer();
+		context->CSSetConstantBuffers(2, 1, &cb);
 	}
 
 	uavs[0] = texOutput->uav.get();
@@ -186,6 +196,10 @@ void Composite::Draw(TextureInfo& inout_tex)
 	if (hasExposure) {
 		ID3D11Buffer* nullCB = nullptr;
 		context->CSSetConstantBuffers(1, 1, &nullCB);
+	}
+	if (hasLocalExposure) {
+		ID3D11Buffer* nullCB = nullptr;
+		context->CSSetConstantBuffers(2, 1, &nullCB);
 	}
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };

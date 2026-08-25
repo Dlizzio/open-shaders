@@ -12,6 +12,7 @@
 
 #include "CloudShadows.h"
 #include "Deferred.h"
+#include "GpuPass.h"
 #include "IBL.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -223,7 +224,7 @@ void Effects11::Prepass()
 		return;
 	}
 
-	auto& data = imageSpaceManager->GetRuntimeData().data;
+	GET_INSTANCE_MEMBER_VRPTR(data, imageSpaceManager);
 
 	float gradientIntensity = settingManager.GetInterpolatedTimeOfDayValue("GradientIntensity", "SKY");
 	float skyScaleIntensity = settingManager.GetValue<bool>("DisableWrongSkyMath", "SKY") ? 0.0f : gradientIntensity;
@@ -293,7 +294,8 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		float sunlightScale = FLT_MIN;
 		auto imageSpaceManager = globals::game::imageSpaceManager;
 		if (imageSpaceManager) {
-			sunlightScale = std::max(imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale, FLT_MIN);
+			GET_INSTANCE_MEMBER_VRPTR(data, imageSpaceManager);
+			sunlightScale = std::max(data.baseData.hdr.sunlightScale, FLT_MIN);
 		}
 		dirLightColorF3 *= sunlightScale;
 
@@ -529,20 +531,27 @@ bool Effects11::ReplacedTonemapperThisFrame() const
 	return tonemapReplacedFrame == globals::state->frameCount;
 }
 
-bool Effects11::HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
+bool Effects11::WantsTonemapOwnership()
 {
 	CheckCommonData();
 
-	auto& settingManager = SettingManager::GetSingleton();
 	auto& effectManager = EffectManager::GetSingleton();
+	if (!effectManager.IsInitialized())
+		return false;
 
-	if (enableEffect && !settingManager.GetValue<bool>("UseOriginalPostProcessing", "EFFECT")) {
-		auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
-		// Only claim the tonemap pass if the effect chain actually wrote the output
-		if (effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output])) {
-			tonemapReplacedFrame = globals::state->frameCount;
-			return true;
-		}
+	return enableEffect && !SettingManager::GetSingleton().GetValue<bool>("UseOriginalPostProcessing", "EFFECT");
+}
+
+bool Effects11::RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
+{
+	auto& effectManager = EffectManager::GetSingleton();
+	if (!effectManager.IsInitialized())
+		return false;
+
+	auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
+	if (effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output])) {
+		tonemapReplacedFrame = globals::state->frameCount;
+		return true;
 	}
 	return false;
 }
@@ -640,6 +649,8 @@ void Effects11::DrawVolumetricRays()
 	auto& effectManager = EffectManager::GetSingleton();
 	if (!effectManager.IsInitialized() || !effectManager.copyVertexShader)
 		return;
+
+	CS_GPU_PASS("Effects11::DrawVolumetricRays");
 
 	if (!raymarchVolumetricRaysPS) {
 		std::vector<std::pair<const char*, const char*>> defines;
@@ -756,6 +767,14 @@ void Effects11::DrawVolumetricRays()
 	if (!vlBlurCB)
 		vlBlurCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc(16), "Effects11::VLBlurCB");
 
+	// Filled before Pass 1: the raymarch PS also binds this for Stereo::EyeStableNoiseCoord.
+	struct VLData
+	{
+		int32_t screenX, screenY, screenXMin1, screenYMin1;
+	};
+	VLData vlData = { static_cast<int32_t>(halfDynWidth), static_cast<int32_t>(halfDynHeight), static_cast<int32_t>(halfDynWidth) - 1, static_cast<int32_t>(halfDynHeight) - 1 };
+	vlBlurCB->Update(vlData);
+
 	Effects11Util::D3D11ScopedPostFxBackup stateBackup;
 	stateBackup.Save(context);
 
@@ -787,6 +806,8 @@ void Effects11::DrawVolumetricRays()
 		context->VSSetShader(effectManager.copyVertexShader.get(), nullptr, 0);
 		context->PSSetShader(raymarchVolumetricRaysPS, nullptr, 0);
 		context->PSSetSamplers(0, 1, &sampler);
+		ID3D11Buffer* raymarchCB = vlBlurCB->CB();
+		context->PSSetConstantBuffers(1, 1, &raymarchCB);
 
 		context->Draw(4, 0);
 
@@ -795,14 +816,6 @@ void Effects11::DrawVolumetricRays()
 
 		profiler->EndPass();
 	}
-
-	// Blur setup
-	struct VLData
-	{
-		int32_t screenX, screenY, screenXMin1, screenYMin1;
-	};
-	VLData vlData = { static_cast<int32_t>(halfDynWidth), static_cast<int32_t>(halfDynHeight), static_cast<int32_t>(halfDynWidth) - 1, static_cast<int32_t>(halfDynHeight) - 1 };
-	vlBlurCB->Update(vlData);
 
 	static constexpr uint32_t tgDim = 256;
 	static constexpr uint32_t blurWindow = 12;

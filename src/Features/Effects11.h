@@ -14,12 +14,13 @@ public:
 	virtual std::string_view GetCategory() const override { return "Post-Processing"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "EFFECTS11"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
+	virtual bool SupportsVR() override { return true; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			T("feature.effects11.description", "Effects 11 provides a framework for loading and executing ENBSeries-compatible FX effect files.\nThis allows for advanced post-processing effects and visual enhancements using DirectX 11 Effect (.fx) files."),
-			{ T("feature.effects11.key_feature_1", "ENBSeries-compatible FX support"),
+			T("feature.effects11.description", "Effects 11 loads and executes standard, unencrypted ENBSeries-compatible FX effect files.\nThis allows for advanced post-processing effects and visual enhancements using DirectX 11 Effect (.fx) files."),
+			{ T("feature.effects11.key_feature_1", "Standard ENBSeries-compatible FX support"),
 				T("feature.effects11.key_feature_2", "DirectX 11 Effect file loading"),
 				T("feature.effects11.key_feature_3", "Advanced post-processing pipeline"),
 				T("feature.effects11.key_feature_4", "Custom technique execution"),
@@ -113,7 +114,11 @@ public:
 	void ModifySky(RE::BSRenderPass* Pass);
 	__declspec(noinline) void ModifyParticle(RE::BSRenderPass* Pass);
 	void ParticleShaderHacks();
-	bool HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
+
+	/** @brief Whether Effects11 wants to replace the vanilla tonemap this frame. */
+	bool WantsTonemapOwnership();
+	/** @brief Runs the Effects11 chain in place of the vanilla tonemap pass. */
+	bool RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
 	/** @brief True when the effect chain replaced ISHDR this frame, leaving an SDR scene for HDR Display to expand. */
 	bool ReplacedTonemapperThisFrame() const;
 

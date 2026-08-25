@@ -15,6 +15,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/PostProcessing.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -303,14 +304,22 @@ namespace PostProcessingExtensions
 {
 	struct Main_HDRTonemapBlendCinematic_Render
 	{
-		static void thunk(RE::ImageSpaceManager* a1, RE::ImageSpaceEffect* a2, uint32_t a3, uint32_t a4, RE::ImageSpaceShaderParam* a5)
+		// a2 is a pointer on SE/VR but an array index on AE; keep it opaque, never reinterpret_cast.
+		// a6 picks VR's render-target bind mode; drop it and VR reads garbage stack.
+		static void thunk(RE::ImageSpaceManager* a1, uintptr_t a2, uint32_t a3, uint32_t a4, RE::ImageSpaceShaderParam* a5, bool a6)
 		{
-			if (!globals::state->IsMainOrLoadingMenuOpen() &&
-				globals::state->HandlePostProcessing(
-					static_cast<RE::RENDER_TARGET>(a3),
-					static_cast<RE::RENDER_TARGET>(a4)))
+			auto* state = globals::state;
+			const auto input = static_cast<RE::RENDER_TARGET>(a3);
+			const auto output = static_cast<RE::RENDER_TARGET>(a4);
+
+			if (state->HandlePostProcessing(input, output))
 				return;
-			func(a1, a2, a3, a4, a5);
+
+			auto& postProcessing = globals::features::postProcessing;
+			if (postProcessing.loaded)
+				postProcessing.PreProcess(input, output);
+
+			func(a1, a2, a3, a4, a5, a6);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1159,26 +1168,13 @@ namespace Hooks
 		stl::write_vfunc<0x6, PostProcessingExtensions::BSParticleShader_SetupGeometry>(RE::VTABLE_BSParticleShader[0]);
 
 		// Only serves Effects11's tonemap takeover (HandlePostProcessing is a no-op
-		// without it), and Effects11 has no VR support (no HMD does real HDR
-		// passthrough) -- so left uninstalled on VR. The VR offsets below are RE'd
-		// and correct (Ghidra: matched by identical render-target argument setup
-		// and the a2 effect-pointer field, 0xf0 then 0x110), not just SE/AE's
-		// values reused -- kept ready in case a future HDR-capable HMD needs this.
-		if (!REL::Module::IsVR()) {
-			logger::info("Installing post-processing hooks");
-			// AE's a2 slot at this call site is an effects-array INDEX, not the
-			// ImageSpaceEffect* SE/VR pass (RE-confirmed) -- harmless today since
-			// this thunk never dereferences a2, only forwards it, but a real type
-			// mismatch if that ever changes. AE's single call here is also a branch
-			// between two different ImageSpaceManager instances, not a pair like
-			// SE/VR's two hooked calls -- unclear which (if either) of SE's two
-			// passes it actually corresponds to.
-			stl::write_thunk_call<PostProcessingExtensions::Main_HDRTonemapBlendCinematic_Render>(REL::RelocationID(99023, 105674, 99023).address() + REL::Relocate(0x1EA, 0x178, 0x20E));
-			// SE and VR both have a second matching call site (confirmed structurally
-			// identical); AE's equivalent isn't identified, so stay conservative there.
-			if (REL::Module::IsSE() || REL::Module::IsVR())
-				stl::write_thunk_call<PostProcessingExtensions::Main_HDRTonemapBlendCinematic_Render>(REL::RelocationID(99023, 105674, 99023).address() + REL::Relocate(0x230, 0x178, 0x254));
-		}
+		// without it), so it's installed on VR too.
+		logger::info("Installing post-processing hooks");
+		// AE's a2 slot here is an effects-array index, not a pointer.
+		stl::write_thunk_call<PostProcessingExtensions::Main_HDRTonemapBlendCinematic_Render>(REL::RelocationID(99023, 105674, 99023).address() + REL::Relocate(0x1EA, 0x178, 0x20E));
+		// SE and VR both have a second matching call site; AE's equivalent isn't identified.
+		if (REL::Module::IsSE() || REL::Module::IsVR())
+			stl::write_thunk_call<PostProcessingExtensions::Main_HDRTonemapBlendCinematic_Render>(REL::RelocationID(99023, 105674, 99023).address() + REL::Relocate(0x230, 0x178, 0x254));
 
 		// Patch render space in BSLightingShader::SetupGeometry to always use world space
 		// The variable updateEyePosition is set to 1 when not skinned. By patching to be 0 it will always use world space

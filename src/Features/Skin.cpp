@@ -245,6 +245,10 @@ struct SKIN_BSLightingShader_SetupMaterial
 {
 	static void thunk(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
 	{
+		if (!material) {
+			return;
+		}
+
 		func(shader, material);
 
 		auto& skin = globals::features::skin;

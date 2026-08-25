@@ -4,6 +4,7 @@
 #include "imgui_stdlib.h"
 
 #include "Globals.h"
+#include "Menu.h"
 #include "Profiler.h"
 #include "SettingsOverrideManager.h"
 #include "State.h"
@@ -86,9 +87,30 @@ void PostProcessing::DrawSettings()
 	ImGui::EndGroup();
 
 	ImGui::Separator();
-	ImGui::Checkbox(T("feature.post_processing.bypass", "Bypass"), &bypass);
+
+	// Effects11 replaces the whole tonemap pass, so these toggles would have no effect while
+	// it owns the frame. Disable them rather than let them silently do nothing.
+	const bool tonemapTakenByEffects11 = IsTonemapOwnedByEffects11();
+
+	ImGui::BeginDisabled(tonemapTakenByEffects11);
+
+	// A disabled checkbox never reports a click, so bypass keeps its stored value while forced on.
+	bool bypassDisplay = bypass || tonemapTakenByEffects11;
+	if (ImGui::Checkbox(T("feature.post_processing.bypass", "Bypass"), &bypassDisplay))
+		bypass = bypassDisplay;
+
 	ImGui::SameLine();
 	ImGui::Checkbox(T("feature.post_processing.disable_vanilla_tonemapping", "Disable Vanilla Tonemapping"), (bool*)&settings.DisableVanillaTonemapping);
+	ImGui::EndDisabled();
+
+	if (tonemapTakenByEffects11) {
+		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
+		const SKSE::stl::scope_exit restoreTextColor([]() noexcept { ImGui::PopStyleColor(); });
+		ImGui::TextWrapped("%s", T("feature.post_processing.tonemap_owned_by_effects11",
+									 "Tonemapping is currently handled by Effects 11, so the Post Processing pipeline is "
+									 "paused. To use Post Processing instead, disable Effects 11 or enable its "
+									 "\"UseOriginalPostProcessing\" setting."));
+	}
 
 	ImGui::Separator();
 
@@ -622,20 +644,20 @@ void PostProcessing::SetupResources()
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PostProcessing\\copy.cs.hlsl", {}, "cs_5_0")))
 		copyCS.attach(rawPtr);
 
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_unique<LocalExposure>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] = std::make_unique<HistogramAutoExposure>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] = std::make_unique<ColorGrading>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)] = std::make_unique<LUT>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_shared<LocalExposure>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] = std::make_shared<HistogramAutoExposure>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] = std::make_shared<ColorGrading>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)] = std::make_shared<LUT>();
 
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_unique<MotionBlur>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_unique<DoF>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_unique<PhysicalGlare>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_unique<CODBloom>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_unique<LensFlare>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_unique<Composite>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_unique<Vignette>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_unique<Camera>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_unique<Border>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_shared<MotionBlur>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_shared<DoF>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_shared<PhysicalGlare>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_shared<CODBloom>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_shared<LensFlare>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_shared<Composite>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_shared<Vignette>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_shared<Camera>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_shared<Border>();
 
 	RestorePipelineDefaultEnablement();
 
@@ -653,6 +675,9 @@ void PostProcessing::SetupResources()
 
 void PostProcessing::Reset()
 {
+	// PreProcess may not run while bypassed or owned by Effects11, so clear refraction each frame.
+	isrefraction = false;
+
 	for (auto& pipe : pipeline) {
 		if (pipe)
 			pipe->Reset();
@@ -665,6 +690,11 @@ void PostProcessing::CopyToRenderTarget(
 	ID3D11Texture2D* srcTex,
 	ID3D11ShaderResourceView* srcSRV)
 {
+	// D3D11 rejects a copy whose source and destination are the same resource, which happens
+	// whenever the pipeline left the image in the buffer we are writing back to.
+	if (targetRT.texture == srcTex)
+		return;
+
 	auto context = globals::d3d::context;
 
 	D3D11_TEXTURE2D_DESC srcDesc;
@@ -711,7 +741,7 @@ void PostProcessing::DrawFeature(PostProcessFeature& feature, PostProcessFeature
 
 void PostProcessing::DrawBeforeUpscaling()
 {
-	if (bypass)
+	if (bypass || IsTonemapOwnedByEffects11())
 		return;
 
 	auto& upscaling = globals::features::upscaling;
@@ -721,7 +751,7 @@ void PostProcessing::DrawBeforeUpscaling()
 	auto renderer = globals::game::renderer;
 	auto state = globals::state;
 
-	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	bool inMainLoadingMenu = state->IsMainOrLoadingMenuOpen();
 	auto gameTexMain = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	PostProcessFeature::TextureInfo lastTexColor = { gameTexMain.texture, gameTexMain.SRV };
 
@@ -745,36 +775,27 @@ void PostProcessing::DrawBeforeUpscaling()
 	state->EndPerfEvent();
 }
 
-void PostProcessing::PreProcess()
+void PostProcessing::PreProcess(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
 {
 	if (bypass)
 		return;
 
 	auto renderer = globals::game::renderer;
-	auto context = globals::d3d::context;
 
 	auto& upscaling = globals::features::upscaling;
 
-	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	// ISRefraction can leave kMAIN_COPY bound, which makes D3D11 null its SRV when sampled.
+	globals::d3d::context->OMSetRenderTargets(0, nullptr, nullptr);
+	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+
+	bool inMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 
 	auto& gameTexMainRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	auto& gameTexMainCopyRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY];
 
-	bool useMainCopy = isrefraction;
-	ID3D11RenderTargetView* currentRTV = nullptr;
-	ID3D11DepthStencilView* currentDSV = nullptr;
-	context->OMGetRenderTargets(1, &currentRTV, &currentDSV);
-	if (currentRTV) {
-		if (currentRTV == gameTexMainCopyRT.RTV) {
-			useMainCopy = true;
-		} else if (currentRTV == gameTexMainRT.RTV) {
-			useMainCopy = false;
-		}
-	}
-	if (currentRTV)
-		currentRTV->Release();
-	if (currentDSV)
-		currentDSV->Release();
+	// The tonemap hook hands us the pass input directly, so no need to probe the bound RTV.
+	// Refraction still routes through kMAIN_COPY without that being reflected in a_input.
+	bool useMainCopy = isrefraction || a_input == RE::RENDER_TARGETS::kMAIN_COPY;
 
 	auto gameTexMain = useMainCopy ? gameTexMainCopyRT : gameTexMainRT;
 	PostProcessFeature::TextureInfo lastTexColor = { gameTexMain.texture, gameTexMain.SRV };
@@ -806,11 +827,14 @@ void PostProcessing::PreProcess()
 	CopyToRenderTarget(gameTexMainAlt, useMainCopy ? mainConvertTex : mainCopyConvertTex, lastTexColor.tex, lastTexColor.srv);
 
 	isrefraction = false;
+
+	globals::state->SetOutputRenderTarget(a_output);
 }
 
 void PostProcessing::ClearBorderMotionVectorsForFrameGen()
 {
-	if (bypass)
+	// Effects11 skips the letterbox, so its motion vectors must remain live scene data.
+	if (bypass || IsTonemapOwnedByEffects11())
 		return;
 
 	auto borderIdx = static_cast<size_t>(FeaturePipelineIndex::Border);
@@ -819,6 +843,27 @@ void PostProcessing::ClearBorderMotionVectorsForFrameGen()
 		auto* border = static_cast<Border*>(pipe.get());
 		border->ClearMotionVectorsForFrameGen();
 	}
+}
+
+bool PostProcessing::WantsTonemapOwnership() const
+{
+	return !bypass && settings.DisableVanillaTonemapping != 0;
+}
+
+bool PostProcessing::IsTonemapOwnedByEffects11() const
+{
+	return globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11;
+}
+
+PostProcessing::Settings PostProcessing::GetCommonBufferData() const
+{
+	Settings data = settings;
+
+	// Only Post Processing may advertise its linear, already-tonemapped output to consumers.
+	if (globals::state->GetTonemapOwner() != State::TonemapOwner::kPostProcessing)
+		data.DisableVanillaTonemapping = 0;
+
+	return data;
 }
 
 void PostProcessing::Prepass()
@@ -857,6 +902,4 @@ void PostProcessing::PostPostLoad()
 {
 	logger::info("Hooking preprocess passes");
 	stl::write_vfunc<0x2, BSImagespaceShaderRefraction_SetupTechnique>(RE::VTABLE_BSImagespaceShaderRefraction[0]);
-	stl::write_vfunc<0x2, BSImagespaceShaderHDRTonemapBlendCinematic_SetupTechnique>(RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[0]);
-	stl::write_vfunc<0x2, BSImagespaceShaderHDRTonemapBlendCinematicFade_SetupTechnique>(RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[0]);
 }

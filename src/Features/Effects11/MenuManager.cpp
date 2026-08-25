@@ -2,10 +2,12 @@
 
 #include "EffectManager.h"
 #include "Features/Effects11.h"
-#include "Features/Effects11/ShaderPatches.h"
+#include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "Menu.h"
 #include "SettingManager.h"
+#include "State.h"
 #include "TextureManager.h"
 
 static const char* const timeOfDayNames[] = { "Dawn", "Sunrise", "Day", "Sunset", "Dusk", "Night", "InteriorDay", "InteriorNight" };
@@ -56,7 +58,6 @@ void MenuManager::RenderSettingsPanel()
 	if (ImGui::Button("Save & Apply")) {
 		settingManager.Save();
 		effectManager.Save();
-		Util::ShaderPatches::Load();
 		settingManager.Load();
 		effectManager.Apply();
 	}
@@ -68,7 +69,6 @@ void MenuManager::RenderSettingsPanel()
 	ImGui::SameLine();
 
 	if (ImGui::Button("Load & Apply")) {
-		Util::ShaderPatches::Load();
 		settingManager.Load();
 		effectManager.Apply();
 	}
@@ -98,7 +98,25 @@ void MenuManager::RenderSettingsPanel()
 	}
 	ImGui::EndDisabled();
 
+	// Static caveat, not a preset check: third-party .fx content still assumes a single flat eye.
+	if (globals::game::isVR) {
+		ImGui::PushStyleColor(ImGuiCol_Text, globals::menu->GetSettings().Theme.StatusPalette.Warning);
+		ImGui::TextWrapped("%s", T("feature.effects11.vr_flat_screen_warning", "VR: arbitrary flat-screen ENB presets are not guaranteed correct here -- screen-centered effects (vignette, lens flare, radial blur) may appear off-center or seam-darkened. Prefer a preset built or tested for VR."));
+		ImGui::PopStyleColor();
+	}
+
 	ImGui::Separator();
+
+	if (globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11 &&
+		globals::features::postProcessing.loaded &&
+		globals::features::postProcessing.WantsTonemapOwnership()) {
+		ImGui::TextColored(
+			Menu::GetSingleton()->GetTheme().StatusPalette.Warning,
+			"%s",
+			T("feature.effects11.post_processing_tonemap_override",
+				"Effects 11 is overriding Post Processing's tonemapping. Enable \"UseOriginalPostProcessing\" below to hand it back."));
+		ImGui::Separator();
+	}
 
 	if (ImGui::BeginChild("SettingsScroll", ImVec2(0, 0), false)) {
 		RenderAllSettings();

@@ -15,8 +15,7 @@ if(DEVBENCH_BRIDGE)
     list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
 endif()
 
-# Effects11 — on by default; the vcpkg port is an unconditional dependency
-# (see vcpkg.json), not a manifest feature like DEVBENCH_BRIDGE above.
+# Unlike DEVBENCH_BRIDGE above, the vcpkg `effects11` port is unconditional (vcpkg.json), not a manifest feature.
 option(
     ENABLE_EFFECTS11
     "Enable the Effects11 feature (ENB-style post-processing framework)."
@@ -26,7 +25,7 @@ option(
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 2.6.0
+    VERSION 2.8.2
     LANGUAGES CXX
 )
 
@@ -69,11 +68,6 @@ option(
     AIO_INCLUDE_NON_AUTOUPLOAD
     "Include features whose .ini has autoupload != true in the AIO. Off by default — the AIO ships only release-ready features. Turn on for local dev builds that want every feature regardless of release status."
     OFF
-)
-option(
-    ENABLE_ENB_EXTENDER
-    "Enable ENBExtender reimplementation (weather blending, time-of-day, technique bindings)"
-    ON
 )
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
@@ -154,7 +148,6 @@ include(FidelityFX-SDK)
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
-    PRIVATE "$<$<BOOL:${ENABLE_ENB_EXTENDER}>:ENABLE_ENB_EXTENDER>"
 )
 
 file(
@@ -1114,8 +1107,11 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 # copies race writing the same AIO tree); the stamp file adds
                 # the mtime edge so this rule re-runs when staging changes
                 # (target-only DEPENDS is order-only and never re-triggers).
+                # Also depend on prepare_shaders: robocopy still enumerates
+                # the /XD-excluded Shaders dir, which can race its writers.
                 DEPENDS
                     PREPARE_AIO
+                    prepare_shaders
                     ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
                 COMMENT
                     "Incremental deploy (excluding Shaders) to ${DEPLOY_TARGET} (robocopy-wrapper)"
@@ -1189,13 +1185,22 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders_full.stamp
-                # See the PREPARE_AIO target+stamp rationale above.
+                # Depend on copy_shaders.stamp's real source files, not the
+                # stamp itself: referencing that OUTPUT made the VS generator
+                # duplicate its producing rule into DEPLOY_ALL.vcxproj, racing
+                # the real copy in prepare_shaders.vcxproj. Also chained after
+                # this target's own _deploy.stamp for the same reason.
                 DEPENDS
                     prepare_shaders
                     PREPARE_AIO
-                    ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
-                    ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
+                    ${HLSL_FILES}
+                    ${FFX_RUNTIME_FILES}
+                    ${STREAMLINE_RUNTIME_FILES}
+                    ${STREAMLINE_RUNTIME_DX12_FILES}
+                    ${_package_shaders}
+                    ${_all_feature_shader_files}
                     ${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake
+                    ${CMAKE_CURRENT_BINARY_DIR}/${DEPLOY_TARGET_HASH}_deploy.stamp
                 COMMENT
                     "Full shader deploy to ${DEPLOY_TARGET}/Shaders (with PREPARE_AIO)"
             )

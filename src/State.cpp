@@ -17,6 +17,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PostProcessing.h"
 #include "Features/SceneManager.h"
 #include "Features/SceneSelector.h"
 #include "Features/Skin.h"
@@ -188,35 +189,67 @@ void State::Debug()
 	}
 }
 
+State::TonemapOwner State::GetTonemapOwner()
+{
+	static Util::FrameChecker tonemapOwnerFrameChecker;
+	static TonemapOwner cachedOwner = TonemapOwner::kVanilla;
+
+	if (!tonemapOwnerFrameChecker.IsNewFrame())
+		return cachedOwner;
+
+	auto& postProcessing = globals::features::postProcessing;
+
 #if defined(ENABLE_EFFECTS11)
+	auto& effects11 = globals::features::effects11;
+	if (effects11.loaded && !IsMainOrLoadingMenuOpen() && effects11.WantsTonemapOwnership())
+		cachedOwner = TonemapOwner::kEffects11;
+	else
+#endif
+		if (postProcessing.loaded && postProcessing.WantsTonemapOwnership())
+		cachedOwner = TonemapOwner::kPostProcessing;
+	else
+		cachedOwner = TonemapOwner::kVanilla;
+
+	return cachedOwner;
+}
+
 bool State::HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
 {
-	auto& effects11 = globals::features::effects11;
-	if (!effects11.loaded || !effects11.HandleTonemapRender(a_input, a_output))
+#if defined(ENABLE_EFFECTS11)
+	if (GetTonemapOwner() != TonemapOwner::kEffects11 ||
+		!globals::features::effects11.RenderTonemap(a_input, a_output))
 		return false;
 
+	SetOutputRenderTarget(a_output);
+
+	return true;
+#else
+	(void)a_input;
+	(void)a_output;
+	return false;
+#endif
+}
+
+void State::SetOutputRenderTarget(RE::RENDER_TARGET a_output)
+{
 	auto renderer = globals::game::renderer;
 	auto& outputRT = renderer->GetRuntimeData().renderTargets[a_output];
 	globals::d3d::context->OMSetRenderTargets(1, &outputRT.RTV, nullptr);
 
 	auto shadowState = globals::game::shadowState;
-	auto& stateData = shadowState->GetRuntimeData();
-	stateData.renderTargets[0] = a_output;
-	stateData.setRenderTargetMode[0] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
-	for (int i = 1; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++) {
-		stateData.renderTargets[i] = RE::RENDER_TARGET::kNONE;
-		stateData.setRenderTargetMode[i] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
-	}
-	stateData.depthStencil = static_cast<uint32_t>(-1);
-
-	return true;
+	auto applyStateData = [a_output](auto& stateData) {
+		stateData.renderTargets[0] = a_output;
+		stateData.setRenderTargetMode[0] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
+		for (int i = 1; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++) {
+			stateData.renderTargets[i] = RE::RENDER_TARGET::kNONE;
+			stateData.setRenderTargetMode[i] = RE::BSGraphics::SetRenderTargetMode::SRTM_NO_CLEAR;
+		}
+		stateData.depthStencil = static_cast<uint32_t>(-1);
+	};
+	// VR's fields sit at different offsets (e.g. setRenderTargetMode at flat 0x48 vs VR 0x50);
+	// the flat accessor on VR corrupts adjacent RendererShadowState fields.
+	CALL_WITH_RUNTIME_DATA(shadowState, applyStateData);
 }
-#else
-bool State::HandlePostProcessing(RE::RENDER_TARGET, RE::RENDER_TARGET)
-{
-	return false;
-}
-#endif
 
 /**
  * @brief Resets per-frame state and publishes frame counter to off-thread readers.
@@ -268,6 +301,7 @@ void State::Reset()
 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
 
 	globals::shaderCache->TickActiveShaderCapture(globals::menu->IsEnabled);
+	globals::shaderCache->ProcessPendingClear();
 
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 		GET_INSTANCE_MEMBER_VRPTR(BSImagespaceShaderApplyReflections, imageSpaceManager);

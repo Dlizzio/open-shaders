@@ -1,7 +1,7 @@
 // Physical Glare — Chromatic PSF generation
 // Community Shaders / Post Processing — Author: Jiaye, 2026
 //
-// Computes per-channel point spread function via multi-wavelength diffraction
+// Computes the RGB point spread functions via multi-wavelength diffraction
 // intensity sampling.  For each of 32 spectral samples across 380–770 nm,
 // the monochromatic diffraction pattern |F(u,v)|² is sampled at a
 // wavelength-scaled UV offset and weighted by CIE 1931 colour matching
@@ -22,7 +22,9 @@
 Texture2D<float2> TexDiffraction : register(t0);  // Complex FFT of aperture (RG32F)
 SamplerState WrapSampler : register(s0);          // Wrap-mode bilinear sampler
 
-RWTexture2D<float2> RWTexPSF : register(u0);  // Output: per-channel PSF (real, 0)
+RWTexture2D<float2> RWTexPSF_R : register(u0);
+RWTexture2D<float2> RWTexPSF_G : register(u1);
+RWTexture2D<float2> RWTexPSF_B : register(u2);
 
 cbuffer GlareCB : register(b1)
 {
@@ -41,7 +43,7 @@ cbuffer GlareCB : register(b1)
 	float ScreenWidth;
 	float ScreenHeight;
 
-	uint ChannelIndex;  // 0=R, 1=G, 2=B
+	uint ChannelIndex;  // Retained for constant-buffer layout compatibility
 	float FresnelExponent;
 	float ChromaticSpread;
 	float ApertureSize;
@@ -77,11 +79,12 @@ static const float PI = 3.14159265358979323846;
 // ---------------------------------------------------------------------------
 float3 WavelengthToXYZ(float lambda)
 {
-	// Use intermediate variables to prevent fxc from constant-folding
-	// the entire expression in double precision (X4122 warnings).
+	// Intermediate vars stop fxc double-folding these sums; the pragma
+	// below suppresses its now-harmless X4122 (DXBC has no double type here).
 	float dx1 = (lambda - 599.8f) / 37.9f;
 	float dx2 = (lambda - 442.0f) / 16.0f;
 	float dx3 = (lambda - 501.1f) / 20.4f;
+#pragma warning(disable: 4122)
 	float x =
 		1.056f * exp(-0.5f * dx1 * dx1) +
 		0.362f * exp(-0.5f * dx2 * dx2) -
@@ -98,6 +101,7 @@ float3 WavelengthToXYZ(float lambda)
 	float z =
 		1.217f * exp(-0.5f * dz1 * dz1) +
 		0.681f * exp(-0.5f * dz2 * dz2);
+#pragma warning(default: 4122)
 
 	return float3(x, y, z);
 }
@@ -105,20 +109,28 @@ float3 WavelengthToXYZ(float lambda)
 // XYZ → linear sRGB (D65 white point, Rec. 709 primaries)
 float3 XYZToLinearSRGB(float3 xyz)
 {
+	// See WavelengthToXYZ: X4122 here is fxc's literal-folding diagnostic on
+	// this matrix's literal coefficients, not an actual runtime precision loss.
+#pragma warning(disable: 4122)
 	return float3(
 		3.2406f * xyz.x - 1.5372f * xyz.y - 0.4986f * xyz.z,
 		-0.9689f * xyz.x + 1.8758f * xyz.y + 0.0415f * xyz.z,
 		0.0557f * xyz.x - 0.2040f * xyz.y + 1.0570f * xyz.z);
+#pragma warning(default: 4122)
 }
 
 // XYZ → ACEScg / AP1 (ACES D60 white point, AP1 primaries)
 // Matrix from colour-science.org via ColourSpace.h
 float3 XYZToAP1(float3 xyz)
 {
+	// See WavelengthToXYZ: X4122 here is fxc's literal-folding diagnostic on
+	// this matrix's literal coefficients, not an actual runtime precision loss.
+#pragma warning(disable: 4122)
 	return float3(
 		1.64102338f * xyz.x - 0.32480329f * xyz.y - 0.2364247f * xyz.z,
 		-0.66366286f * xyz.x + 1.61533159f * xyz.y + 0.01675635f * xyz.z,
 		0.01172189f * xyz.x - 0.00828444f * xyz.y + 0.98839486f * xyz.z);
+#pragma warning(default: 4122)
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +149,7 @@ float3 XYZToAP1(float3 xyz)
 	// Reference wavelength: 575 nm (scale = 1).
 	// Longer λ → larger diffraction pattern; shorter λ → smaller.
 	// ------------------------------------------------------------------
-	float result = 0.0;
+	float3 result = 0.0;
 
 	// Centred frequency coordinates (DC at origin).
 	// Bins [0, N/2) = positive frequencies; [N/2, N) = negative.
@@ -183,16 +195,8 @@ float3 XYZToAP1(float3 xyz)
 		float3 xyz = WavelengthToXYZ(lambda);
 		float3 rgb = UseAP1 ? max(XYZToAP1(xyz), 0.0) : max(XYZToLinearSRGB(xyz), 0.0);
 
-		float channelWeight;
-		if (ChannelIndex == 0)
-			channelWeight = rgb.r;
-		else if (ChannelIndex == 1)
-			channelWeight = rgb.g;
-		else
-			channelWeight = rgb.b;
-
 		// Normalise by NUM_WAVELENGTHS to preserve dynamic range [1, section 3.1].
-		result += intensity * channelWeight / float(NUM_WAVELENGTHS);
+		result += intensity * rgb / float(NUM_WAVELENGTHS);
 	}
 
 	// ------------------------------------------------------------------
@@ -206,5 +210,8 @@ float3 XYZToAP1(float3 xyz)
 	result = pow(max(result, 0.0), PSFSharpness);
 	result = max(result - PSFNoiseFloor, 0.0);
 
-	RWTexPSF[tid] = float2(max(result, 0.0), 0.0);
+	result = max(result, 0.0);
+	RWTexPSF_R[tid] = float2(result.r, 0.0);
+	RWTexPSF_G[tid] = float2(result.g, 0.0);
+	RWTexPSF_B[tid] = float2(result.b, 0.0);
 }
