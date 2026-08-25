@@ -1266,7 +1266,9 @@ namespace ShadowCasterManager
 			// SE: BSShadowFrustumLight accumulation setup
 			static REL::RelocationID uid(99686, 106320);
 			uintptr_t base = uid.address();
-			uintptr_t off = REL::Relocate(0xFCA4 - 0xF950, 0xF05 - 0xBB0, 0x387);
+			// The legacy-AE offset decodes as a different, invalid instruction on 1.7.99 -- not interchangeable.
+			const std::uintptr_t aeAccumOffset = REL::Module::IsAtLeast(REL::Version(1, 7, 99, 0)) ? 0x381 : (0xF05 - 0xBB0);
+			uintptr_t off = REL::Relocate<std::uintptr_t>(0xFCA4 - 0xF950, aeAccumOffset, 0x387);
 			if (!SKSE::stl::install_context_hook(base + off, 5, Hook_AccumulatedLightsArray, 5))
 				logger::error("[SCM] Failed to install Hook_AccumulatedLightsArray");
 		}
@@ -1303,13 +1305,20 @@ namespace ShadowCasterManager
 		// suffice; the patches make the suppression robust against any
 		// engine path that bypasses the per-light flag.
 		if (extended) {
+			// ids 10245/10247 are absent from the 1.7.99 address library: 1.7.99 inlines both
+			// standalone thunks into their caller and consolidates them to a single live
+			// copy, so this patches that one instruction directly instead of a function entry.
 			const uint8_t xorRax[6] = { 0x48, 0x31, 0xC0, 0x90, 0x90, 0x90 };
+			if (REL::Module::IsAtLeast(REL::Version(1, 7, 99, 0))) {
+				const uint8_t xorEax[6] = { 0x31, 0xC0, 0x90, 0x90, 0x90, 0x90 };
+				REL::safe_write(REL::Offset(0x14ea854).address(), xorEax, 6);
+			} else {
+				static REL::RelocationID uid1(10209, 10247);
+				REL::safe_write(uid1.address(), xorRax, 6);
 
-			static REL::RelocationID uid1(10209, 10247);
-			REL::safe_write(uid1.address(), xorRax, 6);
-
-			static REL::RelocationID uid2(10207, 10245);
-			REL::safe_write(uid2.address(), xorRax, 6);
+				static REL::RelocationID uid2(10207, 10245);
+				REL::safe_write(uid2.address(), xorRax, 6);
+			}
 
 			static REL::RelocationID uid3(513201, 390932);
 			const uint8_t zero = 0;

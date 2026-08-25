@@ -6,6 +6,7 @@
 #include "Effects/ENBEffectPostPass.h"
 #include "Effects/ENBLens.h"
 #include "Profiler.h"
+#include <unordered_map>
 
 enum class TimeOfDay1Index : int
 {
@@ -135,7 +136,7 @@ public:
 	bool performanceMode = false;
 
 	// Execute a single effect with perf events and common variable setup
-	void ExecuteEffect(EffectBase& effect, uint32_t enableSettingID = 0xFFFFFFFF);
+	void ExecuteEffect(Effect& effect, uint32_t enableSettingID = 0xFFFFFFFF);
 
 	// Texture copy using pixel shader
 	void CopyTexture(ID3D11ShaderResourceView* source, ID3D11RenderTargetView* destination);
@@ -161,6 +162,10 @@ public:
 		ping-pong read-back of a full-width intermediate a prior technique in the same
 		sequence just wrote under a cropped viewport. No-op outside VR / non-full-width. */
 	ID3D11ShaderResourceView* GetEyeCroppedSRV(TextureManager::Texture& a_source);
+
+	/** @brief Same eye-crop as GetEyeCroppedSRV(), but for the depth-stencil source (TextureDepth),
+		which can't be bound as a color RTV, so this writes into an R32_FLOAT scratch instead. */
+	ID3D11ShaderResourceView* GetEyeCroppedDepthSRV(ID3D11Texture2D* a_sourceTexture, ID3D11ShaderResourceView* a_sourceSRV);
 
 	// Color correction using compute shader
 	void ApplyColorCorrection(ID3D11UnorderedAccessView* textureUAV);
@@ -188,15 +193,33 @@ private:
 	bool eyeCropCopyPSCompileAttempted = false;
 	winrt::com_ptr<ID3D11Buffer> eyeCropCB;
 
-	// GetEyeCroppedSRV's backing texture -- separate from eyeSourceTexture since both
-	// can be in use at once within the same technique sequence.
-	winrt::com_ptr<ID3D11Texture2D> inputCropTexture;
-	winrt::com_ptr<ID3D11RenderTargetView> inputCropRTV;
-	winrt::com_ptr<ID3D11ShaderResourceView> inputCropSRV;
+	// GetEyeCroppedSRV's backing textures, one per distinct source -- same-format sources
+	// (e.g. RenderTargetRGBA64F, TextureLens) would otherwise overwrite each other's crop.
+	struct CropTarget
+	{
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		winrt::com_ptr<ID3D11RenderTargetView> rtv;
+		winrt::com_ptr<ID3D11ShaderResourceView> srv;
+	};
+	std::unordered_map<ID3D11Texture2D*, CropTarget> inputCropTargets;
+	// Canvas size inputCropTargets was last built against -- a resize reallocates the source
+	// textures (new pointers), so stale entries must be dropped or they leak forever.
+	uint32_t inputCropTargetsWidth = 0;
+	uint32_t inputCropTargetsHeight = 0;
 
-	// Shared draw dispatch for RefreshEyeSourceTexture and GetEyeCroppedSRV. a_destRTV
-	// must already be sized a_srcWidth/2 x a_srcHeight.
-	void CropCopyEyeHalf(ID3D11ShaderResourceView* a_source, uint32_t a_srcWidth, uint32_t a_srcHeight, ID3D11RenderTargetView* a_destRTV, int a_eyeIndex);
+	// GetEyeCroppedDepthSRV's backing scratch (R32_FLOAT; the source format can't be RTV-bound).
+	// A dedicated slot, not part of inputCropTargets: the engine exposes only one depth source.
+	winrt::com_ptr<ID3D11Texture2D> depthCropTexture;
+	winrt::com_ptr<ID3D11RenderTargetView> depthCropRTV;
+	winrt::com_ptr<ID3D11ShaderResourceView> depthCropSRV;
+	winrt::com_ptr<ID3D11PixelShader> eyeCropCopyDepthPS;
+	bool eyeCropCopyDepthPSCompileAttempted = false;
 
-	void EnsureCropTarget(winrt::com_ptr<ID3D11Texture2D>& a_texture, winrt::com_ptr<ID3D11RenderTargetView>& a_rtv, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, winrt::com_ptr<ID3D11UnorderedAccessView>* a_uav, const D3D11_TEXTURE2D_DESC& a_srcDesc, const char* a_debugName);
+	// Shared draw dispatch for the crop callers; a_destRTV must be sized a_srcWidth/2 x a_srcHeight.
+	// @return false on setup failure -- caller must fall back to the uncropped source.
+	bool CropCopyEyeHalf(ID3D11ShaderResourceView* a_source, uint32_t a_srcWidth, uint32_t a_srcHeight, ID3D11RenderTargetView* a_destRTV, int a_eyeIndex, winrt::com_ptr<ID3D11PixelShader>& a_pixelShader, bool& a_pixelShaderCompileAttempted, const wchar_t* a_shaderPath);
+
+	// a_overrideFormat overrides a_srcDesc.Format (needed for depth sources, which can't be
+	// recreated as an RTV-bindable texture in their own format). @return false on failure.
+	bool EnsureCropTarget(winrt::com_ptr<ID3D11Texture2D>& a_texture, winrt::com_ptr<ID3D11RenderTargetView>& a_rtv, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, winrt::com_ptr<ID3D11UnorderedAccessView>* a_uav, const D3D11_TEXTURE2D_DESC& a_srcDesc, const char* a_debugName, DXGI_FORMAT a_overrideFormat = DXGI_FORMAT_UNKNOWN);
 };
