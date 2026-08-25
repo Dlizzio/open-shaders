@@ -336,16 +336,9 @@ public:
 	bool isLoadingMenuOpen = false;
 	bool isMapMenuOpen = false;
 	bool isStatsMenuOpen = false;
-	/**
-	 * @brief Checks whether the main menu or loading menu is cached as open.
-	 * @returns true if either the main menu or loading menu is open, false otherwise.
-	 */
+	/** @brief Returns true if the cached main-menu or loading-menu state is open. */
 	bool IsMainOrLoadingMenuOpen() const { return isMainMenuOpen || isLoadingMenuOpen; }
-	/**
-	 * @brief Checks whether the main menu or loading menu is open, querying the UI if provided.
-	 * @param ui Pointer to the UI manager; if non-null, performs live menu checks as a fallback.
-	 * @returns true if the main menu or loading menu is open, false otherwise.
-	 */
+	/** @brief Returns true if main/loading menu is open, with a live fallback query via the UI pointer. */
 	bool IsMainOrLoadingMenuOpen(RE::UI* ui) const
 	{
 		return IsMainOrLoadingMenuOpen() ||
