@@ -274,7 +274,7 @@ namespace WeatherExtensions
 				globals::features::effects11.OnSkyUpdateColors(sky);
 #endif
 			globals::features::skySync.OnSkyUpdateColors(sky);
-			globals::features::linearLighting.ConvertWeatherEffectLighting(sky);
+			globals::features::linearLighting.UpdateWeatherLightingColors(sky);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -313,6 +313,8 @@ namespace PostProcessingExtensions
 			auto* state = globals::state;
 			const auto input = static_cast<RE::RENDER_TARGET>(a3);
 			const auto output = static_cast<RE::RENDER_TARGET>(a4);
+
+			globals::features::linearLighting.EndSceneGamma(input);
 
 			if (state->HandlePostProcessing(input, output))
 				return;
@@ -1090,9 +1092,7 @@ namespace Hooks
 		if (frameAnnotations)
 			globals::state->BeginPerfEvent("Effects");
 
-		globals::features::linearLighting.BeginEffectCompatibility(LinearLighting::EffectCompatibilityScope::kEffects);
 		func(accumulator, renderFlags);
-		globals::features::linearLighting.EndEffectCompatibility();
 
 		if (frameAnnotations)
 			globals::state->EndPerfEvent();

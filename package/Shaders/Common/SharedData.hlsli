@@ -271,16 +271,18 @@ namespace SharedData
 		float emitColorGamma;
 		float glowmapGamma;
 		float ambientGamma;
-		float fogGamma;
-		float fogAlphaGamma;
-		float skyGamma;
+		float3 pad0;
 		float waterGamma;
-		float vlGamma;
+		float pad1;
 		float ambientMult;
 		float vanillaDiffuseColorMult;
 		float emitColorMult;
 		float glowmapMult;
-		float2 pad0;
+		float2 pad2;
+		float3 effectLightingColor;
+		float pad3;
+		float3 skyStaticsColor;
+		float pad4;
 	};
 
 	struct ENBSettings

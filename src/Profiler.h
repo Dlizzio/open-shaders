@@ -3,6 +3,7 @@
 #include <atomic>
 #include <d3d11.h>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -32,6 +33,14 @@ public:
 	static constexpr uint64_t kTimerRetireFrames = 60;
 
 	using PerfEventCallback = std::function<void(std::string_view)>;
+
+	enum class CaptureMode : uint8_t
+	{
+		None = 0,
+		GPU = 1,
+		CPU = 2,
+		Both = 3
+	};
 
 	/** @brief Circular buffer tracking per-timer timing samples with statistics. */
 	struct RollingHistory
@@ -133,8 +142,12 @@ public:
 	/** @brief Gets whether the user has runtime profiling enabled. */
 	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
 
-	/** @brief Requests a timing capture for the next frame; consumers must re-request every frame. */
-	void RequestCapture();
+	/**
+	 * @brief Requests a timing capture for the next frame; consumers must re-request every frame.
+	 * @param a_mode Timing sources to acquire.
+	 * @param a_namePrefix Optional pass-name prefix applied before timer acquisition.
+	 */
+	void RequestCapture(CaptureMode a_mode = CaptureMode::Both, std::string_view a_namePrefix = {});
 
 	/** @brief True while a capture is active; gates all query issuance and CPU timing. */
 	bool IsEnabled() const { return IsUserEnabled() && captureActive.load(std::memory_order_acquire); }
@@ -296,6 +309,8 @@ private:
 		/// Engine frame count this slot's queries were stamped on; surfaced
 		/// via GetCapturedFrameCount() once this slot resolves.
 		uint32_t capturedFrame = 0;
+		CaptureMode captureMode = CaptureMode::None;
+		std::string namePrefix;
 	};
 
 	ID3D11Device* device = nullptr;
@@ -312,6 +327,12 @@ private:
 	std::atomic_bool userEnabled{ true };
 	std::atomic_bool captureRequested{ false };
 	std::atomic_bool captureActive{ false };
+	std::mutex captureRequestLock;
+	CaptureMode requestedCaptureMode = CaptureMode::None;
+	std::string requestedNamePrefix;
+	CaptureMode activeCaptureMode = CaptureMode::None;
+	std::string activeNamePrefix;
+	std::vector<bool> activePassUsesGpu;
 	double cpuTicksToMs = 0.0;
 
 	PerfEventCallback beginPerfEvent;
@@ -362,6 +383,18 @@ private:
 	/// there's simply nothing to collect.
 	bool CollectResults();
 
+	static bool HasCaptureMode(CaptureMode a_value, CaptureMode a_mode)
+	{
+		return (static_cast<uint8_t>(a_value) & static_cast<uint8_t>(a_mode)) != 0;
+	}
+
+	bool MatchesActiveFilter(std::string_view a_name) const
+	{
+		return activeNamePrefix.empty() || a_name.starts_with(activeNamePrefix);
+	}
+
+	void LatchCaptureRequest();
+
 	/** @brief Drops timers that have not been sampled for kTimerRetireFrames, so disabled passes stop reporting stale values. */
 	void RetireStaleTimers();
 
@@ -378,6 +411,8 @@ private:
 		frame.activeStack.clear();
 		frame.inFlight = false;
 		frame.cpuTimers.clear();
+		frame.captureMode = CaptureMode::None;
+		frame.namePrefix.clear();
 	}
 
 	/// Resets every ring slot except one with an open scope: frames[writeFrame]

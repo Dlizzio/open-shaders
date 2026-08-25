@@ -33,11 +33,7 @@ struct LinearLighting : Feature
 		float emitColorGamma = 1.8f;
 		float glowmapGamma = 1.8f;
 		float ambientGamma = 1.8f;
-		float fogGamma = 1.97f;
-		float fogAlphaGamma = 1.8f;
-		float skyGamma = 1.8f;
 		float waterGamma = 1.8f;
-		float vlGamma = 1.8f;
 
 		// Lighting multipliers
 		float ambientMult = 1.0f;
@@ -57,16 +53,18 @@ struct LinearLighting : Feature
 		float emitColorGamma;
 		float glowmapGamma;
 		float ambientGamma;
-		float fogGamma;
-		float fogAlphaGamma;
-		float skyGamma;
+		float pad0[3];
 		float waterGamma;
-		float vlGamma;
+		float pad1;
 		float ambientMult;
 		float vanillaDiffuseColorMult;
 		float emitColorMult;
 		float glowmapMult;
-		float pad0[2];
+		float pad2[2];
+		RE::NiColor effectLightingColor;
+		float pad3;
+		RE::NiColor skyStaticsColor;
+		float pad4;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 
@@ -76,31 +74,16 @@ struct LinearLighting : Feature
 		float pad0[3];
 	};
 
-	struct alignas(16) EffectCompositeData
-	{
-		uint mode;
-		uint enableACEScg;
-		uint width;
-		uint height;
-	};
-	STATIC_ASSERT_ALIGNAS_16(EffectCompositeData);
-
-	enum class EffectCompatibilityScope
-	{
-		kBlendedDecals,
-		kEffects
-	};
-
 	ConstantBuffer* PerGeometryCB = nullptr;
-	std::unique_ptr<ConstantBuffer> effectCompositeCB;
-	std::unique_ptr<Texture2D> effectCompatibilityTarget;
-	winrt::com_ptr<ID3D11ComputeShader> effectCompositeCS;
-	RE::BSGraphics::RenderTargetData savedMainTarget{};
-	bool effectCompatibilityActive = false;
-	EffectCompatibilityScope effectCompatibilityScope = EffectCompatibilityScope::kEffects;
+	winrt::com_ptr<ID3D11ComputeShader> sceneGammaDecodeCS;
+	bool sceneGammaActive = false;
+	bool sceneGammaDecodedByRefraction = false;
 
 	uint isDirLightLinear = false;
 	float dirLightMult = 1.0f;
+	RE::NiColor effectLightingColor{ 1.0f, 1.0f, 1.0f };
+	RE::NiColor skyStaticsColor{ 1.0f, 1.0f, 1.0f };
+	bool weatherLightingColorsInitialized = false;
 
 	/** @brief Draws the ImGui settings UI for gamma correction and lighting multiplier configuration. */
 	virtual void DrawSettings() override;
@@ -117,16 +100,16 @@ struct LinearLighting : Feature
 
 	/** @brief Creates the per-geometry constant buffer for emissive multiplier data. */
 	virtual void SetupResources() override;
-	/** @brief Encodes kMAIN and redirects compatible alpha-blended passes to the gamma-domain target. */
-	void BeginEffectCompatibility(EffectCompatibilityScope a_scope);
-	/** @brief Decodes the gamma-domain compatibility result back into linear kMAIN. */
-	void EndEffectCompatibility();
+	/** @brief Marks kMAIN as gamma-domain storage for the main world-rendering interval. */
+	void BeginSceneGamma();
+	/** @brief Decodes the completed gamma-domain scene before post-processing consumes it. */
+	void EndSceneGamma(RE::RENDER_TARGET a_renderTarget);
 
 	/** @brief Populates and returns the per-frame constant buffer data with gamma and multiplier settings. */
 	PerFrameData GetCommonBufferData();
 
-	/** @brief Converts the interpolated weather effect-lighting color before the engine applies light intensity. */
-	void ConvertWeatherEffectLighting(RE::Sky* a_sky);
+	/** @brief Caches linear copies of the interpolated weather colors used by effect meshes. */
+	void UpdateWeatherLightingColors(RE::Sky* a_sky);
 
 	/**
 	 * @brief Converts an NiColor from gamma space to linear space using the specified gamma value.
@@ -142,13 +125,7 @@ struct LinearLighting : Feature
 	 */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 
-	/** @brief Returns whether the gamma-domain effect compatibility pass is available. */
-	bool IsEffectCompatibilityReady() const;
-
 	/** @brief Contains the BSLightingShader geometry setup hook implementation. */
 	struct Hooks;
 
-private:
-	/** @brief Converts between the linear scene target and gamma-domain effect target. */
-	void DispatchEffectComposite(uint a_mode, ID3D11ShaderResourceView* a_source, ID3D11UnorderedAccessView* a_destination);
 };

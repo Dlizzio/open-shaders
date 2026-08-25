@@ -355,8 +355,6 @@ void ProfilingRenderer::RenderGraph()
 void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 {
 	auto& profiler = (*globals::profiler);
-	// Being drawn at all means something wants fresh data this frame.
-	profiler.RequestCapture();
 
 	// Only the full profiling page offers the toggle; the overlay-embedded
 	// row (showModeToggle=false) just shows the off-state below rather than
@@ -378,6 +376,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		cpuMode = (timingMode == TimingMode::CPU);
 		ImGui::Separator();
 	}
+	profiler.RequestCapture(cpuMode ? Profiler::CaptureMode::CPU : Profiler::CaptureMode::GPU);
 
 	float currentTime = static_cast<float>(ImGui::GetTime());
 	float deltaTime = currentTime - lastFrameTime;
@@ -894,7 +893,9 @@ float ProfilingRenderer::PrepareFeatureTimers(const std::string& featurePrefix, 
 	if (view.profilingDisabled) {
 		timingDataHeight = ImGui::GetTextLineHeightWithSpacing();
 	} else if (view.controlsVisible && view.mode != FeatureTimingMode::Off) {
-		profiler.RequestCapture();
+		profiler.RequestCapture(
+			view.mode == FeatureTimingMode::CPU ? Profiler::CaptureMode::CPU : Profiler::CaptureMode::GPU,
+			GetFeatureTimerPrefix(featurePrefix));
 		view.data = CollectFeatureTimingData(featurePrefix, view.mode == FeatureTimingMode::CPU);
 		timingDataHeight = GetFeatureTimingDataHeight(view.data);
 	}

@@ -59,6 +59,8 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 
 	float4 centerColor = ColorTexture[dtid];
+	if (ENABLE_LL)
+		centerColor.rgb = Color::SceneGammaToLinear(centerColor.rgb);
 	float centerDepth = DepthTexture[dtid];
 
 	// Debug states:
@@ -101,6 +103,8 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 
 			if (r.skipReason == 0) {
 				float4 otherColor = ColorTexture[r.otherPx];
+				if (ENABLE_LL)
+					otherColor.rgb = Color::SceneGammaToLinear(otherColor.rgb);
 
 				float colorDiff = abs(dot(centerColor.rgb, float3(0.2126, 0.7152, 0.0722)) -
 									  dot(otherColor.rgb, float3(0.2126, 0.7152, 0.0722)));
@@ -155,4 +159,7 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 #else
 	OutputRW[dtid] = blendedColor;
 #endif
+
+	if (ENABLE_LL)
+		OutputRW[dtid].rgb = Color::SceneLinearToGamma(OutputRW[dtid].rgb);
 }

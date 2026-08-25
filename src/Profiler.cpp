@@ -73,6 +73,11 @@ void Profiler::Initialize(ID3D11Device* a_device, ID3D11DeviceContext* a_context
 	captureActive.store(false, std::memory_order_release);
 	activeCpuTimers.clear();
 	completedCpuTimers.clear();
+	activePassUsesGpu.clear();
+	requestedCaptureMode = CaptureMode::None;
+	requestedNamePrefix.clear();
+	activeCaptureMode = CaptureMode::None;
+	activeNamePrefix.clear();
 	resolvedTotalMs = 0.0f;
 	resolvedCpuTotalMs = 0.0f;
 	capturedFrameCount = 0;
@@ -99,6 +104,7 @@ void Profiler::Release()
 	cpuTotalTimeMs = 0.0f;
 	activeCpuTimers.clear();
 	completedCpuTimers.clear();
+	activePassUsesGpu.clear();
 	frameActive = false;
 	initialized = false;
 	device = nullptr;
@@ -106,22 +112,52 @@ void Profiler::Release()
 	// userEnabled is left as-is; see the matching note in Initialize().
 	captureRequested.store(false, std::memory_order_release);
 	captureActive.store(false, std::memory_order_release);
+	requestedCaptureMode = CaptureMode::None;
+	requestedNamePrefix.clear();
+	activeCaptureMode = CaptureMode::None;
+	activeNamePrefix.clear();
 }
 
 void Profiler::SetUserEnabled(bool a_enabled)
 {
 	userEnabled.store(a_enabled, std::memory_order_release);
 	if (!a_enabled) {
+		std::scoped_lock lock(captureRequestLock);
 		captureRequested.store(false, std::memory_order_release);
 		captureActive.store(false, std::memory_order_release);
+		requestedCaptureMode = CaptureMode::None;
+		requestedNamePrefix.clear();
+		activeCaptureMode = CaptureMode::None;
+		activeNamePrefix.clear();
 	}
 }
 
-void Profiler::RequestCapture()
+void Profiler::RequestCapture(CaptureMode a_mode, std::string_view a_namePrefix)
 {
-	if (!IsUserEnabled())
+	if (!IsUserEnabled() || a_mode == CaptureMode::None)
 		return;
+
+	std::scoped_lock lock(captureRequestLock);
+	if (!captureRequested.load(std::memory_order_relaxed)) {
+		requestedCaptureMode = a_mode;
+		requestedNamePrefix = a_namePrefix;
+	} else {
+		requestedCaptureMode = static_cast<CaptureMode>(static_cast<uint8_t>(requestedCaptureMode) | static_cast<uint8_t>(a_mode));
+		if (requestedNamePrefix != a_namePrefix)
+			requestedNamePrefix.clear();
+	}
 	captureRequested.store(true, std::memory_order_release);
+}
+
+void Profiler::LatchCaptureRequest()
+{
+	std::scoped_lock lock(captureRequestLock);
+	const bool requested = captureRequested.exchange(false, std::memory_order_acq_rel);
+	activeCaptureMode = requested ? requestedCaptureMode : CaptureMode::None;
+	activeNamePrefix = requested ? std::move(requestedNamePrefix) : std::string{};
+	requestedCaptureMode = CaptureMode::None;
+	requestedNamePrefix.clear();
+	captureActive.store(requested && activeCaptureMode != CaptureMode::None, std::memory_order_release);
 }
 
 void Profiler::BeginFrame()
@@ -143,8 +179,17 @@ void Profiler::BeginFrame()
 
 bool Profiler::BeginPass(std::string_view name, bool fireCallbacks)
 {
-	if (!initialized || !context || !IsEnabled())
+	if (!initialized || !context || !IsEnabled() || !MatchesActiveFilter(name))
 		return false;
+
+	if (!HasCaptureMode(activeCaptureMode, CaptureMode::GPU)) {
+		if (!BeginCpuPass(name))
+			return false;
+		activePassUsesGpu.push_back(false);
+		if (fireCallbacks && beginPerfEvent)
+			beginPerfEvent(name);
+		return true;
+	}
 
 	if (!frameActive)
 		BeginFrame();
@@ -162,8 +207,11 @@ bool Profiler::BeginPass(std::string_view name, bool fireCallbacks)
 	auto& timer = frame.timers[slot];
 	timer.name = name;
 	timer.depth = static_cast<uint32_t>(frame.activeStack.size());
-	QueryPerformanceCounter(&timer.cpuBegin);
+	timer.cpuMs = 0.0f;
+	if (HasCaptureMode(activeCaptureMode, CaptureMode::CPU))
+		QueryPerformanceCounter(&timer.cpuBegin);
 	frame.activeStack.push_back(slot);
+	activePassUsesGpu.push_back(true);
 
 	if (fireCallbacks && beginPerfEvent)
 		beginPerfEvent(name);
@@ -172,7 +220,18 @@ bool Profiler::BeginPass(std::string_view name, bool fireCallbacks)
 
 void Profiler::EndPass(bool fireCallbacks)
 {
-	if (!initialized || !context || !frameActive)
+	if (!initialized || !context || activePassUsesGpu.empty())
+		return;
+
+	const bool usesGpu = activePassUsesGpu.back();
+	activePassUsesGpu.pop_back();
+	if (!usesGpu) {
+		EndCpuPass();
+		if (fireCallbacks && endPerfEvent)
+			endPerfEvent({});
+		return;
+	}
+	if (!frameActive)
 		return;
 
 	auto& frame = frames[writeFrame];
@@ -184,9 +243,11 @@ void Profiler::EndPass(bool fireCallbacks)
 
 	auto& timer = frame.timers[slot];
 
-	LARGE_INTEGER cpuEnd;
-	QueryPerformanceCounter(&cpuEnd);
-	timer.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
+	if (HasCaptureMode(activeCaptureMode, CaptureMode::CPU)) {
+		LARGE_INTEGER cpuEnd;
+		QueryPerformanceCounter(&cpuEnd);
+		timer.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
+	}
 
 	frame.batch.CloseInterval(context, static_cast<uint32_t>(slot));
 
@@ -197,8 +258,7 @@ void Profiler::EndPass(bool fireCallbacks)
 void Profiler::EndFrame(uint32_t a_frameCount)
 {
 	if (!initialized || !context) {
-		captureRequested.store(false, std::memory_order_release);
-		captureActive.store(false, std::memory_order_release);
+		LatchCaptureRequest();
 		activeCpuTimers.clear();
 		completedCpuTimers.clear();
 		return;
@@ -213,8 +273,7 @@ void Profiler::EndFrame(uint32_t a_frameCount)
 	if (!IsUserEnabled() && !frameActive && !hasCpuTimers) {
 		totalTimeMs = 0.0f;
 		cpuTotalTimeMs = 0.0f;
-		captureRequested.store(false, std::memory_order_release);
-		captureActive.store(false, std::memory_order_release);
+		LatchCaptureRequest();
 		return;
 	}
 
@@ -225,7 +284,7 @@ void Profiler::EndFrame(uint32_t a_frameCount)
 		if (!CollectResults()) {
 			// Oldest frame's GPU data isn't ready yet; still let capture
 			// toggle on/off rather than blocking the latch on it.
-			captureActive.store(captureRequested.exchange(false, std::memory_order_acq_rel), std::memory_order_release);
+			LatchCaptureRequest();
 			return;
 		}
 
@@ -240,7 +299,7 @@ void Profiler::EndFrame(uint32_t a_frameCount)
 			// stamp on resolve IS the stale-session-replay signal.
 			if (std::ranges::any_of(frames, [](const FrameQueries& f) { return f.inFlight || !f.cpuTimers.empty(); }))
 				writeFrame = (writeFrame + 1) % kFrameLatency;
-			captureActive.store(captureRequested.exchange(false, std::memory_order_acq_rel), std::memory_order_release);
+			LatchCaptureRequest();
 			return;
 		}
 		// Otherwise, CPU-only scopes closed with no GPU pass active this
@@ -260,10 +319,12 @@ void Profiler::EndFrame(uint32_t a_frameCount)
 		completedCpuTimers.clear();
 	}
 
+	frames[writeFrame].captureMode = activeCaptureMode;
+	frames[writeFrame].namePrefix = activeNamePrefix;
 	frames[writeFrame].capturedFrame = a_frameCount;
 	writeFrame = (writeFrame + 1) % kFrameLatency;
 	framesSinceInit++;
-	captureActive.store(captureRequested.exchange(false, std::memory_order_acq_rel), std::memory_order_release);
+	LatchCaptureRequest();
 }
 
 Profiler::KnownTimer& Profiler::GetOrCreateTimer(const std::string& name)
@@ -279,7 +340,7 @@ Profiler::KnownTimer& Profiler::GetOrCreateTimer(const std::string& name)
 
 bool Profiler::BeginCpuPass(std::string_view name)
 {
-	if (!IsEnabled())
+	if (!IsEnabled() || !HasCaptureMode(activeCaptureMode, CaptureMode::CPU) || !MatchesActiveFilter(name))
 		return false;
 	CpuTimer timer;
 	timer.name = name;
@@ -349,7 +410,7 @@ bool Profiler::CollectResults()
 				// loading hitch spanning this pass) must not discard an
 				// otherwise-valid GPU timestamp, and vice versa.
 				const bool gpuValid = IsValidProfilerSample(ms);
-				const bool cpuValid = IsValidProfilerSample(timer.cpuMs);
+				const bool cpuValid = HasCaptureMode(frame.captureMode, CaptureMode::CPU) && IsValidProfilerSample(timer.cpuMs);
 				if (!gpuValid && !cpuValid)
 					return;
 
@@ -414,21 +475,22 @@ bool Profiler::CollectResults()
 	// ProfilingRenderer's history alignment assumes this). A timer missing
 	// this cycle gets a zero sample instead, but only for a side that had a
 	// chance to report -- not on a disjoint bracket or skipped BeginFrame.
-	const bool cpuCycleResolved = gpuFrameResolved || hadCpuTimers;
+	const bool cpuCycleResolved = HasCaptureMode(frame.captureMode, CaptureMode::CPU) && (gpuFrameResolved || hadCpuTimers);
 	for (auto& known : knownTimers) {
 		auto it = activeTimers.find(known.name);
+		const bool includedByFilter = frame.namePrefix.empty() || known.name.starts_with(frame.namePrefix);
 		const bool freshGpu = it != activeTimers.end() && it->second.hasGpu;
 		const bool freshCpu = it != activeTimers.end() && it->second.hasCpu;
 		if (freshGpu) {
 			known.hasGpu = true;
 			known.gpu.PushSample(it->second.gpuMs);
-		} else if (gpuFrameResolved && known.hasGpu) {
+		} else if (gpuFrameResolved && includedByFilter && known.hasGpu) {
 			known.gpu.PushSample(0.0f);
 		}
 		if (freshCpu) {
 			known.hasCpu = true;
 			known.cpu.PushSample(it->second.cpuMs);
-		} else if (cpuCycleResolved && known.hasCpu) {
+		} else if (cpuCycleResolved && includedByFilter && known.hasCpu) {
 			known.cpu.PushSample(0.0f);
 		}
 		if (freshGpu || freshCpu)

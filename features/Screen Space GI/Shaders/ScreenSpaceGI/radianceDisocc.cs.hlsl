@@ -157,7 +157,7 @@ void readHistory(
 
 	half3 radiance = 0;
 #ifdef GI
-	radiance = Color::RadianceToLinear(FULLRES_LOAD(srcDiffuse, pixCoord, uv * frameScale, samplerLinearClamp).rgb * GIStrength);
+	radiance = Color::SceneGammaToLinear(FULLRES_LOAD(srcDiffuse, pixCoord, uv * frameScale, samplerLinearClamp).rgb) * GIStrength;
 	radiance = filterNaN(radiance);
 	radiance = filterInf(radiance);
 	outRadianceDisocc[pixCoord] = radiance;

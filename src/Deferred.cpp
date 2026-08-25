@@ -766,6 +766,7 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	state->inWorld = true;
 	state->worldRenderedThisFrame = true;
+	globals::features::linearLighting.BeginSceneGamma();
 	func(a1);
 
 	state->inWorld = false;
@@ -796,9 +797,7 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 
 	// Deferred blended decals
 
-	globals::features::linearLighting.BeginEffectCompatibility(LinearLighting::EffectCompatibilityScope::kBlendedDecals);
 	func(This, RenderFlags);
-	globals::features::linearLighting.EndEffectCompatibility();
 
 	deferred->EndDeferred();
 
@@ -818,11 +817,16 @@ void Deferred::Hooks::BSCubeMapCamera_RenderCubemap::thunk(RE::NiAVObject* camer
 {
 	auto deferred = globals::deferred;
 	auto state = globals::state;
+	constexpr auto gammaRenderTarget = static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
+	const bool restoreGammaRenderTarget = (state->permutationData.ExtraShaderDescriptor & gammaRenderTarget) != 0;
 
 	deferred->ReflectionsPrepasses();
+	state->permutationData.ExtraShaderDescriptor &= ~gammaRenderTarget;
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections);
 	func(camera, a2, a3, a4, a5);
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections);
+	if (restoreGammaRenderTarget)
+		state->permutationData.ExtraShaderDescriptor |= gammaRenderTarget;
 }
 
 void Deferred::Hooks::Main_RenderFirstPersonView::thunk(bool a1, bool a2)

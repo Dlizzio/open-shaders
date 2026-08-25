@@ -24,11 +24,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	emitColorGamma,
 	glowmapGamma,
 	ambientGamma,
-	fogGamma,
-	fogAlphaGamma,
-	skyGamma,
 	waterGamma,
-	vlGamma,
 	ambientMult,
 	vanillaDiffuseColorMult,
 	emitColorMult,
@@ -42,8 +38,6 @@ namespace
 	constexpr float kMultiplierMin = 0.0f;
 	constexpr float kMultiplierMax = 5.0f;
 	constexpr float kAmbientMultiplierMax = 5.0f;
-	constexpr uint kEncodeEffectTarget = 0;
-	constexpr uint kDecodeEffectTarget = 1;
 }
 
 void LinearLighting::DrawSettings()
@@ -71,12 +65,8 @@ void LinearLighting::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("ambient_gamma"), "Ambient Gamma"), &settings.ambientGamma, kGammaMin, kGammaMax, "%.2f");
 			ImGui::SliderFloat(T(TKEY("color_gamma"), "Color Gamma"), &settings.colorGamma, kGammaMin, kGammaMax, "%.2f");
 			ImGui::SliderFloat(T(TKEY("emissive_color_gamma"), "Emissive Color Gamma"), &settings.emitColorGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("fog_gamma"), "Fog Gamma"), &settings.fogGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("fog_transparency_gamma"), "Fog Transparency Gamma"), &settings.fogAlphaGamma, kGammaMin, kGammaMax, "%.2f");
 			ImGui::SliderFloat(T(TKEY("glowmap_gamma"), "Glowmap Gamma"), &settings.glowmapGamma, kGammaMin, kGammaMax, "%.2f");
 			ImGui::SliderFloat(T(TKEY("light_gamma"), "Light Gamma"), &settings.lightGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("sky_gamma"), "Sky Gamma"), &settings.skyGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("vl_gamma"), "Volumetric Lighting Gamma"), &settings.vlGamma, kGammaMin, kGammaMax, "%.2f");
 			ImGui::SliderFloat(T(TKEY("water_gamma"), "Water Gamma"), &settings.waterGamma, kGammaMin, kGammaMax, "%.2f");
 			ImGui::EndTabItem();
 		}
@@ -112,123 +102,59 @@ void LinearLighting::RestoreDefaultSettings()
 void LinearLighting::SetupResources()
 {
 	PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>(), "LinearLighting::PerGeometryCB");
-	effectCompatibilityActive = false;
-	effectCompatibilityTarget.reset();
-	effectCompositeCB.reset();
-	effectCompositeCS = nullptr;
+	sceneGammaDecodeCS.attach(static_cast<ID3D11ComputeShader*>(
+		Util::CompileShader(L"Data\\Shaders\\LinearLighting\\SceneGammaDecodeCS.hlsl", {}, "cs_5_0")));
+	sceneGammaActive = false;
+	sceneGammaDecodedByRefraction = false;
+}
 
-	auto& main = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	if (!main.texture || !main.SRV || !main.RTV || !main.UAV) {
-		logger::error("[LinearLighting] Effect compatibility requires kMAIN SRV, RTV, and UAV support");
+void LinearLighting::BeginSceneGamma()
+{
+	sceneGammaActive = false;
+	sceneGammaDecodedByRefraction = false;
+	globals::state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
+
+	const auto data = GetCommonBufferData();
+	if (!globals::state->inWorld || !data.enableLinearLighting || !sceneGammaDecodeCS)
+		return;
+
+	sceneGammaActive = true;
+	globals::state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
+}
+
+void LinearLighting::EndSceneGamma(RE::RENDER_TARGET a_renderTarget)
+{
+	if (!sceneGammaActive)
+		return;
+
+	sceneGammaActive = false;
+	globals::state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
+	if (sceneGammaDecodedByRefraction) {
+		sceneGammaDecodedByRefraction = false;
 		return;
 	}
 
-	D3D11_TEXTURE2D_DESC textureDesc{};
-	main.texture->GetDesc(&textureDesc);
-	textureDesc.Usage = D3D11_USAGE_DEFAULT;
-	textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
-	textureDesc.CPUAccessFlags = 0;
-	textureDesc.MiscFlags = 0;
-
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-	main.SRV->GetDesc(&srvDesc);
-	main.RTV->GetDesc(&rtvDesc);
-	main.UAV->GetDesc(&uavDesc);
-
-	effectCompatibilityTarget = std::make_unique<Texture2D>(textureDesc, "LinearLighting::EffectCompatibility");
-	effectCompatibilityTarget->CreateSRV(srvDesc);
-	effectCompatibilityTarget->CreateRTV(rtvDesc);
-	effectCompatibilityTarget->CreateUAV(uavDesc);
-	effectCompositeCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<EffectCompositeData>(), "LinearLighting::EffectCompositeCB");
-
-	effectCompositeCS.attach(static_cast<ID3D11ComputeShader*>(
-		Util::CompileShader(L"Data\\Shaders\\LinearLighting\\EffectCompositeCS.hlsl", {}, "cs_5_0")));
-	if (!effectCompositeCS) {
-		logger::error("[LinearLighting] Failed to compile the effect compatibility shader");
-		effectCompatibilityTarget.reset();
-		effectCompositeCB.reset();
+	const auto targetIndex = static_cast<size_t>(a_renderTarget);
+	if (!sceneGammaDecodeCS || targetIndex >= Util::GetRenderTargetCount())
 		return;
-	}
-	Util::SetResourceName(effectCompositeCS.get(), "LinearLighting::EffectCompositeCS");
-}
 
-bool LinearLighting::IsEffectCompatibilityReady() const
-{
-	return effectCompatibilityTarget && effectCompositeCB && effectCompositeCS;
-}
+	auto& target = globals::game::renderer->GetRuntimeData().renderTargets[targetIndex];
+	if (!target.texture || !target.UAV)
+		return;
 
-void LinearLighting::DispatchEffectComposite(
-	uint a_mode, ID3D11ShaderResourceView* a_source, ID3D11UnorderedAccessView* a_destination)
-{
-	EffectCompositeData data{};
-	data.mode = a_mode;
-	data.enableACEScg = GetCommonBufferData().enableACEScg;
-	data.width = effectCompatibilityTarget->desc.Width;
-	data.height = effectCompatibilityTarget->desc.Height;
-	effectCompositeCB->Update(data);
-
+	CS_GPU_PASS("LinearLighting::DecodeScene");
 	auto* context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);
-	context->CSSetShader(effectCompositeCS.get(), nullptr, 0);
-	ID3D11Buffer* constantBuffer = effectCompositeCB->CB();
-	context->CSSetConstantBuffers(0, 1, &constantBuffer);
-	context->CSSetShaderResources(0, 1, &a_source);
-	context->CSSetUnorderedAccessViews(0, 1, &a_destination, nullptr);
-	context->Dispatch((data.width + 7) / 8, (data.height + 7) / 8, 1);
+	context->CSSetShader(sceneGammaDecodeCS.get(), nullptr, 0);
+	context->CSSetUnorderedAccessViews(0, 1, &target.UAV, nullptr);
 
-	ID3D11ShaderResourceView* nullSRV = nullptr;
+	const auto width = static_cast<uint32_t>(globals::state->screenSize.x);
+	const auto height = static_cast<uint32_t>(globals::state->screenSize.y);
+	context->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
+
 	ID3D11UnorderedAccessView* nullUAV = nullptr;
-	ID3D11Buffer* nullBuffer = nullptr;
-	context->CSSetShaderResources(0, 1, &nullSRV);
 	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
-	context->CSSetConstantBuffers(0, 1, &nullBuffer);
 	context->CSSetShader(nullptr, nullptr, 0);
-}
-
-void LinearLighting::BeginEffectCompatibility(EffectCompatibilityScope a_scope)
-{
-	const auto data = GetCommonBufferData();
-	if (effectCompatibilityActive || !globals::state->inWorld || !data.enableLinearLighting || !IsEffectCompatibilityReady())
-		return;
-
-	auto& main = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	savedMainTarget = main;
-	if (a_scope == EffectCompatibilityScope::kBlendedDecals) {
-		CS_GPU_PASS("LinearLighting::EncodeBlendedDecals");
-		DispatchEffectComposite(kEncodeEffectTarget, savedMainTarget.SRV, effectCompatibilityTarget->uav.get());
-	} else {
-		CS_GPU_PASS("LinearLighting::EncodeEffects");
-		DispatchEffectComposite(kEncodeEffectTarget, savedMainTarget.SRV, effectCompatibilityTarget->uav.get());
-	}
-
-	main.texture = effectCompatibilityTarget->resource.get();
-	main.RTV = effectCompatibilityTarget->rtv.get();
-	main.SRV = effectCompatibilityTarget->srv.get();
-	main.UAV = effectCompatibilityTarget->uav.get();
-	effectCompatibilityActive = true;
-	effectCompatibilityScope = a_scope;
-	globals::state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
-	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-}
-
-void LinearLighting::EndEffectCompatibility()
-{
-	if (!effectCompatibilityActive)
-		return;
-
-	auto& main = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	main = savedMainTarget;
-	effectCompatibilityActive = false;
-	globals::state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
-	if (effectCompatibilityScope == EffectCompatibilityScope::kBlendedDecals) {
-		CS_GPU_PASS("LinearLighting::DecodeBlendedDecals");
-		DispatchEffectComposite(kDecodeEffectTarget, effectCompatibilityTarget->srv.get(), main.UAV);
-	} else {
-		CS_GPU_PASS("LinearLighting::DecodeEffects");
-		DispatchEffectComposite(kDecodeEffectTarget, effectCompatibilityTarget->srv.get(), main.UAV);
-	}
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
 
@@ -258,10 +184,28 @@ struct LinearLighting::Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct BSImagespaceShaderRefraction_Render
+	{
+		static void thunk(void* a_imageSpaceShader, RE::BSTriShape* a_shape, RE::ImageSpaceEffectParam* a_param)
+		{
+			auto& linearLighting = globals::features::linearLighting;
+			if (linearLighting.sceneGammaActive) {
+				CS_GPU_PASS("LinearLighting::DecodeScene");
+				func(a_imageSpaceShader, a_shape, a_param);
+				linearLighting.sceneGammaDecodedByRefraction = true;
+				return;
+			}
+
+			func(a_imageSpaceShader, a_shape, a_param);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	static void Install()
 	{
 		stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
-		logger::info("[LinearLighting] Installed hooks - BSLightingShader_SetupGeometry");
+		stl::write_vfunc<0x1, BSImagespaceShaderRefraction_Render>(RE::VTABLE_BSImagespaceShaderRefraction[3]);
+		logger::info("[LinearLighting] Installed shader hooks");
 	}
 };
 
@@ -279,7 +223,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	}
 	bool isMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 	auto data = PerFrameData{};
-	data.enableLinearLighting = settings.enableLinearLighting && IsEffectCompatibilityReady() && !isMainLoadingMenu;
+	data.enableLinearLighting = settings.enableLinearLighting && sceneGammaDecodeCS && !isMainLoadingMenu;
 	data.enableACEScg = settings.enableACEScg && data.enableLinearLighting && globals::features::postProcessing.loaded;
 	data.isDirLightLinear = isDirLightLinear;
 	data.dirLightMult = dirLightMult;
@@ -288,11 +232,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.emitColorGamma = settings.emitColorGamma;
 	data.glowmapGamma = settings.glowmapGamma;
 	data.ambientGamma = settings.ambientGamma;
-	data.fogGamma = settings.fogGamma;
-	data.fogAlphaGamma = settings.fogAlphaGamma;
-	data.skyGamma = settings.skyGamma;
 	data.waterGamma = settings.waterGamma;
-	data.vlGamma = settings.vlGamma;
 
 #if defined(ENABLE_EFFECTS11)
 	if (globals::features::effects11.loaded) {
@@ -304,11 +244,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 			data.emitColorGamma = 1.0f;
 			data.glowmapGamma = 1.0f;
 			data.ambientGamma = 1.0f;
-			data.fogGamma = 1.0f;
-			data.fogAlphaGamma = 1.0f;
-			data.skyGamma = 1.0f;
 			data.waterGamma = 1.0f;
-			data.vlGamma = 1.0f;
 		}
 	}
 #endif
@@ -317,6 +253,10 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
 	data.emitColorMult = settings.emitColorMult;
 	data.glowmapMult = settings.glowmapMult;
+	if (!weatherLightingColorsInitialized)
+		UpdateWeatherLightingColors(globals::game::sky);
+	data.effectLightingColor = effectLightingColor;
+	data.skyStaticsColor = skyStaticsColor;
 
 	// Override multipliers to neutral values when ENB PP is active
 #if defined(ENABLE_EFFECTS11)
@@ -334,13 +274,16 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	return data;
 }
 
-void LinearLighting::ConvertWeatherEffectLighting(RE::Sky* a_sky)
+void LinearLighting::UpdateWeatherLightingColors(RE::Sky* a_sky)
 {
-	if (!a_sky || !GetCommonBufferData().enableLinearLighting)
+	if (!a_sky)
 		return;
 
-	auto& effectLighting = a_sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kEffectLighting)];
-	effectLighting = ColorToLinear(effectLighting, kEffectGamma);
+	effectLightingColor = ColorToLinear(
+		a_sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kEffectLighting)], kEffectGamma);
+	skyStaticsColor = ColorToLinear(
+		a_sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kSkyStatics)], kEffectGamma);
+	weatherLightingColorsInitialized = true;
 }
 
 RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)

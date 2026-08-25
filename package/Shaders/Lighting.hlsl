@@ -3017,7 +3017,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	color.xyz = Color::IrradianceToGamma(color.xyz);
 	float3 fogColor = Color::Fog(input.FogParam.xyz);
-	float fogFactor = Color::FogAlpha(input.FogParam.w);
+	float fogFactor = input.FogParam.w;
 #		if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
@@ -3041,14 +3041,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(EXP_HEIGHT_FOG)
 		if (SharedData::exponentialHeightFogSettings.enabled) {
 			if (!ExponentialHeightFog::ShouldDisableVanillaFog()) {
-				color.xyz = lerp(color.xyz, vanillaFogColor, vanillaFogFactor);
+				color.xyz = Color::BlendFog(color.xyz, vanillaFogColor, vanillaFogFactor);
 			}
 			color.xyz = lerp(color.xyz, fogColor, fogFactor);
 		} else {
-			color.xyz = lerp(color.xyz, fogColor, fogFactor);
+			color.xyz = Color::BlendFog(color.xyz, fogColor, fogFactor);
 		}
 #		else
-		color.xyz = lerp(color.xyz, fogColor, fogFactor);
+		color.xyz = Color::BlendFog(color.xyz, fogColor, fogFactor);
 #		endif
 	}
 #	endif

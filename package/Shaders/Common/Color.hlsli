@@ -35,6 +35,8 @@ namespace Color
 {
 	static float GammaCorrectionValue = 2.2;
 	static const float EffectGamma = 1.8;
+	static const float FogGamma = 1.8;
+	static const float SkyGamma = 1.8;
 	static const uint PointLightFlagLinear = POINT_LIGHT_FLAG_LINEAR;
 	static const uint PointLightFlagSpot = POINT_LIGHT_FLAG_SPOT;
 	static const uint PointLightFlagOmnidirectionalBulb = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
@@ -286,6 +288,16 @@ namespace Color
 		return ENABLE_LL ? LinearToEffectGamma(ENABLE_ACEScg ? AP1TosRGB(color) : color) : color;
 	}
 
+	float3 SceneGammaToLinear(float3 color)
+	{
+		return ENABLE_LL ? GamutTransform(EffectGammaToLinear(color)) : SkyrimGammaToLinear(color);
+	}
+
+	float3 SceneLinearToGamma(float3 color)
+	{
+		return ENABLE_LL ? LinearToEffectGamma(ENABLE_ACEScg ? AP1TosRGB(color) : color) : LinearToSkyrimGamma(color);
+	}
+
 	float3 DirectionalLight(float3 color, bool isLinear = false)
 	{
 		return Light(color, isLinear) *
@@ -356,12 +368,24 @@ namespace Color
 
 	float3 Fog(float3 color)
 	{
-		return ENABLE_LL ? GamutTransform(pow(abs(color), SharedData::linearLightingSettings.fogGamma)) : color;
+		return ENABLE_LL ? GamutTransform(pow(abs(color), FogGamma)) : color;
 	}
 
-	float FogAlpha(float alpha)
+	float3 BlendFog(float3 color, float3 fogColor, float fogFactor, float colorScale, float fogColorScale)
 	{
-		return ENABLE_LL ? pow(abs(alpha), SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
+		if (!ENABLE_LL)
+			return lerp(colorScale * color, fogColorScale * fogColor, fogFactor);
+
+		float3 linearSrgbColor = ENABLE_ACEScg ? AP1TosRGB(color) : color;
+		float3 linearSrgbFogColor = ENABLE_ACEScg ? AP1TosRGB(fogColor) : fogColor;
+		float3 gammaColor = colorScale * pow(abs(linearSrgbColor), 1.0 / FogGamma);
+		float3 gammaFogColor = fogColorScale * pow(abs(linearSrgbFogColor), 1.0 / FogGamma);
+		return GamutTransform(pow(abs(lerp(gammaColor, gammaFogColor, fogFactor)), FogGamma));
+	}
+
+	float3 BlendFog(float3 color, float3 fogColor, float fogFactor)
+	{
+		return BlendFog(color, fogColor, fogFactor, 1.0, 1.0);
 	}
 
 	float3 Effect(float3 color)
@@ -371,17 +395,12 @@ namespace Color
 
 	float3 Sky(float3 color)
 	{
-		return ENABLE_LL ? GamutTransform(pow(abs(color), SharedData::linearLightingSettings.skyGamma)) : color;
+		return ENABLE_LL ? GamutTransform(pow(abs(color), SkyGamma)) : color;
 	}
 
 	float3 Water(float3 color)
 	{
 		return ENABLE_LL ? GamutTransform(pow(abs(color), SharedData::linearLightingSettings.waterGamma)) : color;
-	}
-
-	float3 VolumetricLighting(float3 color)
-	{
-		return ENABLE_LL ? GamutTransform(pow(abs(color), SharedData::linearLightingSettings.vlGamma)) : color;
 	}
 
 	float3 ColorToLinear(float3 color)

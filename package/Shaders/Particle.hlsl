@@ -1,5 +1,6 @@
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/Permutation.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 
@@ -350,6 +351,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		psout.Color.xyz = Color::IrradianceToGamma(lerp(refractColor, reflectColor, fresnel));
 		psout.Color.w = alpha;
 		psout.Normal = float4(0, 1, 0, alpha);
+		if (ENABLE_LL && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget))
+			psout.Color.xyz = Color::SceneLinearToGamma(psout.Color.xyz);
 		return psout;
 	}
 #	endif
@@ -449,6 +452,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Color.w = baseColor.w;
 	psout.Normal.w = baseColor.w;
 	psout.Normal.xyz = float3(0, 1, 0);
+	if (ENABLE_LL && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget))
+		psout.Color.xyz = Color::SceneLinearToGamma(psout.Color.xyz);
 
 	return psout;
 }
