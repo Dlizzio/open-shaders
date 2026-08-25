@@ -1,16 +1,7 @@
 [
     {
         "file": "enbeffectpostpass.fx",
-        "hiddenGroups": ["AA", "KiSharp", "Blur Suite", "KiGrain", "CinBorders", "Vignette"],
         "patches": [
-            { "variable": "AA.|- SMAA Enable", "value": "false" },
-            { "variable": "AA.|- FXAA Enable", "value": "false" },
-            { "variable": "CinBorders.|- Enable", "value": "false" },
-            { "variable": "KiSharp.|- Enable", "value": "false" },
-            { "variable": "Blur Suite.|- Enable", "value": "false" },
-            { "variable": "Blur Suite.|:: Enable", "value": "false" },
-            { "variable": "Blur Suite.Depth.|- Enable", "value": "false" },
-
             { "variable": "Enable Sharpening", "value": "false" },
             { "variable": "Enable Depth Sharpening", "value": "false" },
             { "variable": "Enable Luma Sharpening", "value": "false" },
@@ -19,8 +10,6 @@
             { "variable": "Enable CAS", "value": "false" },
             { "variable": "Enable Contrast Adaptive Sharpener", "value": "false" },
             { "variable": "Enable ENB Sharpen", "value": "false" },
-            { "variable": "Enable - Kitsune Sharpen", "value": "false" },
-            { "variable": "Enable  Kitsuune Sharpen", "value": "false" },
             { "variable": "Use Sharpening", "value": "false" },
             { "variable": "Use Luma Sharp", "value": "false" },
             { "variable": "Use Xtra Sharpening", "value": "false" },
@@ -33,14 +22,6 @@
             { "variable": "|- Sharp - Enable Unsharp Mask", "value": "false" },
             { "variable": "| Enable CAS Sharpening", "value": "false" },
             { "variable": "| Enable Contrast Adaptive Sharpening", "value": "false" },
-            {
-                "variable": "SHARPEN SHADER.CAS Shapen.Enable CAS Sharp by rhellct",
-                "value": "false"
-            },
-            {
-                "variable": "SHARPEN SHADER.Kitsune Sharpen.Enable - Kitsune Sharpen",
-                "value": "false"
-            },
             { "variable": "--------------  FilmicSharpen  --------------", "value": "false" },
             { "variable": "--------------  LumaSharpen  --------------", "value": "false" },
             { "variable": "---------------  Sharpening  ----------------", "value": "false" },
@@ -48,16 +29,11 @@
 
             { "variable": "Enable Blurring", "value": "false" },
             { "variable": "Enable ENB Blur", "value": "false" },
-            { "variable": "Enable Kitsune Blur", "value": "false" },
-            { "variable": "Enable Kitsuune Blur", "value": "false" },
-            { "variable": "Enable -Kitsune Blur", "value": "false" },
             { "variable": "Use Blurring", "value": "false" },
             { "variable": "Blur", "value": "false" },
             { "variable": "|- Blur - Enable", "value": "false" },
             { "variable": "|- Blur - Depth - Enable", "value": "false" },
             { "variable": "| Enable Gaussian Blur", "value": "false" },
-            { "variable": "Blur.Enable -Kitsune Blur", "value": "false" },
-            { "variable": "Blur.Depth - Enable", "value": "false" },
             { "variable": "-----------------  Blurring  ------------------", "value": "false" },
 
             { "variable": "Enable Letterbox Bars", "value": "false" },
@@ -73,7 +49,6 @@
             { "variable": "| Enable Letterbox", "value": "false" },
             { "variable": "Cam: Toggle Letterbox", "value": "false" },
             { "variable": "enable border", "value": "false" },
-            { "variable": "Film Effect.LETTERBOX.Enable Letterbox Bars", "value": "false" },
             { "variable": "------------------  Border  ------------------", "value": "false" },
             { "variable": "----------------  Letterbox  -----------------", "value": "false" },
 
@@ -83,8 +58,6 @@
             { "variable": "| Enable Grain", "value": "false" },
             { "variable": "| - Enable Grain", "value": "false" },
             { "variable": "Grain Enable", "value": "false" },
-            { "variable": "KiGrain.|- Enable", "value": "false" },
-            { "variable": "Distortion.GRAIN.Enable Grain", "value": "false" },
 
             { "variable": "Enable Vignette", "value": "false" },
             { "variable": "|- Vignette - Enable", "value": "false" },
@@ -94,10 +67,7 @@
             { "variable": "Vignette enabled", "value": "false" },
             { "variable": "EnableVignette", "value": "false" },
             { "variable": "NE: Vignette Enable", "value": "false" },
-            { "variable": "Vignette.|- Enable", "value": "false" },
             { "variable": "Enable : Vignette Effect", "value": "false" },
-            { "variable": "Film Effect.Vignette.Enable Vignette", "value": "false" },
-            { "variable": "Blur.Enable : Vignette Effect", "value": "false" },
             { "variable": "|- Blur - Vignette - Enable", "value": "false" },
 
             { "variable": "|- Enable Chromatic Aberration", "value": "false" },
@@ -105,8 +75,6 @@
             { "variable": "| Enable Chromatic Aberration", "value": "false" },
             { "variable": "EnableChromaticAberration", "value": "false" },
             { "variable": "Chromatic Aberration enabled", "value": "false" },
-            { "variable": "Chromatic Aberration.|- Enable Chromatic Aberration", "value": "false" },
-            { "variable": "Distortion.ChromaticAberration.Enable C.A", "value": "false" },
 
             { "variable": "| Enable Lens Distortion", "value": "false" },
 
@@ -118,17 +86,12 @@
             { "variable": "|- AA - Enable  FXAA", "value": "false" },
             { "variable": "|- AA - Enable  SMAA", "value": "false" },
             { "variable": "|- AA - Enable CREAA", "value": "false" },
-            { "variable": "---------- FXAA: Use FXAA ----------", "value": "false" },
-            { "variable": "ANTIALIASING.SMAA.Enable SMAA", "value": "false" },
-            { "variable": "ANTIALIASING.CREAA.Enable CREAA", "value": "false" }
+            { "variable": "---------- FXAA: Use FXAA ----------", "value": "false" }
         ]
     },
     {
         "file": "enblens.fx",
-        "patches": [
-            { "variable": "|- Enable Chromatic Aberration", "value": "false" },
-            { "variable": "Chromatic Aberration.|- Enable Chromatic Aberration", "value": "false" }
-        ]
+        "patches": [{ "variable": "|- Enable Chromatic Aberration", "value": "false" }]
     },
     {
         "file": "enbeffect.fx",

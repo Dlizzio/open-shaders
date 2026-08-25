@@ -25,7 +25,7 @@ option(
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 2.8.2
+    VERSION 2.9.0
     LANGUAGES CXX
 )
 
@@ -68,11 +68,6 @@ option(
     AIO_INCLUDE_NON_AUTOUPLOAD
     "Include features whose .ini has autoupload != true in the AIO. Off by default — the AIO ships only release-ready features. Turn on for local dev builds that want every feature regardless of release status."
     OFF
-)
-option(
-    ENABLE_ENB_EXTENDER
-    "Enable ENBExtender reimplementation (weather blending, time-of-day, technique bindings)"
-    ON
 )
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
@@ -153,7 +148,6 @@ include(FidelityFX-SDK)
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
-    PRIVATE "$<$<BOOL:${ENABLE_ENB_EXTENDER}>:ENABLE_ENB_EXTENDER>"
 )
 
 file(
