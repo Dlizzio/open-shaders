@@ -1,10 +1,13 @@
 #include "Effect.h"
 #include <d3dcompiler.h>
+#include <fstream>
+#include <iterator>
 #include <sstream>
 
 #include <DirectXTex.h>
 
 #include "../EffectManager.h"
+#include "../EffectSourceCompatibility.h"
 #include "../PresetManager.h"
 #include "../TextureManager.h"
 #include "Features/Effects11/SettingsPatches.h"
@@ -372,16 +375,43 @@ bool Effect::LoadFXFile()
 	filePresent = true;
 
 	auto filePathStr = filePath.string();
+	std::string patchedSource;
+	if (GetName() == "enbeffect.fx") {
+		std::ifstream sourceFile(filePath, std::ios::binary);
+		if (sourceFile) {
+			patchedSource.assign(std::istreambuf_iterator<char>(sourceFile), std::istreambuf_iterator<char>());
+			if (EffectSourceCompatibility::PatchInteriorTimeOfDayMacro(patchedSource))
+				logger::debug("[EFFECTS11] Applied interior time-of-day compatibility patch to '{}'", filePathStr);
+			else
+				patchedSource.clear();
+		}
+	}
+
 	winrt::com_ptr<ID3DBlob> compileMessages;
-	HRESULT hr = D3DX11CompileEffectFromFile(
-		filePath.c_str(),
-		nullptr,
-		D3D_COMPILE_STANDARD_FILE_INCLUDE,
-		0,
-		0,
-		globals::d3d::device,
-		effect.put(),
-		compileMessages.put());
+	HRESULT hr;
+	if (!patchedSource.empty()) {
+		hr = D3DX11CompileEffectFromMemory(
+			patchedSource.data(),
+			patchedSource.size(),
+			filePathStr.c_str(),
+			nullptr,
+			D3D_COMPILE_STANDARD_FILE_INCLUDE,
+			0,
+			0,
+			globals::d3d::device,
+			effect.put(),
+			compileMessages.put());
+	} else {
+		hr = D3DX11CompileEffectFromFile(
+			filePath.c_str(),
+			nullptr,
+			D3D_COMPILE_STANDARD_FILE_INCLUDE,
+			0,
+			0,
+			globals::d3d::device,
+			effect.put(),
+			compileMessages.put());
+	}
 	if (FAILED(hr)) {
 		std::string errorMessage = "Compilation failed";
 		if (compileMessages) {
