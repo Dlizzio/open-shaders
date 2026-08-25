@@ -314,6 +314,8 @@ void EffectManager::ExecuteEffect(Effect& a_effect, uint32_t enableSettingID)
 	if (enableSettingID != 0xFFFFFFFF && !SettingManager::GetSingleton().GetValue<bool>(enableSettingID))
 		return;
 
+	CS_GPU_PASS_DYNAMIC("Effects11::" + a_effect.GetName());
+
 	a_effect.profiler = globals::profiler;
 	UpdateCommonVariablesForEffect(a_effect);
 	a_effect.UpdateEffectVariables();
@@ -362,8 +364,8 @@ bool EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, RE
 
 	auto& textureManager = TextureManager::GetSingleton();
 
-	// Guards against RefreshEyeSourceTexture throwing (DX::ThrowIfFailed) and leaving
-	// currentEyeIndex stuck >= 0 for every later call this session.
+	// Guards against an exception unwinding out of this scope and leaving currentEyeIndex
+	// stuck >= 0 for every later call this session.
 	struct EyeIndexResetGuard
 	{
 		int& index;
@@ -380,6 +382,11 @@ bool EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, RE
 			// No-op unless the source resolution actually changed (e.g. PerfMode's DisplayRes
 			// testTexture vs. kMAIN's renderRes, or a quality-mode change mid-session).
 			textureManager.EnsureSize(currentMainWidth, currentMainHeight);
+			if (currentMainWidth != inputCropTargetsWidth || currentMainHeight != inputCropTargetsHeight) {
+				inputCropTargets.clear();
+				inputCropTargetsWidth = currentMainWidth;
+				inputCropTargetsHeight = currentMainHeight;
+			}
 		}
 
 		// Set our render state
@@ -775,8 +782,8 @@ void EffectManager::UpdateCommonVariablesForEffect(Effect& effect)
 
 	auto renderer = globals::game::renderer;
 
-	effect.SetShaderResourceVariable("TextureDepth",
-		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV);
+	auto& depthData = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	effect.SetShaderResourceVariable("TextureDepth", GetEyeCroppedDepthSRV(depthData.texture, depthData.depthSRV));
 
 	static const char* const formatTargets[] = {
 		"RenderTargetRGBA32", "RenderTargetRGBA64", "RenderTargetRGBA64F",
@@ -786,7 +793,7 @@ void EffectManager::UpdateCommonVariablesForEffect(Effect& effect)
 	for (const auto& targetName : formatTargets) {
 		auto* texture = effect.GetCachedCommonTexture(targetName);
 		if (texture) {
-			effect.SetShaderResourceVariable(targetName, texture->srv.get());
+			effect.SetShaderResourceVariable(targetName, GetEyeCroppedSRV(*texture));
 		}
 	}
 
@@ -892,18 +899,19 @@ RE::BSGraphics::RenderTargetData& EffectManager::GetTextureOriginal()
 	return eyeSourceData;
 }
 
-// Shared by RefreshEyeSourceTexture/GetEyeCroppedSRV: (re)creates a half-width crop target
-// matching a_srcDesc when missing/stale. a_uav may be null (GetEyeCroppedSRV has no UAV use).
-void EffectManager::EnsureCropTarget(winrt::com_ptr<ID3D11Texture2D>& a_texture, winrt::com_ptr<ID3D11RenderTargetView>& a_rtv, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, winrt::com_ptr<ID3D11UnorderedAccessView>* a_uav, const D3D11_TEXTURE2D_DESC& a_srcDesc, const char* a_debugName)
+// (Re)creates a half-width crop target matching a_srcDesc/a_overrideFormat when missing/stale.
+// @return false on creation failure -- caller must fall back to the uncropped source.
+bool EffectManager::EnsureCropTarget(winrt::com_ptr<ID3D11Texture2D>& a_texture, winrt::com_ptr<ID3D11RenderTargetView>& a_rtv, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, winrt::com_ptr<ID3D11UnorderedAccessView>* a_uav, const D3D11_TEXTURE2D_DESC& a_srcDesc, const char* a_debugName, DXGI_FORMAT a_overrideFormat)
 {
 	auto device = globals::d3d::device;
 	const uint32_t halfWidth = a_srcDesc.Width / 2;
+	const DXGI_FORMAT format = a_overrideFormat != DXGI_FORMAT_UNKNOWN ? a_overrideFormat : a_srcDesc.Format;
 
 	if (a_texture) {
 		D3D11_TEXTURE2D_DESC existingDesc{};
 		a_texture->GetDesc(&existingDesc);
-		if (existingDesc.Width == halfWidth && existingDesc.Height == a_srcDesc.Height && existingDesc.Format == a_srcDesc.Format)
-			return;
+		if (existingDesc.Width == halfWidth && existingDesc.Height == a_srcDesc.Height && existingDesc.Format == format)
+			return true;
 		a_texture = nullptr;
 		a_rtv = nullptr;
 		a_srv = nullptr;
@@ -913,18 +921,27 @@ void EffectManager::EnsureCropTarget(winrt::com_ptr<ID3D11Texture2D>& a_texture,
 
 	D3D11_TEXTURE2D_DESC desc = a_srcDesc;
 	desc.Width = halfWidth;
+	desc.Format = format;
 	desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | (a_uav ? D3D11_BIND_UNORDERED_ACCESS : 0);
 	desc.MiscFlags = 0;
-	DX::ThrowIfFailed(device->CreateTexture2D(&desc, nullptr, a_texture.put()));
-	DX::ThrowIfFailed(device->CreateRenderTargetView(a_texture.get(), nullptr, a_rtv.put()));
-	DX::ThrowIfFailed(device->CreateShaderResourceView(a_texture.get(), nullptr, a_srv.put()));
-	if (a_uav)
-		DX::ThrowIfFailed(device->CreateUnorderedAccessView(a_texture.get(), nullptr, a_uav->put()));
+	if (FAILED(device->CreateTexture2D(&desc, nullptr, a_texture.put())) ||
+		FAILED(device->CreateRenderTargetView(a_texture.get(), nullptr, a_rtv.put())) ||
+		FAILED(device->CreateShaderResourceView(a_texture.get(), nullptr, a_srv.put())) ||
+		(a_uav && FAILED(device->CreateUnorderedAccessView(a_texture.get(), nullptr, a_uav->put())))) {
+		logger::error("[EFFECTS11] Failed to create crop target '{}'", a_debugName);
+		a_texture = nullptr;
+		a_rtv = nullptr;
+		a_srv = nullptr;
+		if (a_uav)
+			*a_uav = nullptr;
+		return false;
+	}
 	Util::SetResourceName(a_texture.get(), a_debugName);
 	Util::SetResourceName(a_rtv.get(), "%s::RTV", a_debugName);
 	Util::SetResourceName(a_srv.get(), "%s::SRV", a_debugName);
 	if (a_uav)
 		Util::SetResourceName(a_uav->get(), "%s::UAV", a_debugName);
+	return true;
 }
 
 bool EffectManager::RefreshEyeSourceTexture(int a_eyeIndex)
@@ -951,7 +968,8 @@ bool EffectManager::RefreshEyeSourceTexture(int a_eyeIndex)
 	currentMainWidth = mainDesc.Width;
 	currentMainHeight = mainDesc.Height;
 
-	EnsureCropTarget(eyeSourceTexture, eyeSourceRTV, eyeSourceSRV, &eyeSourceUAV, mainDesc, "Effects11::EyeSource");
+	if (!EnsureCropTarget(eyeSourceTexture, eyeSourceRTV, eyeSourceSRV, &eyeSourceUAV, mainDesc, "Effects11::EyeSource"))
+		return false;
 	eyeSourceData.texture = eyeSourceTexture.get();
 	eyeSourceData.textureCopy = nullptr;
 	eyeSourceData.RTV = eyeSourceRTV.get();
@@ -959,8 +977,7 @@ bool EffectManager::RefreshEyeSourceTexture(int a_eyeIndex)
 	eyeSourceData.SRVCopy = nullptr;
 	eyeSourceData.UAV = eyeSourceUAV.get();
 
-	CropCopyEyeHalf(sourceSRV, mainDesc.Width, mainDesc.Height, eyeSourceRTV.get(), a_eyeIndex);
-	return true;
+	return CropCopyEyeHalf(sourceSRV, mainDesc.Width, mainDesc.Height, eyeSourceRTV.get(), a_eyeIndex, eyeCropCopyPS, eyeCropCopyPSCompileAttempted, L"Data\\Shaders\\Effects11\\EyeCropCopyPS.hlsl");
 }
 
 ID3D11ShaderResourceView* EffectManager::GetEyeCroppedSRV(TextureManager::Texture& a_source)
@@ -973,25 +990,46 @@ ID3D11ShaderResourceView* EffectManager::GetEyeCroppedSRV(TextureManager::Textur
 	if (srcDesc.Width != currentMainWidth)
 		return a_source.srv.get();  // not full-width -- self-contained canvas, not subject to the crop mismatch
 
-	EnsureCropTarget(inputCropTexture, inputCropRTV, inputCropSRV, nullptr, srcDesc, "Effects11::InputCrop");
-	CropCopyEyeHalf(a_source.srv.get(), srcDesc.Width, srcDesc.Height, inputCropRTV.get(), currentEyeIndex);
-	return inputCropSRV.get();
+	auto& target = inputCropTargets[a_source.texture.get()];
+	if (!EnsureCropTarget(target.texture, target.rtv, target.srv, nullptr, srcDesc, "Effects11::InputCrop"))
+		return a_source.srv.get();
+	if (!CropCopyEyeHalf(a_source.srv.get(), srcDesc.Width, srcDesc.Height, target.rtv.get(), currentEyeIndex, eyeCropCopyPS, eyeCropCopyPSCompileAttempted, L"Data\\Shaders\\Effects11\\EyeCropCopyPS.hlsl"))
+		return a_source.srv.get();
+	return target.srv.get();
 }
 
-void EffectManager::CropCopyEyeHalf(ID3D11ShaderResourceView* a_source, uint32_t a_srcWidth, uint32_t a_srcHeight, ID3D11RenderTargetView* a_destRTV, int a_eyeIndex)
+ID3D11ShaderResourceView* EffectManager::GetEyeCroppedDepthSRV(ID3D11Texture2D* a_sourceTexture, ID3D11ShaderResourceView* a_sourceSRV)
+{
+	if (currentEyeIndex < 0 || !a_sourceTexture || !a_sourceSRV)
+		return a_sourceSRV;
+
+	D3D11_TEXTURE2D_DESC srcDesc{};
+	a_sourceTexture->GetDesc(&srcDesc);
+	if (srcDesc.Width != currentMainWidth)
+		return a_sourceSRV;  // not full-width -- self-contained canvas, not subject to the crop mismatch
+
+	// R32_FLOAT scratch: the source's own depth-stencil format can't be bound as a color RTV.
+	if (!EnsureCropTarget(depthCropTexture, depthCropRTV, depthCropSRV, nullptr, srcDesc, "Effects11::DepthCrop", DXGI_FORMAT_R32_FLOAT))
+		return a_sourceSRV;
+	if (!CropCopyEyeHalf(a_sourceSRV, srcDesc.Width, srcDesc.Height, depthCropRTV.get(), currentEyeIndex, eyeCropCopyDepthPS, eyeCropCopyDepthPSCompileAttempted, L"Data\\Shaders\\Effects11\\EyeCropCopyDepthPS.hlsl"))
+		return a_sourceSRV;
+	return depthCropSRV.get();
+}
+
+bool EffectManager::CropCopyEyeHalf(ID3D11ShaderResourceView* a_source, uint32_t a_srcWidth, uint32_t a_srcHeight, ID3D11RenderTargetView* a_destRTV, int a_eyeIndex, winrt::com_ptr<ID3D11PixelShader>& a_pixelShader, bool& a_pixelShaderCompileAttempted, const wchar_t* a_shaderPath)
 {
 	auto device = globals::d3d::device;
 	auto context = globals::d3d::context;
 	const uint32_t halfWidth = a_srcWidth / 2;
 
-	if (!eyeCropCopyPS) {
-		if (eyeCropCopyPSCompileAttempted)
-			return;
-		eyeCropCopyPSCompileAttempted = true;
-		eyeCropCopyPS.attach(static_cast<ID3D11PixelShader*>(
-			Util::CompileShader(L"Data\\Shaders\\Effects11\\EyeCropCopyPS.hlsl", {}, "ps_5_0")));
-		if (!eyeCropCopyPS)
-			return;
+	if (!a_pixelShader) {
+		if (a_pixelShaderCompileAttempted)
+			return false;
+		a_pixelShaderCompileAttempted = true;
+		a_pixelShader.attach(static_cast<ID3D11PixelShader*>(
+			Util::CompileShader(a_shaderPath, {}, "ps_5_0")));
+		if (!a_pixelShader)
+			return false;
 	}
 	if (!eyeCropCB) {
 		D3D11_BUFFER_DESC cbDesc{};
@@ -999,14 +1037,17 @@ void EffectManager::CropCopyEyeHalf(ID3D11ShaderResourceView* a_source, uint32_t
 		cbDesc.Usage = D3D11_USAGE_DYNAMIC;
 		cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 		cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		DX::ThrowIfFailed(device->CreateBuffer(&cbDesc, nullptr, eyeCropCB.put()));
+		if (FAILED(device->CreateBuffer(&cbDesc, nullptr, eyeCropCB.put()))) {
+			logger::error("[EFFECTS11] Failed to create eyeCropCB");
+			return false;
+		}
 		Util::SetResourceName(eyeCropCB.get(), "Effects11::EyeCropCB");
 	}
 
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	if (FAILED(context->Map(eyeCropCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
 		logger::error("[EFFECTS11] Failed to map eyeCropCB for eye index {}", a_eyeIndex);
-		return;
+		return false;
 	}
 	*static_cast<uint32_t*>(mapped.pData) = static_cast<uint32_t>(a_eyeIndex) * halfWidth;
 	context->Unmap(eyeCropCB.get(), 0);
@@ -1031,7 +1072,7 @@ void EffectManager::CropCopyEyeHalf(ID3D11ShaderResourceView* a_source, uint32_t
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
 
 	context->VSSetShader(copyVertexShader.get(), nullptr, 0);
-	context->PSSetShader(eyeCropCopyPS.get(), nullptr, 0);
+	context->PSSetShader(a_pixelShader.get(), nullptr, 0);
 	ID3D11Buffer* cb = eyeCropCB.get();
 	context->PSSetConstantBuffers(0, 1, &cb);
 	context->PSSetShaderResources(0, 1, &a_source);
@@ -1045,6 +1086,7 @@ void EffectManager::CropCopyEyeHalf(ID3D11ShaderResourceView* a_source, uint32_t
 
 	stateBackup.Restore(context);
 	stateBackup.Release();
+	return true;
 }
 
 void EffectManager::ApplyColorCorrection(ID3D11UnorderedAccessView* textureUAV)

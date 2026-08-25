@@ -1163,7 +1163,8 @@ namespace Hooks
 		logger::info("Installing SetupGeometry hooks");
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, SkyExtensions::BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
-		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
+		// 0x4F5 decodes as a stray TEST, not a CALL, on 1.7.99 -- the two offsets are not interchangeable.
+		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate<std::uintptr_t>(0x45B, REL::Module::IsAtLeast(REL::Version(1, 7, 99, 0)) ? 0x4FD : 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
 		stl::write_vfunc<0x6, PostProcessingExtensions::BSParticleShader_SetupGeometry>(RE::VTABLE_BSParticleShader[0]);
 
@@ -1201,7 +1202,8 @@ namespace Hooks
 			}
 		}
 
-		stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + REL::Relocate(0x523, 0xB0E, 0x5FE));
+		// 1.7.99 shifted this offset; pre-1.7.99 AE keeps the old one.
+		stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + REL::Relocate<std::uintptr_t>(0x523, REL::Module::IsAtLeast(REL::Version(1, 7, 99, 0)) ? 0xB30 : 0xB0E, 0x5FE));
 
 		logger::info("Hooking BSBatchRenderer::RenderPassImmediately");
 		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately1>(

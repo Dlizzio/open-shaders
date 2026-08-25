@@ -91,9 +91,7 @@
     },
     {
         "file": "enblens.fx",
-        "patches": [
-            { "variable": "|- Enable Chromatic Aberration", "value": "false" }
-        ]
+        "patches": [{ "variable": "|- Enable Chromatic Aberration", "value": "false" }]
     },
     {
         "file": "enbeffect.fx",

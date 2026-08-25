@@ -154,13 +154,10 @@ namespace
 		a_output.isLabel =
 			(a_output.type == Effect::UIVariableType::Float && a_output.floatMin == 0.0f && a_output.floatMax == 0.0f) ||
 			(a_output.type == Effect::UIVariableType::Int && a_output.intMin == 0 && a_output.intMax == 0);
-		if (!a_output.isReadOnly) {
-			if (a_output.type == Effect::UIVariableType::Int && a_output.intMin == a_output.intMax)
-				a_output.isReadOnly = true;
-			else if (a_output.type != Effect::UIVariableType::Int && a_output.type != Effect::UIVariableType::Bool && a_output.floatMin == a_output.floatMax)
-				a_output.isReadOnly = true;
-		}
-		return !a_output.isHidden;
+		a_output.isReadOnly =
+			(a_output.type == Effect::UIVariableType::Int && a_output.intMin == a_output.intMax) ||
+			(a_output.type != Effect::UIVariableType::Int && a_output.type != Effect::UIVariableType::Bool && a_output.floatMin == a_output.floatMax);
+		return true;
 	}
 }
 
