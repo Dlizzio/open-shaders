@@ -288,6 +288,8 @@ bool SkySync::Update(const RE::Sky* sky)
 												 cell->GetRuntimeData().worldSpace != currentCellWorldspace);
 		if (cell)
 			SetSkyRotation(sky, cell);
+		else
+			currentCell = nullptr;  // keep the cache in sync so a cell-less frame doesn't reset every frame
 		if (resetFaderForCellChange)
 			shadowFader.Reset();
 	}
@@ -353,7 +355,21 @@ bool SkySync::Update(const RE::Sky* sky)
 
 	const auto calendar = globals::game::calendar;
 	const auto deltaTime = globals::game::deltaTime;
-	const float fadeAdvance = calendar && deltaTime ? std::max(*deltaTime * calendar->GetTimescale(), 0.0f) : 0.0f;
+	float fadeAdvance = calendar && deltaTime ? std::max(*deltaTime * calendar->GetTimescale(), 0.0f) : 0.0f;
+
+	// The clock can outrun real time (waiting, fast travel) or move while frames are paused
+	// (console, scrubbing), so advance by whichever of the two elapsed more.
+	const float gameHour = sky->currentGameHour;
+	if (lastGameHour >= 0.0f) {
+		float hourDelta = gameHour - lastGameHour;
+		if (hourDelta > 12.0f)
+			hourDelta -= 24.0f;
+		else if (hourDelta < -12.0f)
+			hourDelta += 24.0f;
+		fadeAdvance = std::max(fadeAdvance, std::abs(hourDelta) * SecondsPerGameHour);
+	}
+	lastGameHour = gameHour;
+
 	const bool transitionCompleted = immediateTransitionReady;
 	shadowFader.Update(sky, directions, intensities, settings.ShadowTransitionDuration, fadeAdvance, transitionCompleted || resetTransition);
 	immediateTransitionReady = false;
