@@ -273,8 +273,7 @@ namespace SharedData
 		float ambientGamma;
 		float3 pad0;
 		float waterGamma;
-		float pad1;
-		float ambientMult;
+		float2 pad1;
 		float vanillaDiffuseColorMult;
 		float emitColorMult;
 		float glowmapMult;

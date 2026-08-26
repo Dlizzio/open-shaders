@@ -25,7 +25,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	glowmapGamma,
 	ambientGamma,
 	waterGamma,
-	ambientMult,
 	vanillaDiffuseColorMult,
 	emitColorMult,
 	glowmapMult)
@@ -37,7 +36,6 @@ namespace
 	constexpr float kEffectGamma = 1.8f;
 	constexpr float kMultiplierMin = 0.0f;
 	constexpr float kMultiplierMax = 5.0f;
-	constexpr float kAmbientMultiplierMax = 5.0f;
 }
 
 void LinearLighting::DrawSettings()
@@ -72,7 +70,6 @@ void LinearLighting::DrawSettings()
 		}
 
 		if (ImGui::BeginTabItem(T(TKEY("tab_multipliers"), "Multipliers"))) {
-			ImGui::SliderFloat(T(TKEY("ambient_multiplier"), "Ambient Multiplier"), &settings.ambientMult, kMultiplierMin, kAmbientMultiplierMax, "%.2f");
 			ImGui::SliderFloat(T(TKEY("vanilla_diffuse_color_multiplier"), "Vanilla Diffuse Color Multiplier"), &settings.vanillaDiffuseColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
 			ImGui::SliderFloat(T(TKEY("emissive_color_multiplier"), "Emissive Color Multiplier"), &settings.emitColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
 			ImGui::SliderFloat(T(TKEY("glowmap_multiplier"), "Glowmap Multiplier"), &settings.glowmapMult, kMultiplierMin, kMultiplierMax, "%.2f");
@@ -221,9 +218,8 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 		data.enableLinearLighting = false;
 		return data;
 	}
-	bool isMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 	auto data = PerFrameData{};
-	data.enableLinearLighting = settings.enableLinearLighting && sceneGammaDecodeCS && !isMainLoadingMenu;
+	data.enableLinearLighting = IsLinearLightingActive();
 	data.enableACEScg = settings.enableACEScg && data.enableLinearLighting && globals::features::postProcessing.loaded;
 	data.isDirLightLinear = isDirLightLinear;
 	data.dirLightMult = dirLightMult;
@@ -249,7 +245,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	}
 #endif
 
-	data.ambientMult = settings.ambientMult;
 	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
 	data.emitColorMult = settings.emitColorMult;
 	data.glowmapMult = settings.glowmapMult;
@@ -265,13 +260,25 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 		if (enb.enableEffect) {
 			data.vanillaDiffuseColorMult = 1.0f;
 			data.dirLightMult = 1.0f;
-			data.ambientMult = 1.0f;
 			data.emitColorMult = 1.0f;
 			data.glowmapMult = 1.0f;
 		}
 	}
 #endif
 	return data;
+}
+
+bool LinearLighting::IsLinearLightingActive() const
+{
+	if (!loaded || !settings.enableLinearLighting || !sceneGammaDecodeCS || !globals::state || globals::state->IsMainOrLoadingMenuOpen())
+		return false;
+
+#if defined(ENABLE_EFFECTS11)
+	if (globals::features::effects11.loaded && globals::features::effects11.enableEffect)
+		return false;
+#endif
+
+	return true;
 }
 
 void LinearLighting::UpdateWeatherLightingColors(RE::Sky* a_sky)

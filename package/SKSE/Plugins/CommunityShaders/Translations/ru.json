@@ -752,7 +752,6 @@
     "feature.light_limit_fix.name": "Light Limit Fix",
     "feature.light_limit_fix.statistics": "Статистика",
     "feature.linear_lighting.ambient_gamma": "Гамма рассеянного",
-    "feature.linear_lighting.ambient_multiplier": "Множитель рассеянного",
     "feature.linear_lighting.color_gamma": "Цветовая гамма",
     "feature.linear_lighting.description": "Linear Lighting выполняет внутреннее преобразование цветового пространства для повышения точности расчётов освещения.",
     "feature.linear_lighting.emissive_color_gamma": "Гамма излучаемого цвета",

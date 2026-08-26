@@ -363,7 +363,7 @@ namespace Color
 
 	float3 Ambient(float3 color)
 	{
-		return ENABLE_LL ? GamutTransform(pow(abs(color), SharedData::linearLightingSettings.ambientGamma)) * SharedData::linearLightingSettings.ambientMult : color;
+		return ENABLE_LL ? GamutTransform(pow(abs(color), SharedData::linearLightingSettings.ambientGamma)) : color;
 	}
 
 	float3 Fog(float3 color)

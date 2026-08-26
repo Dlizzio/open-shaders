@@ -36,7 +36,6 @@ struct LinearLighting : Feature
 		float waterGamma = 1.8f;
 
 		// Lighting multipliers
-		float ambientMult = 1.0f;
 		float vanillaDiffuseColorMult = 1.0f;
 		float emitColorMult = 1.0f;
 		float glowmapMult = 0.66f;
@@ -55,8 +54,7 @@ struct LinearLighting : Feature
 		float ambientGamma;
 		float pad0[3];
 		float waterGamma;
-		float pad1;
-		float ambientMult;
+		float pad1[2];
 		float vanillaDiffuseColorMult;
 		float emitColorMult;
 		float glowmapMult;
@@ -107,6 +105,8 @@ struct LinearLighting : Feature
 
 	/** @brief Populates and returns the per-frame constant buffer data with gamma and multiplier settings. */
 	PerFrameData GetCommonBufferData();
+	/** @brief Returns whether the engine and shaders should currently use linear lighting data. */
+	bool IsLinearLightingActive() const;
 
 	/** @brief Caches linear copies of the interpolated weather colors used by effect meshes. */
 	void UpdateWeatherLightingColors(RE::Sky* a_sky);
@@ -117,7 +117,7 @@ struct LinearLighting : Feature
 	 * @param gamma The gamma exponent to apply.
 	 * @return The color converted to linear space.
 	 */
-	RE::NiColor ColorToLinear(RE::NiColor inColor, float gamma);
+	static RE::NiColor ColorToLinear(RE::NiColor inColor, float gamma);
 
 	/**
 	 * @brief Uploads emissive multiplier data to the per-geometry constant buffer during shader setup.

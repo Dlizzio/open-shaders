@@ -803,7 +803,6 @@
     "feature.light_editor.total_lights": "总光源数：%u",
     "feature.light_limit_fix.name": "光源限制修复",
     "feature.linear_lighting.ambient_gamma": "环境伽马",
-    "feature.linear_lighting.ambient_multiplier": "环境倍率",
     "feature.linear_lighting.color_gamma": "颜色伽马",
     "feature.linear_lighting.description": "通过色彩空间转换来提高光照计算的准确性。",
     "feature.linear_lighting.emissive_color_gamma": "自发光颜色伽马",
