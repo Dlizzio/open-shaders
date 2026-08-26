@@ -19,9 +19,18 @@ const hotfixLine = /^hotfix\/(\d+\.(?:\d+|x)\.x)$/.exec(refName)?.[1];
 // on hotfix/1.2.x would resolve to 1.3.0 and collide with a version already
 // shipped from main. release-hotfix.yaml only cherry-picks fix:/perf:, but
 // clamp here as well so a hand-pushed commit can't jump the line.
+//
+// Points at ./tools/release-first-parent-plugin.js, not
+// @semantic-release/commit-analyzer directly: that wrapper recomputes the
+// commit range with --first-parent before delegating to the real
+// commit-analyzer, and also supplies generateNotes (see that file for why --
+// a sync-merge PR can otherwise flood the changelog and bump calculation
+// with thousands of already-shipped commits). A single array entry here
+// registers both hook types, so no separate release-notes-generator entry
+// is needed below.
 const commitAnalyzer = hotfixLine
   ? [
-      '@semantic-release/commit-analyzer',
+      './tools/release-first-parent-plugin.js',
       {
         releaseRules: [
           { breaking: true, release: 'patch' },
@@ -29,7 +38,7 @@ const commitAnalyzer = hotfixLine
         ],
       },
     ]
-  : '@semantic-release/commit-analyzer';
+  : './tools/release-first-parent-plugin.js';
 
 module.exports = {
   // 'main' is the stable release channel. It only ever advances by fast-
@@ -45,9 +54,8 @@ module.exports = {
     : ['main', { name: 'dev', prerelease: 'rc' }],
   plugins: [
     commitAnalyzer,
-    '@semantic-release/release-notes-generator',
-    // Must follow release-notes-generator: generateNotes outputs concatenate
-    // in plugins-array order.
+    // Must follow commitAnalyzer's generateNotes hook: generateNotes outputs
+    // concatenate in plugins-array order.
     './tools/release-notes-feature-audit-plugin.js',
     [
       '@google/semantic-release-replace-plugin',
