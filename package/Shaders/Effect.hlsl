@@ -587,7 +587,7 @@ float3 GetLightingColor(
 {
 	const bool isSkyObject = Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject;
 	const float3 weatherLightingColor = isSkyObject ? SharedData::linearLightingSettings.skyStaticsColor : SharedData::linearLightingSettings.effectLightingColor;
-	float3 color = ENABLE_LL ? Color::EffectLight(weatherLightingColor, true) : DLightColor.xyz;
+	float3 color = ENABLE_LL ? Color::EffectLight(weatherLightingColor, true) * SharedData::linearLightingSettings.dirLightMult : DLightColor.xyz;
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
 	shadowedWeatherReference = 0.0;
 	shadowedInfluencedWeatherReference = 0.0;
