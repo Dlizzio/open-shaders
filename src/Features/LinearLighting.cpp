@@ -19,21 +19,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
 	enableACEScg,
-	lightGamma,
-	colorGamma,
-	emitColorGamma,
-	glowmapGamma,
-	ambientGamma,
-	waterGamma,
 	vanillaDiffuseColorMult,
 	emitColorMult,
 	glowmapMult)
 
 namespace
 {
-	constexpr float kGammaMin = 0.1f;
-	constexpr float kGammaMax = 3.0f;
-	constexpr float kEffectGamma = 1.8f;
+	constexpr float kAuthoredColorGamma = 1.8f;
 	constexpr float kMultiplierMin = 0.0f;
 	constexpr float kMultiplierMax = 5.0f;
 }
@@ -58,27 +50,9 @@ void LinearLighting::DrawSettings()
 							  "Requires Linear Lighting and Post Processing enabled.\n"
 							  "All sRGB-gamut textures and colors will be converted to ACEScg during shading."));
 
-	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem(T(TKEY("tab_gamma"), "Gamma"))) {
-			ImGui::SliderFloat(T(TKEY("ambient_gamma"), "Ambient Gamma"), &settings.ambientGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("color_gamma"), "Color Gamma"), &settings.colorGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("emissive_color_gamma"), "Emissive Color Gamma"), &settings.emitColorGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("glowmap_gamma"), "Glowmap Gamma"), &settings.glowmapGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("light_gamma"), "Light Gamma"), &settings.lightGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("water_gamma"), "Water Gamma"), &settings.waterGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::EndTabItem();
-		}
-
-		if (ImGui::BeginTabItem(T(TKEY("tab_multipliers"), "Multipliers"))) {
-			ImGui::SliderFloat(T(TKEY("vanilla_diffuse_color_multiplier"), "Vanilla Diffuse Color Multiplier"), &settings.vanillaDiffuseColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("emissive_color_multiplier"), "Emissive Color Multiplier"), &settings.emitColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
-			ImGui::SliderFloat(T(TKEY("glowmap_multiplier"), "Glowmap Multiplier"), &settings.glowmapMult, kMultiplierMin, kMultiplierMax, "%.2f");
-
-			ImGui::EndTabItem();
-		}
-
-		ImGui::EndTabBar();
-	}
+	ImGui::SliderFloat(T(TKEY("vanilla_diffuse_color_multiplier"), "Vanilla Diffuse Color Multiplier"), &settings.vanillaDiffuseColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
+	ImGui::SliderFloat(T(TKEY("emissive_color_multiplier"), "Emissive Color Multiplier"), &settings.emitColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
+	ImGui::SliderFloat(T(TKEY("glowmap_multiplier"), "Glowmap Multiplier"), &settings.glowmapMult, kMultiplierMin, kMultiplierMax, "%.2f");
 }
 
 void LinearLighting::LoadSettings(json& o_json)
@@ -223,24 +197,13 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.enableACEScg = settings.enableACEScg && data.enableLinearLighting && globals::features::postProcessing.loaded;
 	data.isDirLightLinear = isDirLightLinear;
 	data.dirLightMult = dirLightMult;
-	data.lightGamma = settings.lightGamma;
-	data.colorGamma = settings.colorGamma;
-	data.emitColorGamma = settings.emitColorGamma;
-	data.glowmapGamma = settings.glowmapGamma;
-	data.ambientGamma = settings.ambientGamma;
-	data.waterGamma = settings.waterGamma;
+	data.authoredColorGamma = kAuthoredColorGamma;
 
 #if defined(ENABLE_EFFECTS11)
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
 			data.enableLinearLighting = false;
-			data.lightGamma = 1.0f;
-			data.colorGamma = 1.0f;
-			data.emitColorGamma = 1.0f;
-			data.glowmapGamma = 1.0f;
-			data.ambientGamma = 1.0f;
-			data.waterGamma = 1.0f;
 		}
 	}
 #endif
@@ -286,19 +249,19 @@ void LinearLighting::UpdateWeatherLightingColors(RE::Sky* a_sky)
 	if (!a_sky)
 		return;
 
-	effectLightingColor = ColorToLinear(
-		a_sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kEffectLighting)], kEffectGamma);
-	skyStaticsColor = ColorToLinear(
-		a_sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kSkyStatics)], kEffectGamma);
+	effectLightingColor = DecodeAuthoredColor(
+		a_sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kEffectLighting)]);
+	skyStaticsColor = DecodeAuthoredColor(
+		a_sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kSkyStatics)]);
 	weatherLightingColorsInitialized = true;
 }
 
-RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)
+RE::NiColor LinearLighting::DecodeAuthoredColor(RE::NiColor inColor)
 {
 	RE::NiColor outColor;
-	outColor.red = std::pow(inColor.red, gamma);
-	outColor.green = std::pow(inColor.green, gamma);
-	outColor.blue = std::pow(inColor.blue, gamma);
+	outColor.red = std::pow(inColor.red, kAuthoredColorGamma);
+	outColor.green = std::pow(inColor.green, kAuthoredColorGamma);
+	outColor.blue = std::pow(inColor.blue, kAuthoredColorGamma);
 	return outColor;
 }
 

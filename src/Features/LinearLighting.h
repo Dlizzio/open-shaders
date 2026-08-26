@@ -16,7 +16,7 @@ struct LinearLighting : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return { T("feature.linear_lighting.description", "Linear Lighting does internal color space conversion to improve lighting calculation accuracy."),
-			{ T("feature.linear_lighting.key_feature_1", "Customizable gamma correction"),
+			{ T("feature.linear_lighting.key_feature_1", "Semantic authored-color conversion"),
 				T("feature.linear_lighting.key_feature_2", "Corrects lighting calculations"),
 				T("feature.linear_lighting.key_feature_3", "Makes PBR really work") } };
 	};
@@ -28,12 +28,6 @@ struct LinearLighting : Feature
 	{
 		uint enableLinearLighting = false;
 		uint enableACEScg = false;
-		float lightGamma = 1.8f;
-		float colorGamma = 1.8f;
-		float emitColorGamma = 1.8f;
-		float glowmapGamma = 1.8f;
-		float ambientGamma = 1.8f;
-		float waterGamma = 1.8f;
 
 		// Lighting multipliers
 		float vanillaDiffuseColorMult = 1.0f;
@@ -47,24 +41,17 @@ struct LinearLighting : Feature
 		uint enableACEScg;
 		uint isDirLightLinear;
 		float dirLightMult;
-		float lightGamma;
-		float colorGamma;
-		float emitColorGamma;
-		float glowmapGamma;
-		float ambientGamma;
-		float pad0[3];
-		float waterGamma;
-		float pad1[2];
+		float authoredColorGamma;
 		float vanillaDiffuseColorMult;
 		float emitColorMult;
 		float glowmapMult;
-		float pad2[2];
 		RE::NiColor effectLightingColor;
-		float pad3;
+		float pad0;
 		RE::NiColor skyStaticsColor;
-		float pad4;
+		float pad1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
+	static_assert(sizeof(PerFrameData) == 0x40);
 
 	struct alignas(16) PerGeometryData
 	{
@@ -112,12 +99,11 @@ struct LinearLighting : Feature
 	void UpdateWeatherLightingColors(RE::Sky* a_sky);
 
 	/**
-	 * @brief Converts an NiColor from gamma space to linear space using the specified gamma value.
+	 * @brief Decodes an authored Skyrim color into linear sRGB.
 	 * @param inColor The input color in gamma space.
-	 * @param gamma The gamma exponent to apply.
 	 * @return The color converted to linear space.
 	 */
-	static RE::NiColor ColorToLinear(RE::NiColor inColor, float gamma);
+	static RE::NiColor DecodeAuthoredColor(RE::NiColor inColor);
 
 	/**
 	 * @brief Uploads emissive multiplier data to the per-geometry constant buffer during shader setup.

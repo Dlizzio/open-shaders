@@ -1,3 +1,5 @@
+#define COMPUTESHADER
+
 #include "Common/Color.hlsli"
 
 RWTexture2D<float4> SceneColor : register(u0);
@@ -10,6 +12,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
 		return;
 
 	float4 color = SceneColor[pixel];
-	color.rgb = Color::GamutTransform(Color::EffectGammaToLinear(color.rgb));
+	color.rgb = Color::DecodeAuthoredColor(color.rgb);
 	SceneColor[pixel] = color;
 }
