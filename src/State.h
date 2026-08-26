@@ -294,40 +294,7 @@ public:
 	uint lastExtraDescriptor = 0;
 	uint lastExtraFeatureDescriptor = 0;
 
-	/**
-	 * Bitflags describing extra shader-specific properties.
-	 */
-
-	/**
-	 * Bitflags describing extra feature-specific properties related to terrain displacement and material models.
-	 */
-
-	/**
-	 * Checks whether the main menu or loading menu is cached as open.
-	 * @returns true if either the main menu or loading menu is open, false otherwise.
-	 */
-
-	/**
-	 * Checks whether the main menu or loading menu is open, querying the UI if provided.
-	 * @param ui Pointer to the UI manager; if non-null, performs live menu checks as a fallback.
-	 * @returns true if the main menu or loading menu is open, false otherwise.
-	 */
-
-	/**
-	 * Updates the shared constant buffer data based on world state and rendering pass.
-	 * @param a_inWorld Whether the camera is in world space.
-	 * @param a_prepass Whether this is a prepass rendering phase.
-	 */
-
-	/**
-	 * Updates sky shader permutation based on the current render pass.
-	 * @param a_pass The render pass to inspect.
-	 */
-
-	/**
-	 * Checks whether directional shadows are available for the current scene.
-	 * @returns true if directional shadows are present, false otherwise.
-	 */
+	/** @brief Bitflags describing extra shader-specific properties. */
 	enum class ExtraShaderDescriptors : uint32_t
 	{
 		InWorld = 1 << 0,
@@ -339,6 +306,7 @@ public:
 		IsEye = 1 << 6
 	};
 
+	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */
 	enum class ExtraFeatureDescriptors : uint32_t
 	{
 		THLand0HasDisplacement = 1 << 0,
@@ -384,8 +352,21 @@ public:
 		return (ui && ui->GameIsPaused()) || IsMainOrLoadingMenuOpen(ui) || isMapMenuOpen;
 	}
 
+	/**
+	 * @brief Updates the shared constant buffer data based on world state and rendering pass.
+	 * @param a_inWorld Whether the camera is in world space.
+	 * @param a_prepass Whether this is a prepass rendering phase.
+	 */
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	/**
+	 * @brief Updates sky shader permutation based on the current render pass.
+	 * @param a_pass The render pass to inspect.
+	 */
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
+	/**
+	 * @brief Checks whether directional shadows are available for the current scene.
+	 * @returns true if directional shadows are present, false otherwise.
+	 */
 	bool HasDirectionalShadows() const;
 
 	struct PermutationCB
