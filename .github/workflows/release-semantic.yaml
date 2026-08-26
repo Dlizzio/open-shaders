@@ -1,7 +1,8 @@
 name: "Release: Semantic Version"
 
 # Dispatch on: dev (RC) | main (stable, current line) | hotfix/X.Y.x
-# (older line, only valid when main has shipped a newer minor/major).
+# (any line, current or older — .releaserc.js scopes each hotfix branch
+# to its own release channel independently, uniformly).
 #
 # Promotion (ff_target on main): FF main to ff_target, run semantic-
 # release, then reconcile dev. Dev-source reconciles FF-only; hotfix-
