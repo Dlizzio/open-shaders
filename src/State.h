@@ -294,7 +294,19 @@ public:
 	uint lastExtraDescriptor = 0;
 	uint lastExtraFeatureDescriptor = 0;
 
-	/** @brief Bitflags describing extra shader-specific properties. */
+	/**
+	 * Updates Lighting shader permutation state from the current render pass.
+	 * @param a_pass The Lighting render pass whose blend state should be inspected.
+	 */
+	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
+
+	/**
+	 * @brief Bitflags describing extra shader-specific properties.
+	 * Upstream sequentially claims low bits for its own flags; keep every
+	 * upstream-derived flag at upstream's own bit position so future syncs
+	 * land without a collision. Fork-only flags go in the reserved high end
+	 * (top bit down) instead, so they never compete with upstream's next one.
+	 */
 	enum class ExtraShaderDescriptors : uint32_t
 	{
 		InWorld = 1 << 0,
@@ -303,7 +315,9 @@ public:
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
 		SuppressExternalEmittance = 1 << 5,
-		IsEye = 1 << 6
+		AdditiveLighting = 1 << 6,
+		// --- Open Shaders fork-only flags below: reserved high end, not upstream's sequence. ---
+		IsEye = 1u << 31
 	};
 
 	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */
