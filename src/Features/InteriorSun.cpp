@@ -1,6 +1,7 @@
 ﻿#include "InteriorSun.h"
 #include "I18n/I18n.h"
 #include "State.h"
+#include "Utils/VersionedRelocation.h"
 
 #define I18N_KEY_PREFIX "feature.interior_sun."
 
