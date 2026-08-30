@@ -32,6 +32,7 @@ void PerfMode::SetupResources()
 	testTextureRTV = nullptr;
 	refraTempTex = nullptr;
 	refraTempSRV = nullptr;
+	refraTempUAV = nullptr;
 	fakeDS = nullptr;
 	fakeDSV = nullptr;
 
@@ -104,15 +105,18 @@ void PerfMode::SetupResources()
 		}
 	}
 
-	// refraTempTex: copy of testTexture for ISRefraction input
+	// refraTempTex: copy of testTexture for ISRefraction input. UAV bind flag lets DLSS
+	// write its PerfMode sharpening output directly here instead of into testTexture.
 	if (hookActive) {
 		D3D11_TEXTURE2D_DESC refraDesc = desc;
-		refraDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		refraDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 		hr = device->CreateTexture2D(&refraDesc, nullptr, refraTempTex.put());
 		if (FAILED(hr)) {
 			logger::error("[PerfMode] Failed to create refraTempTex: {:#x}", (uint32_t)hr);
 		} else {
+			Util::SetResourceName(refraTempTex.get(), "PerfMode::RefraTempTex");
+
 			D3D11_SHADER_RESOURCE_VIEW_DESC refraSrvDesc{};
 			refraSrvDesc.Format = refraDesc.Format;
 			refraSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
@@ -122,6 +126,19 @@ void PerfMode::SetupResources()
 			if (FAILED(hr)) {
 				logger::error("[PerfMode] Failed to create refraTempSRV: {:#x}", (uint32_t)hr);
 				refraTempTex = nullptr;
+			} else {
+				Util::SetResourceName(refraTempSRV.get(), "PerfMode::RefraTempTex SRV");
+
+				D3D11_UNORDERED_ACCESS_VIEW_DESC refraUavDesc{};
+				refraUavDesc.Format = refraDesc.Format;
+				refraUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+				refraUavDesc.Texture2D.MipSlice = 0;
+				hr = device->CreateUnorderedAccessView(refraTempTex.get(), &refraUavDesc, refraTempUAV.put());
+				if (FAILED(hr)) {
+					logger::error("[PerfMode] Failed to create refraTempUAV: {:#x}", (uint32_t)hr);
+				} else {
+					Util::SetResourceName(refraTempUAV.get(), "PerfMode::RefraTempTex UAV");
+				}
 			}
 		}
 	}

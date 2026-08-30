@@ -17,20 +17,6 @@
 
 namespace
 {
-	RE::BSTEventSource<RE::BGSActorCellEvent>* GetPlayerCellEventSource(RE::PlayerCharacter* a_player)
-	{
-		if (!a_player)
-			return nullptr;
-
-		static REL::Relocation<void*> playerType{ RE::PlayerCharacter::RTTI };
-		static REL::Relocation<void*> cellEventSourceType{ RE::RTTI_BSTEventSource_BGSActorCellEvent_ };
-		if (!playerType.get() || !cellEventSourceType.get())
-			return nullptr;
-
-		return static_cast<RE::BSTEventSource<RE::BGSActorCellEvent>*>(
-			RE::RTDynamicCast(a_player, 0, playerType.get(), cellEventSourceType.get(), false));
-	}
-
 	void RequestTimeJumpSynchronization()
 	{
 		Util::RequestTimeJumpTransition();
@@ -206,10 +192,10 @@ void TerrainShadows::DataLoaded()
 	if (const auto fastTravelEvents = eventSourceHolder->GetEventSource<RE::TESFastTravelEndEvent>())
 		fastTravelEvents->AddEventSink(&eventHandler);
 
-	if (const auto cellEvents = GetPlayerCellEventSource(RE::PlayerCharacter::GetSingleton()))
-		cellEvents->AddEventSink(&eventHandler);
+	if (const auto player = RE::PlayerCharacter::GetSingleton())
+		player->AsBGSActorCellEventSource()->AddEventSink(&eventHandler);
 	else
-		logger::warn("[Terrain Shadows] Player cell event source not found");
+		logger::warn("[Terrain Shadows] Player singleton not found");
 }
 
 void TerrainShadows::GameLoaded()
@@ -585,7 +571,7 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 		}
 		dirLightPxDir *= stepMult;
 
-		shadowUpdateCBData.LightPxDir = { dirLightPxDir.x, dirLightPxDir.y };
+		shadowUpdateCBData.LightPxDir = float2{ dirLightPxDir.x, dirLightPxDir.y };
 
 		// soft shadow angles
 		float lenUV = float2{ dirLightDir.x, dirLightDir.y }.Length();
@@ -597,8 +583,8 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 		shadowUpdateCBData.LightDeltaZ = -(lenUV / invScale.z * stepMult) * float2{ std::tan(upperAngle), std::tan(lowerAngle) };
 	}
 
-	shadowUpdateCBData.PxSize = { 1.f / texHeightMap->desc.Width, 1.f / texHeightMap->desc.Height };
-	shadowUpdateCBData.PosRange = { cachedHeightmap->pos0.z, cachedHeightmap->pos1.z };
+	shadowUpdateCBData.PxSize = float2{ 1.f / texHeightMap->desc.Width, 1.f / texHeightMap->desc.Height };
+	shadowUpdateCBData.PosRange = float2{ cachedHeightmap->pos0.z, cachedHeightmap->pos1.z };
 	shadowUpdateCBData.ZRange = cachedHeightmap->zRange;
 	shadowUpdateCBData.BlendWeight = a_refreshImmediately ? 1.0f : 0.5f;
 

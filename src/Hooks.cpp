@@ -168,6 +168,19 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	return shaderFound;
 }
 
+namespace LightingExtensions
+{
+	struct BSLightingShader_SetupGeometry
+	{
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			globals::state->UpdateLightingShaderPermutation(pass);
+			func(shader, pass, renderFlags);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
 namespace EffectExtensions
 {
 	struct BSEffectShader_SetupGeometry
@@ -543,6 +556,10 @@ struct BSInputDeviceManager_PollInputDevices
 		auto menu = globals::menu;
 
 		if (a_events) {
+			if (auto* inputManager = RE::BSInputDeviceManager::GetSingleton()) {
+				if (const auto* mouse = inputManager->GetMouse())
+					menu->RecordDirectInputWheelDelta(mouse->GetRuntimeData().dInputNextState.z);
+			}
 			menu->ProcessInputEvents(a_events);
 
 			if (*a_events) {
@@ -854,8 +871,8 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::CubeMapRenderTargetProperties* a_properties)
 		{
-			a_properties->height = 128;
-			a_properties->width = 128;
+			a_properties->height = 256;
+			a_properties->width = 256;
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -865,8 +882,8 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::DepthStencilTargetProperties* a_properties)
 		{
-			a_properties->height = 128;
-			a_properties->width = 128;
+			a_properties->height = 256;
+			a_properties->width = 256;
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -1180,6 +1197,7 @@ namespace Hooks
 		stl::detour_thunk<MenuManagerDrawInterfaceStart>(REL::RelocationID(79947, 82084));
 
 		logger::info("Installing SetupGeometry hooks");
+		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, SkyExtensions::BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
 		// 0x4F5 decodes as a stray TEST, not a CALL, on 1.7.99 -- the two offsets are not interchangeable.

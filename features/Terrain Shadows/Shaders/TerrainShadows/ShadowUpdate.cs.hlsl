@@ -62,14 +62,11 @@ float2 GetInterpolatedHeightRW(float2 pxCoord, bool isVertical)
 #define NTHREADS 128
 groupshared float2 g_shadowHeight[NTHREADS];
 
+// Offsets can span more than one dimension on small heightmaps, so wrap by modulo rather than a single step.
 uint GetWrappedCoord(int coord, uint dimension)
 {
-	// Signed modulus is required here: coord can be negative (wrapping
-	// coordinates off either edge), and that's the case being handled below.
-#pragma warning(disable: 3556)
-	int wrappedCoord = coord % int(dimension);
-#pragma warning(default: 3556)
-	return uint(wrappedCoord < 0 ? wrappedCoord + int(dimension) : wrappedCoord);
+	uint magnitude = uint(abs(coord)) % dimension;
+	return coord < 0 ? (dimension - magnitude) % dimension : magnitude;
 }
 
 [numthreads(NTHREADS, 1, 1)] void main(const uint gtid : SV_GroupThreadID, const uint gid : SV_GroupID) {

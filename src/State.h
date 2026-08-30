@@ -115,8 +115,10 @@ public:
 	/**
 	 * @brief Persists current settings to the config file for the given mode.
 	 * @param a_configMode Which config file to write.
+	 * @param a_isExplicitUserSave False for Load()'s own internal migration/recovery
+	 *  re-saves, which must not also persist Effects11's separate ENB-side state.
 	 */
-	void Save(ConfigMode a_configMode = ConfigMode::USER);
+	void Save(ConfigMode a_configMode = ConfigMode::USER, bool a_isExplicitUserSave = true);
 
 	/**
 	 * @brief Serializes all settings to a JSON object (in-memory, no disk I/O).
@@ -295,38 +297,17 @@ public:
 	uint lastExtraFeatureDescriptor = 0;
 
 	/**
-	 * Bitflags describing extra shader-specific properties.
+	 * Updates Lighting shader permutation state from the current render pass.
+	 * @param a_pass The Lighting render pass whose blend state should be inspected.
 	 */
+	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
 
 	/**
-	 * Bitflags describing extra feature-specific properties related to terrain displacement and material models.
-	 */
-
-	/**
-	 * Checks whether the main menu or loading menu is cached as open.
-	 * @returns true if either the main menu or loading menu is open, false otherwise.
-	 */
-
-	/**
-	 * Checks whether the main menu or loading menu is open, querying the UI if provided.
-	 * @param ui Pointer to the UI manager; if non-null, performs live menu checks as a fallback.
-	 * @returns true if the main menu or loading menu is open, false otherwise.
-	 */
-
-	/**
-	 * Updates the shared constant buffer data based on world state and rendering pass.
-	 * @param a_inWorld Whether the camera is in world space.
-	 * @param a_prepass Whether this is a prepass rendering phase.
-	 */
-
-	/**
-	 * Updates sky shader permutation based on the current render pass.
-	 * @param a_pass The render pass to inspect.
-	 */
-
-	/**
-	 * Checks whether directional shadows are available for the current scene.
-	 * @returns true if directional shadows are present, false otherwise.
+	 * @brief Bitflags describing extra shader-specific properties.
+	 * Upstream sequentially claims low bits for its own flags; keep every
+	 * upstream-derived flag at upstream's own bit position so future syncs
+	 * land without a collision. Fork-only flags go in the reserved high end
+	 * (top bit down) instead, so they never compete with upstream's next one.
 	 */
 	enum class ExtraShaderDescriptors : uint32_t
 	{
@@ -336,10 +317,13 @@ public:
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
 		SuppressExternalEmittance = 1 << 5,
-		IsEye = 1 << 6,
-		GammaRenderTarget = 1 << 7
+		AdditiveLighting = 1 << 6,
+		// --- Open Shaders fork-only flags below: reserved high end, not upstream's sequence. ---
+		GammaRenderTarget = 1u << 30,
+		IsEye = 1u << 31
 	};
 
+	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */
 	enum class ExtraFeatureDescriptors : uint32_t
 	{
 		THLand0HasDisplacement = 1 << 0,
@@ -385,8 +369,21 @@ public:
 		return (ui && ui->GameIsPaused()) || IsMainOrLoadingMenuOpen(ui) || isMapMenuOpen;
 	}
 
+	/**
+	 * @brief Updates the shared constant buffer data based on world state and rendering pass.
+	 * @param a_inWorld Whether the camera is in world space.
+	 * @param a_prepass Whether this is a prepass rendering phase.
+	 */
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	/**
+	 * @brief Updates sky shader permutation based on the current render pass.
+	 * @param a_pass The render pass to inspect.
+	 */
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
+	/**
+	 * @brief Checks whether directional shadows are available for the current scene.
+	 * @returns true if directional shadows are present, false otherwise.
+	 */
 	bool HasDirectionalShadows() const;
 
 	struct PermutationCB
