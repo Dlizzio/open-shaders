@@ -1938,9 +1938,9 @@ namespace SIE
 				strippedShaderBlob->Release();
 			}
 
-			// Skip the write for a cancelled/stale task -- AddCompletedShader's own generation
-			// check runs after the write, too late to stop it racing a directory swap.
+			// Relinquish this task's Pending claim before skipping a stale disk-cache write.
 			if (cache.IsGenerationStale(a_taskGeneration)) {
+				cache.AddCompletedShader(shaderClass, shader, descriptor, nullptr, false, a_taskGeneration);
 				shaderBlob->Release();
 				return nullptr;
 			}
