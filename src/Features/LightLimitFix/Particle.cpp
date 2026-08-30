@@ -2,12 +2,10 @@
 // LightLimitFix.cpp to keep the core clustering pipeline focused.
 
 #include "Features/LightLimitFix.h"
-#include "Features/LinearLighting.h"
 
 #include "Globals.h"
 #include "Shadercache.h"
 #include "Util.h"
-#include "Utils/Color.h"
 #include "Utils/StringUtils.h"
 
 #include <algorithm>
@@ -17,12 +15,6 @@
 namespace
 {
 	constexpr uint MAX_LIGHTS = 1024;
-
-	struct AuthoredTint
-	{
-		RE::NiColorA color{ 1.0f, 1.0f, 1.0f, 1.0f };
-		float3 linearGain{ 1.0f, 1.0f, 1.0f };
-	};
 
 	bool IsNearWhiteTint(const RE::NiColorA& a_color)
 	{
@@ -38,10 +30,10 @@ namespace
 		bool valid = false;
 		float distanceSq = std::numeric_limits<float>::max();
 		float luma = -1.0f;
-		AuthoredTint tint{};
+		RE::NiColorA tint{};
 	};
 
-	void UpdateEmissiveTintCandidate(EmissiveTintCandidate& a_candidate, float a_distanceSq, float a_luma, const AuthoredTint& a_tint)
+	void UpdateEmissiveTintCandidate(EmissiveTintCandidate& a_candidate, float a_distanceSq, float a_luma, const RE::NiColorA& a_tint)
 	{
 		const bool isCloser = a_distanceSq + 1e-3f < a_candidate.distanceSq;
 		const bool sameDistance = std::abs(a_distanceSq - a_candidate.distanceSq) <= 1e-3f;
@@ -53,20 +45,20 @@ namespace
 		}
 	}
 
-	AuthoredTint BuildBillboardFallbackTint(
+	RE::NiColorA BuildBillboardFallbackTint(
 		const ParticleLights::Config& a_config,
 		bool a_hasGradientConfig,
 		const ParticleLights::GradientConfig& a_gradientConfig)
 	{
-		AuthoredTint fallback{};
+		RE::NiColorA fallback{ 1.0f, 1.0f, 1.0f, 1.0f };
 		if (a_hasGradientConfig) {
-			fallback.color.red = a_gradientConfig.color.red;
-			fallback.color.green = a_gradientConfig.color.green;
-			fallback.color.blue = a_gradientConfig.color.blue;
+			fallback.red = a_gradientConfig.color.red;
+			fallback.green = a_gradientConfig.color.green;
+			fallback.blue = a_gradientConfig.color.blue;
 		} else {
-			fallback.color.red = a_config.colorMult.red;
-			fallback.color.green = a_config.colorMult.green;
-			fallback.color.blue = a_config.colorMult.blue;
+			fallback.red = a_config.colorMult.red;
+			fallback.green = a_config.colorMult.green;
+			fallback.blue = a_config.colorMult.blue;
 		}
 		return fallback;
 	}
@@ -92,23 +84,17 @@ namespace
 		if (!lightingProperty || !lightingProperty->emissiveColor || lightingProperty->emissiveMult <= 1e-4f)
 			return;
 
-		AuthoredTint emissiveTint{};
-		emissiveTint.color = {
-			std::max(lightingProperty->emissiveColor->red, 0.0f),
-			std::max(lightingProperty->emissiveColor->green, 0.0f),
-			std::max(lightingProperty->emissiveColor->blue, 0.0f),
+		RE::NiColorA emissiveTint{
+			std::max(lightingProperty->emissiveColor->red, 0.0f) * lightingProperty->emissiveMult,
+			std::max(lightingProperty->emissiveColor->green, 0.0f) * lightingProperty->emissiveMult,
+			std::max(lightingProperty->emissiveColor->blue, 0.0f) * lightingProperty->emissiveMult,
 			1.0f
-		};
-		emissiveTint.linearGain = {
-			lightingProperty->emissiveMult,
-			lightingProperty->emissiveMult,
-			lightingProperty->emissiveMult
 		};
 
 		const float emissiveLuma =
-			std::max(emissiveTint.color.red * emissiveTint.linearGain.x, 0.0f) +
-			std::max(emissiveTint.color.green * emissiveTint.linearGain.y, 0.0f) +
-			std::max(emissiveTint.color.blue * emissiveTint.linearGain.z, 0.0f);
+			std::max(emissiveTint.red, 0.0f) +
+			std::max(emissiveTint.green, 0.0f) +
+			std::max(emissiveTint.blue, 0.0f);
 		if (emissiveLuma <= 1e-4f)
 			return;
 
@@ -118,7 +104,7 @@ namespace
 		const float dz = center.z - a_targetPosition.z;
 		const float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
 		UpdateEmissiveTintCandidate(a_bestAnyTint, distanceSq, emissiveLuma, emissiveTint);
-		if (!IsNearWhiteTint(emissiveTint.color))
+		if (!IsNearWhiteTint(emissiveTint))
 			UpdateEmissiveTintCandidate(a_bestNonWhiteTint, distanceSq, emissiveLuma, emissiveTint);
 	}
 
@@ -148,7 +134,7 @@ namespace
 		}
 	}
 
-	bool TryGetBillboardSiblingEmissiveTint(RE::BSGeometry* a_billboardGeometry, AuthoredTint& a_outTint)
+	bool TryGetBillboardSiblingEmissiveTint(RE::BSGeometry* a_billboardGeometry, RE::NiColorA& a_outTint)
 	{
 		if (!a_billboardGeometry)
 			return false;
@@ -173,35 +159,29 @@ namespace
 		return true;
 	}
 
-	AuthoredTint BuildEffectMaterialEmissiveTint(RE::BSEffectShaderMaterial* a_material, RE::BSEffectShaderProperty* a_shaderProperty)
+	RE::NiColorA BuildEffectMaterialEmissiveTint(RE::BSEffectShaderMaterial* a_material, RE::BSEffectShaderProperty* a_shaderProperty)
 	{
-		AuthoredTint materialEmissiveTint{};
-		materialEmissiveTint.color = {
-			a_material->baseColor.red,
-			a_material->baseColor.green,
-			a_material->baseColor.blue,
+		RE::NiColorA materialEmissiveTint{
+			a_material->baseColor.red * a_material->baseColorScale,
+			a_material->baseColor.green * a_material->baseColorScale,
+			a_material->baseColor.blue * a_material->baseColorScale,
 			1.0f
-		};
-		materialEmissiveTint.linearGain = {
-			a_material->baseColorScale,
-			a_material->baseColorScale,
-			a_material->baseColorScale
 		};
 		// Fold in the runtime external-emittance override (set for kExternalEmittance effects)
 		// so the particle light matches the tint vanilla renders. See Utils/ExternalEmittance.cpp.
 		if (auto emittance = a_shaderProperty->emittanceColor) {
-			materialEmissiveTint.color.red *= emittance->red;
-			materialEmissiveTint.color.green *= emittance->green;
-			materialEmissiveTint.color.blue *= emittance->blue;
+			materialEmissiveTint.red *= emittance->red;
+			materialEmissiveTint.green *= emittance->green;
+			materialEmissiveTint.blue *= emittance->blue;
 		}
 		return materialEmissiveTint;
 	}
 
-	float GetEmissiveTintLuma(const AuthoredTint& a_tint)
+	float GetEmissiveTintLuma(const RE::NiColorA& a_tint)
 	{
-		return std::max(a_tint.color.red * a_tint.linearGain.x, 0.0f) +
-		       std::max(a_tint.color.green * a_tint.linearGain.y, 0.0f) +
-		       std::max(a_tint.color.blue * a_tint.linearGain.z, 0.0f);
+		return std::max(a_tint.red, 0.0f) +
+		       std::max(a_tint.green, 0.0f) +
+		       std::max(a_tint.blue, 0.0f);
 	}
 
 	struct VertexColor
@@ -283,8 +263,7 @@ void LightLimitFix::AddParticleLightLuminance(RE::NiPoint3& targetPosition, int&
 
 LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE::BSRenderPass* a_pass)
 {
-	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty || !a_pass->shader ||
-	    a_pass->shader->shaderType.get() != RE::BSShader::Type::Effect)
+	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty)
 		return {};
 
 	auto cacheInvalidReference = [&](RE::BSGeometry* node) {
@@ -344,12 +323,10 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 	ParticleLights::Config config = it->second;
 	bool hasGradientConfig = false;
 	ParticleLights::GradientConfig gradientConfig{};
-	const bool usesGradientColor = shaderProperty->flags.any(
-		RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor);
-	if (usesGradientColor) {
-		// Only grayscale-to-color samples palette RGB; alpha-only passes sample palette alpha.
-		if (material->greyscaleTexturePath.empty())
-			return cacheInvalidReference(node);
+	if (!material->greyscaleTexturePath.empty()) {
+		// A greyscale texture must resolve to a known gradient, or the reference is
+		// invalid -- falling back to the base config here let ungated effects (e.g.
+		// Spellforge) get lit and blow out depending on the NIF.
 		const auto gradientName = Util::GetLowercaseStem(material->greyscaleTexturePath.c_str(), ".dds");
 		if (!gradientName)
 			return cacheInvalidReference(node);
@@ -369,7 +346,6 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 	reference.hasGradientConfig = hasGradientConfig;
 	reference.gradientConfig = gradientConfig;
 	reference.baseColor = { 1, 1, 1, 1 };
-	reference.baseColorGain = { 1.0f, 1.0f, 1.0f };
 	reference.configVersion = particleLights.configVersion;
 
 	if (billboard) {
@@ -394,40 +370,34 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 			}
 		}
 
-		AuthoredTint siblingEmissiveTint{};
+		RE::NiColorA siblingEmissiveTint{};
 		bool hasSiblingEmissiveTint = false;
 		const bool vertexTintLooksWhite = hasVertexTint && IsNearWhiteTint(reference.baseColor);
 		if (!hasVertexTint || vertexTintLooksWhite) {
 			hasSiblingEmissiveTint = TryGetBillboardSiblingEmissiveTint(node, siblingEmissiveTint);
-			const bool siblingTintIsNonWhite = hasSiblingEmissiveTint && !IsNearWhiteTint(siblingEmissiveTint.color);
+			const bool siblingTintIsNonWhite = hasSiblingEmissiveTint && !IsNearWhiteTint(siblingEmissiveTint);
 
-			const AuthoredTint materialEmissiveTint = BuildEffectMaterialEmissiveTint(material, shaderProperty);
+			const RE::NiColorA materialEmissiveTint = BuildEffectMaterialEmissiveTint(material, shaderProperty);
 			const float materialEmissiveLuma = GetEmissiveTintLuma(materialEmissiveTint);
 			const bool hasMaterialEmissiveTint = materialEmissiveLuma > 1e-4f;
-			const bool materialTintIsNonWhite = hasMaterialEmissiveTint && !IsNearWhiteTint(materialEmissiveTint.color);
+			const bool materialTintIsNonWhite = hasMaterialEmissiveTint && !IsNearWhiteTint(materialEmissiveTint);
 
 			// Resolve the fallback tint from a single source so a white tint never gets re-tinted
 			// from an adjacent emissive — that double-application produces washed-out particle lights.
 			if (materialTintIsNonWhite) {
-				reference.baseColor = materialEmissiveTint.color;
-				reference.baseColorGain = materialEmissiveTint.linearGain;
+				reference.baseColor = materialEmissiveTint;
 				reference.applyEffectMaterialTint = false;
 			} else if (siblingTintIsNonWhite) {
-				reference.baseColor = siblingEmissiveTint.color;
-				reference.baseColorGain = siblingEmissiveTint.linearGain;
+				reference.baseColor = siblingEmissiveTint;
 				reference.applyEffectMaterialTint = false;
 			} else if (hasMaterialEmissiveTint) {
-				reference.baseColor = materialEmissiveTint.color;
-				reference.baseColorGain = materialEmissiveTint.linearGain;
+				reference.baseColor = materialEmissiveTint;
 				reference.applyEffectMaterialTint = false;
 			} else if (hasSiblingEmissiveTint) {
-				reference.baseColor = siblingEmissiveTint.color;
-				reference.baseColorGain = siblingEmissiveTint.linearGain;
+				reference.baseColor = siblingEmissiveTint;
 				reference.applyEffectMaterialTint = false;
 			} else {
-				const auto fallback = BuildBillboardFallbackTint(config, hasGradientConfig, gradientConfig);
-				reference.baseColor = fallback.color;
-				reference.baseColorGain = fallback.linearGain;
+				reference.baseColor = BuildBillboardFallbackTint(config, hasGradientConfig, gradientConfig);
 				reference.applyEffectMaterialTint = true;
 			}
 		}
@@ -440,7 +410,7 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 	return reference;
 }
 
-bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass)
+bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
 {
 	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty)
 		return true;
@@ -482,53 +452,36 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightRefe
 		}
 	}
 
-	RE::NiColorA authoredColor = a_reference.baseColor;
-	float3 linearColorGain = a_reference.baseColorGain;
+	RE::NiColorA color = a_reference.baseColor;
 	if (a_reference.applyEffectMaterialTint) {
-		authoredColor.red *= material->baseColor.red;
-		authoredColor.green *= material->baseColor.green;
-		authoredColor.blue *= material->baseColor.blue;
-		linearColorGain *= material->baseColorScale;
+		color.red *= material->baseColor.red * material->baseColorScale;
+		color.green *= material->baseColor.green * material->baseColorScale;
+		color.blue *= material->baseColor.blue * material->baseColorScale;
 
 		if (auto emittance = shaderProperty->emittanceColor) {
-			authoredColor.red *= emittance->red;
-			authoredColor.green *= emittance->green;
-			authoredColor.blue *= emittance->blue;
+			color.red *= emittance->red;
+			color.green *= emittance->green;
+			color.blue *= emittance->blue;
 		}
 	}
 
 	if (a_reference.hasGradientConfig) {
 		auto grey = float3(config.colorMult.red, config.colorMult.green, config.colorMult.blue).Dot(float3(0.3f, 0.59f, 0.11f));
-		authoredColor.red *= a_reference.gradientConfig.color.red;
-		authoredColor.green *= a_reference.gradientConfig.color.green;
-		authoredColor.blue *= a_reference.gradientConfig.color.blue;
-		linearColorGain *= grey;
+		color.red *= grey * a_reference.gradientConfig.color.red;
+		color.green *= grey * a_reference.gradientConfig.color.green;
+		color.blue *= grey * a_reference.gradientConfig.color.blue;
 	} else {
-		linearColorGain.x *= config.colorMult.red;
-		linearColorGain.y *= config.colorMult.green;
-		linearColorGain.z *= config.colorMult.blue;
+		color.red *= config.colorMult.red;
+		color.green *= config.colorMult.green;
+		color.blue *= config.colorMult.blue;
 	}
-
-	const float3 authoredRGB{ authoredColor.red, authoredColor.green, authoredColor.blue };
-	const auto saturatedAuthoredRGB = Saturation(authoredRGB, settings.ParticleLightsSaturation);
-	const RE::NiColor saturatedAuthoredColor{
-		saturatedAuthoredRGB.x,
-		saturatedAuthoredRGB.y,
-		saturatedAuthoredRGB.z
-	};
-	auto& linearLighting = globals::features::linearLighting;
-	const auto linearStaticBase = linearLighting.GetLinearAuthoredColor(
-		a_pass->geometry,
-		LinearLightingColors::Semantic::GeneratedParticleLight,
-		saturatedAuthoredColor);
+	// Stash radiusMult as alpha for the downstream cluster pass.
+	color.alpha = std::max(config.radiusMult, 0.0f);
 
 	ParticleLightInfo info;
 	info.billboard = a_reference.billboard;
 	info.node = a_pass->geometry;
-	info.authoredColor = authoredColor;
-	info.linearColorGain = linearColorGain;
-	info.authoredStaticColor = Saturation(authoredRGB * linearColorGain, settings.ParticleLightsSaturation);
-	info.linearStaticBase = { linearStaticBase.red, linearStaticBase.green, linearStaticBase.blue };
+	info.color = color;
 	info.radiusMult = config.radiusMult;
 
 	bool enqueued = false;
@@ -608,30 +561,6 @@ void LightLimitFix::ProcessQueuedParticleLights(eastl::vector<LightData>& lights
 {
 	std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
 	cachedParticleLights.clear();
-	auto& linearLighting = globals::features::linearLighting;
-	const bool decodeAuthoredColors = linearLighting.IsLinearLightingActive();
-	const bool useACEScg = linearLighting.IsACEScgActive();
-
-	auto resolveStaticColor = [&](const ParticleLightInfo& a_particleLight) {
-		if (!decodeAuthoredColors)
-			return a_particleLight.authoredStaticColor;
-
-		const auto linearBase = useACEScg ?
-		                            Util::Color::LinearSRGBToAP1(a_particleLight.linearStaticBase) :
-		                            a_particleLight.linearStaticBase;
-		return linearBase * a_particleLight.linearColorGain;
-	};
-
-	auto resolveDynamicColor = [&](float3 a_authoredColor, const float3& a_linearGain) {
-		if (!decodeAuthoredColors)
-			return Saturation(a_authoredColor * a_linearGain, settings.ParticleLightsSaturation);
-
-		auto linearColor = Util::Color::DecodeAuthored(
-			Saturation(a_authoredColor, settings.ParticleLightsSaturation));
-		if (useACEScg)
-			linearColor = Util::Color::LinearSRGBToAP1(linearColor);
-		return linearColor * a_linearGain;
-	};
 
 	LightData clusteredLight{};
 	uint32_t clusteredLights = 0;
@@ -685,11 +614,6 @@ void LightLimitFix::ProcessQueuedParticleLights(eastl::vector<LightData>& lights
 				if (runtimeNumVertices > 0)
 					numVertices = std::min(numVertices, runtimeNumVertices);
 
-				const float3 emitterAuthoredColor{
-					particleLight.authoredColor.red,
-					particleLight.authoredColor.green,
-					particleLight.authoredColor.blue
-				};
 				std::uint32_t maxPerEmitter = static_cast<std::uint32_t>(std::max(1, settings.MaxParticlesPerEmitter));
 				if (numVertices > maxPerEmitter)
 					numVertices = maxPerEmitter;
@@ -728,18 +652,19 @@ void LightLimitFix::ProcessQueuedParticleLights(eastl::vector<LightData>& lights
 						}
 					}
 
-					float alpha = std::max(particleLight.radiusMult, 0.0f);
-					float3 color = resolveStaticColor(particleLight);
+					float alpha = particleLight.color.alpha;
+					float3 color{
+						particleLight.color.red,
+						particleLight.color.green,
+						particleLight.color.blue
+					};
 					if (particleRuntimeData.color) {
 						alpha *= particleRuntimeData.color[p].alpha;
-						const float3 particleAuthoredColor{
-							emitterAuthoredColor.x * particleRuntimeData.color[p].red,
-							emitterAuthoredColor.y * particleRuntimeData.color[p].green,
-							emitterAuthoredColor.z * particleRuntimeData.color[p].blue
-						};
-						color = resolveDynamicColor(particleAuthoredColor, particleLight.linearColorGain);
+						color.x *= particleRuntimeData.color[p].red;
+						color.y *= particleRuntimeData.color[p].green;
+						color.z *= particleRuntimeData.color[p].blue;
 					}
-					clusteredLight.color += color * alpha * settings.ParticleBrightness;
+					clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation) * alpha * settings.ParticleBrightness;
 
 					clusteredLight.radius += radius * particleLight.radiusMult * settings.ParticleRadius;
 
@@ -753,8 +678,13 @@ void LightLimitFix::ProcessQueuedParticleLights(eastl::vector<LightData>& lights
 		} else {
 			LightData light{};
 
-			light.color = resolveStaticColor(particleLight);
-			light.color *= std::max(particleLight.radiusMult, 0.0f) * settings.BillboardBrightness;
+			light.color.x = particleLight.color.red;
+			light.color.y = particleLight.color.green;
+			light.color.z = particleLight.color.blue;
+
+			light.color = Saturation(light.color, settings.ParticleLightsSaturation);
+
+			light.color *= particleLight.color.alpha * settings.BillboardBrightness;
 			light.radius = particleLight.node->worldBound.radius * particleLight.radiusMult * settings.BillboardRadius * 0.5f;
 
 			auto position = particleLight.node->world.translate;

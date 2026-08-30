@@ -8,7 +8,6 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
-#include "Utils/Color.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "feature.dynamic_cubemaps."
@@ -127,35 +126,6 @@ void DynamicCubemaps::DrawSettings()
 			ImGui::TreePop();
 		}
 	}
-}
-
-DynamicCubemaps::Settings DynamicCubemaps::GetCommonBufferData(bool a_linearLighting, bool a_acescg)
-{
-	auto data = settings;
-	if (!a_linearLighting)
-		return data;
-
-	const std::array source{
-		std::bit_cast<std::uint32_t>(settings.CubemapColor.x),
-		std::bit_cast<std::uint32_t>(settings.CubemapColor.y),
-		std::bit_cast<std::uint32_t>(settings.CubemapColor.z)
-	};
-	if (!creatorColorCacheValid || creatorColorSource != source) {
-		creatorColorSource = source;
-		creatorColorLinear = Util::Color::DecodeSRGB({
-			settings.CubemapColor.x,
-			settings.CubemapColor.y,
-			settings.CubemapColor.z
-		});
-		creatorColorACEScg = Util::Color::LinearSRGBToAP1(creatorColorLinear);
-		creatorColorCacheValid = true;
-	}
-
-	const auto& workingColor = a_acescg ? creatorColorACEScg : creatorColorLinear;
-	data.CubemapColor.x = workingColor.x;
-	data.CubemapColor.y = workingColor.y;
-	data.CubemapColor.z = workingColor.z;
-	return data;
 }
 
 void DynamicCubemaps::LoadSettings(json& o_json)

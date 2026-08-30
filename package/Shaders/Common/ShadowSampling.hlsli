@@ -173,7 +173,8 @@ namespace ShadowSampling
 
 	float3 GetDirectionalLighting()
 	{
-		return Color::DirectionalLight(SharedData::DirLightColor.xyz);
+		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+		return Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, MinDirectionalLightMultiplier), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
 	}
 
 	float3 GetSceneLightingColor()

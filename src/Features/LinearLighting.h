@@ -1,7 +1,5 @@
 #pragma once
 
-#include "LinearLighting/SemanticColorCache.h"
-
 struct LinearLighting : Feature
 {
 	static LinearLighting* GetSingleton()
@@ -30,32 +28,49 @@ struct LinearLighting : Feature
 	{
 		uint enableLinearLighting = false;
 		uint enableACEScg = false;
+
+		// Lighting multipliers
+		float vanillaDiffuseColorMult = 1.0f;
+		float emitColorMult = 1.0f;
+		float glowmapMult = 0.66f;
 	} settings;
 
 	struct alignas(16) PerFrameData
 	{
 		uint enableLinearLighting;
 		uint enableACEScg;
-		uint pad0[2];
+		uint isDirLightLinear;
+		float dirLightMult;
+		float authoredColorGamma;
+		float vanillaDiffuseColorMult;
+		float emitColorMult;
+		float glowmapMult;
 		RE::NiColor effectLightingColor;
-		float pad1;
+		float pad0;
 		RE::NiColor skyStaticsColor;
-		float pad2;
-		RE::NiColor effectLightingReference;
-		float pad3;
-		RE::NiColor skyStaticsReference;
-		float pad4;
-		RE::NiColor directionalLightingReference;
-		float pad5;
+		float pad1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 0x60);
+	static_assert(sizeof(PerFrameData) == 0x40);
 
+	struct alignas(16) PerGeometryData
+	{
+		float emissiveMult;
+		float pad0[3];
+	};
+
+	ConstantBuffer* PerGeometryCB = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> sceneGammaDecodeCS;
 	bool sceneGammaActive = false;
 	bool sceneGammaDecodedByRefraction = false;
 
-	/** @brief Draws the ImGui settings UI for the linear working-space modes. */
+	uint isDirLightLinear = false;
+	float dirLightMult = 1.0f;
+	RE::NiColor effectLightingColor{ 1.0f, 1.0f, 1.0f };
+	RE::NiColor skyStaticsColor{ 1.0f, 1.0f, 1.0f };
+	bool weatherLightingColorsInitialized = false;
+
+	/** @brief Draws the ImGui settings UI for gamma correction and lighting multiplier configuration. */
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
@@ -63,85 +78,40 @@ struct LinearLighting : Feature
 
 	virtual void RestoreDefaultSettings() override;
 
-	/** @brief Installs typed color-producer and scene-boundary hooks. */
+	/** @brief Reads the directional light multiplier from ImageSpaceManager during the prepass. */
+	virtual void Prepass() override;
+	/** @brief Installs the BSLightingShader geometry setup hook. */
 	virtual void PostPostLoad() override;
-	/** @brief Clears semantic color sidecars before old scene objects are destroyed. */
-	virtual void OnSceneTransitionReset(bool a_opening) override;
 
-	/** @brief Creates the scene gamma decoder. */
+	/** @brief Creates the per-geometry constant buffer for emissive multiplier data. */
 	virtual void SetupResources() override;
 	/** @brief Marks kMAIN as gamma-domain storage for the main world-rendering interval. */
 	void BeginSceneGamma();
 	/** @brief Decodes the completed gamma-domain scene before post-processing consumes it. */
 	void EndSceneGamma(RE::RENDER_TARGET a_renderTarget);
 
-	/** @brief Populates and returns the linear-lighting per-frame data. */
+	/** @brief Populates and returns the per-frame constant buffer data with gamma and multiplier settings. */
 	PerFrameData GetCommonBufferData();
 	/** @brief Returns whether the engine and shaders should currently use linear lighting data. */
 	bool IsLinearLightingActive() const;
-	/** @brief Returns whether the active linear pipeline uses the ACEScg working gamut. */
-	bool IsACEScgActive() const;
 
-	/** @brief Restores the authored sidecar before Skyrim updates a transient subset. */
-	void BeginSkyColorUpdate(RE::Sky* a_sky);
-	/** @brief Captures Skyrim's completed weather colors and publishes the selected domain. */
-	void UpdateSkyColors(RE::Sky* a_sky);
-	/** @brief Captures completed cloud colors and publishes the selected domain. */
-	void UpdateCloudColors(RE::Clouds* a_clouds);
-	/** @brief Decodes a transient copy of the final directional ambient colors. */
-	void DecodeDirectionalAmbientColors(RE::NiColor (&a_colors)[3][2], RE::NiColor* a_specularTint);
-	/** @brief Decodes typed colors in the engine's transient mapped PS constant group. */
-	void PatchMappedPSConstants(ID3D11Resource* a_resource);
-	/** @brief Returns a cached working-space copy of a non-photometric point-light color. */
-	RE::NiColor GetWorkingPointLightColor(const RE::NiLight* a_light, const RE::NiColor& a_source, bool a_alreadyLinear);
-	/** @brief Returns a cached working-space copy for a typed authored-color producer. */
-	RE::NiColor GetWorkingAuthoredColor(
-		const void* a_owner,
-		LinearLightingColors::Semantic a_semantic,
-		const RE::NiColor& a_authored);
-	/** @brief Returns a cached scaled working-space copy for a typed authored-color producer. */
-	RE::NiColor GetWorkingAuthoredColorScaled(
-		const void* a_owner,
-		LinearLightingColors::Semantic a_semantic,
-		const RE::NiColor& a_authored,
-		float a_scale);
-	/** @brief Returns a cached working-space copy for an already-linear typed producer. */
-	RE::NiColor GetWorkingLinearColor(
-		const void* a_owner,
-		LinearLightingColors::Semantic a_semantic,
-		const RE::NiColor& a_linear);
-	/** @brief Returns a cached linear-sRGB copy without applying the optional working-gamut transform. */
-	RE::NiColor GetLinearAuthoredColor(
-		const void* a_owner,
-		LinearLightingColors::Semantic a_semantic,
-		const RE::NiColor& a_authored);
+	/** @brief Caches linear copies of the interpolated weather colors used by effect meshes. */
+	void UpdateWeatherLightingColors(RE::Sky* a_sky);
+
+	/**
+	 * @brief Decodes an authored Skyrim color into linear sRGB.
+	 * @param inColor The input color in gamma space.
+	 * @return The color converted to linear space.
+	 */
+	static RE::NiColor DecodeAuthoredColor(RE::NiColor inColor);
+
+	/**
+	 * @brief Uploads emissive multiplier data to the per-geometry constant buffer during shader setup.
+	 * @param a_pass The render pass whose lighting properties to read.
+	 */
+	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 
 	/** @brief Contains the BSLightingShader geometry setup hook implementation. */
 	struct Hooks;
-
-private:
-	struct SkyColorState
-	{
-		RE::Sky* owner{};
-		std::array<RE::NiColor, RE::TESWeather::ColorTypes::kTotal> authored{};
-		bool valid{};
-		bool publishedLinear{};
-	};
-
-	struct CloudColorState
-	{
-		RE::Clouds* owner{};
-		std::array<RE::NiColor, RE::Clouds::kTotalLayers> authored{};
-		std::size_t layerCount{};
-		bool valid{};
-		bool publishedLinear{};
-	};
-
-	void PublishSkyColors(bool a_linear);
-	void PublishCloudColors(bool a_linear);
-	void SynchronizeTransientColorDomains(bool a_linear);
-	LinearLightingColors::SemanticColorCache semanticColorCache;
-	SkyColorState skyColorState;
-	CloudColorState cloudColorState;
 
 };

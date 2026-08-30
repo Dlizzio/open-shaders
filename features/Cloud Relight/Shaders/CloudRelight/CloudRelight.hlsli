@@ -135,8 +135,10 @@ namespace CloudRelight
 		SharedData::CloudRelightSettings data = SharedData::cloudRelightSettings;
 
 		float3 dirLightDir = normalize(SharedData::DirLightDirection.xyz);
+		float linearLightingDirLightMultiplier =
+			(SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0;
 		float3 dirLightColor =
-			Color::DirectionalLight(SharedData::DirLightColor.rgb) * Color::VanillaNormalization();
+			Color::DirectionalLight(SharedData::DirLightColor.rgb / max(linearLightingDirLightMultiplier, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * linearLightingDirLightMultiplier * Color::VanillaNormalization();
 		float cosTheta = dot(viewDir, dirLightDir);
 		float isotropicPhase = 0.25 * Math::INV_PI;
 		float broadSilverPhase = max(0.0, Phase::BroadSilverLining(cosTheta) - isotropicPhase);

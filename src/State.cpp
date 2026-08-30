@@ -16,7 +16,6 @@
 #include "Features/FoveatedCommon.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
-#include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
 #include "Features/SceneSelector.h"
@@ -1237,15 +1236,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 			data.DirLightColor *= imageSpaceManager->GetImageSpaceData().baseData.hdr.sunlightScale;
 		}
-		if (globals::features::linearLighting.IsLinearLightingActive()) {
-			const auto working = globals::features::linearLighting.GetWorkingLinearColor(
-				dirLight,
-				LinearLightingColors::Semantic::DirectionalLight,
-				{ data.DirLightColor.x, data.DirLightColor.y, data.DirLightColor.z });
-			data.DirLightColor.x = working.red;
-			data.DirLightColor.y = working.green;
-			data.DirLightColor.z = working.blue;
-		}
 
 		const auto& direction = dirLight->GetWorldDirection();
 		data.DirLightDirection = { -direction.x, -direction.y, -direction.z, 0.0f };
@@ -1264,7 +1254,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			for (int i = -2; i <= 2; i++) {
 				for (int k = -2; k <= 2; k++) {
 					int waterTile = (i + 2) + ((k + 2) * 5);
-					data.WaterData[waterTile] = Util::TryGetWaterData((float)i * 4096.0f, (float)k * 4096.0f, false);
+					data.WaterData[waterTile] = Util::TryGetWaterData((float)i * 4096.0f, (float)k * 4096.0f);
 				}
 			}
 		}
@@ -1332,57 +1322,23 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				data.SunDirection = { sunDirection.x, sunDirection.y, sunDirection.z, 0.0f };
 
 				if (sun->sunBase) {
-					if (const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(sun->sunBase->GetGeometryRuntimeData().shaderProperty.get())) {
+					if (const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(sun->sunBase->GetGeometryRuntimeData().shaderProperty.get()))
 						data.SunColor = { prop->kBlendColor.red * prop->kBlendColor.alpha, prop->kBlendColor.green * prop->kBlendColor.alpha, prop->kBlendColor.blue * prop->kBlendColor.alpha, prop->kBlendColor.alpha };
-						if (globals::features::linearLighting.IsLinearLightingActive()) {
-							const auto working = globals::features::linearLighting.GetWorkingLinearColor(
-								prop,
-								LinearLightingColors::Semantic::SunColor,
-								{ data.SunColor.x, data.SunColor.y, data.SunColor.z });
-							data.SunColor.x = working.red;
-							data.SunColor.y = working.green;
-							data.SunColor.z = working.blue;
-						}
-					}
 				}
 			}
 
 			if (auto masser = sky->masser) {
 				auto dir = Util::Moon::GetDirection(masser, moonAndStarsLoaded);
 				data.MasserDirection = { dir.x, dir.y, dir.z, 0.0f };
-				if (masser->root && !masser->root->GetFlags().any(RE::NiAVObject::Flag::kHidden)) {
-					const bool linearLightingActive = globals::features::linearLighting.IsLinearLightingActive();
-					const auto& baseColor = linearLightingActive ? Util::Moon::GetLinearMasserBaseColor() : Util::Moon::MasserBaseColor;
-					data.MasserColor = Util::Moon::GetBlendColor(masser, baseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
-					if (linearLightingActive) {
-						const auto working = globals::features::linearLighting.GetWorkingLinearColor(
-							masser,
-							LinearLightingColors::Semantic::MasserColor,
-							{ data.MasserColor.x, data.MasserColor.y, data.MasserColor.z });
-						data.MasserColor.x = working.red;
-						data.MasserColor.y = working.green;
-						data.MasserColor.z = working.blue;
-					}
-				}
+				if (masser->root && !masser->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+					data.MasserColor = Util::Moon::GetBlendColor(masser, Util::Moon::MasserBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
 			}
 
 			if (auto secunda = sky->secunda) {
 				auto dir = Util::Moon::GetDirection(secunda, moonAndStarsLoaded);
 				data.SecundaDirection = { dir.x, dir.y, dir.z, 0.0f };
-				if (secunda->root && !secunda->root->GetFlags().any(RE::NiAVObject::Flag::kHidden)) {
-					const bool linearLightingActive = globals::features::linearLighting.IsLinearLightingActive();
-					const auto& baseColor = linearLightingActive ? Util::Moon::GetLinearSecundaBaseColor() : Util::Moon::SecundaBaseColor;
-					data.SecundaColor = Util::Moon::GetBlendColor(secunda, baseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
-					if (linearLightingActive) {
-						const auto working = globals::features::linearLighting.GetWorkingLinearColor(
-							secunda,
-							LinearLightingColors::Semantic::SecundaColor,
-							{ data.SecundaColor.x, data.SecundaColor.y, data.SecundaColor.z });
-						data.SecundaColor.x = working.red;
-						data.SecundaColor.y = working.green;
-						data.SecundaColor.z = working.blue;
-					}
-				}
+				if (secunda->root && !secunda->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+					data.SecundaColor = Util::Moon::GetBlendColor(secunda, Util::Moon::SecundaBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
 			}
 		}
 

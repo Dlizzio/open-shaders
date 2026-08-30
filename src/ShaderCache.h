@@ -204,16 +204,6 @@ namespace ShaderConstants
 		const int32_t LightingInfluence = 17;
 		const int32_t ExtendedFlags = 18;
 	};
-
-	struct WaterPS
-	{
-		const int32_t TextureProj = 0;
-		const int32_t ShallowColor = 1;
-		const int32_t DeepColor = 2;
-		const int32_t ReflectionColor = 3;
-		const int32_t SunColor = 15;
-		const int32_t LightColor = 18;
-	};
 }
 
 namespace SIE

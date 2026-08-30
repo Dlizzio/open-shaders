@@ -1,8 +1,6 @@
 // Shared moon processing utilities
 #pragma once
 
-#include "Color.h"
-
 namespace Util::Moon
 {
 	/** @brief Intensity factor for a new (invisible) moon. */
@@ -12,38 +10,10 @@ namespace Util::Moon
 	/** @brief Intensity factor for a full moon. */
 	static constexpr float FullMoonIntensityFactor = 1.0f;
 
-	/** @brief Authored tint of Masser (the larger, reddish moon). */
-	static constexpr float4 MasserBaseTint = { 142.0f / 255.0f, 96.0f / 255.0f, 90.0f / 255.0f, 1.0f };
-	/** @brief Authored tint of Secunda (the smaller, greyish moon). */
-	static constexpr float4 SecundaBaseTint = { 117.0f / 255.0f, 115.0f / 255.0f, 109.0f / 255.0f, 1.0f };
-	/** @brief Linear intensity applied to Masser's tint. */
-	static constexpr float MasserBaseIntensity = 0.5f;
-	/** @brief Linear intensity applied to Secunda's tint. */
-	static constexpr float SecundaBaseIntensity = 0.25f;
-	/** @brief Vanilla-domain base colour of Masser. */
-	static constexpr float4 MasserBaseColor = { MasserBaseTint.x * MasserBaseIntensity, MasserBaseTint.y * MasserBaseIntensity, MasserBaseTint.z * MasserBaseIntensity, 1.0f };
-	/** @brief Vanilla-domain base colour of Secunda. */
-	static constexpr float4 SecundaBaseColor = { SecundaBaseTint.x * SecundaBaseIntensity, SecundaBaseTint.y * SecundaBaseIntensity, SecundaBaseTint.z * SecundaBaseIntensity, 1.0f };
-
-	/** @brief Returns Masser's authored tint decoded to linear sRGB with its intensity applied. */
-	inline const float4& GetLinearMasserBaseColor()
-	{
-		static const float4 color = [] {
-			const auto tint = Color::DecodeAuthored(float3{ MasserBaseTint.x, MasserBaseTint.y, MasserBaseTint.z });
-			return float4{ tint.x * MasserBaseIntensity, tint.y * MasserBaseIntensity, tint.z * MasserBaseIntensity, 1.0f };
-		}();
-		return color;
-	}
-
-	/** @brief Returns Secunda's authored tint decoded to linear sRGB with its intensity applied. */
-	inline const float4& GetLinearSecundaBaseColor()
-	{
-		static const float4 color = [] {
-			const auto tint = Color::DecodeAuthored(float3{ SecundaBaseTint.x, SecundaBaseTint.y, SecundaBaseTint.z });
-			return float4{ tint.x * SecundaBaseIntensity, tint.y * SecundaBaseIntensity, tint.z * SecundaBaseIntensity, 1.0f };
-		}();
-		return color;
-	}
+	/** @brief Base colour of Masser (the larger, reddish moon). */
+	static constexpr float4 MasserBaseColor = { 142.0f / 255.0f * 0.5f, 96.0f / 255.0f * 0.5f, 90.0f / 255.0f * 0.5f, 1.0f };
+	/** @brief Base colour of Secunda (the smaller, greyish moon). */
+	static constexpr float4 SecundaBaseColor = { 117.0f / 255.0f * 0.25f, 115.0f / 255.0f * 0.25f, 109.0f / 255.0f * 0.25f, 1.0f };
 
 	/** @brief Lookup table mapping texture name substrings to moon phase enums. */
 	static constexpr std::array<std::pair<std::string_view, RE::Moon::Phases::Phase>, 8> PhaseLookup{

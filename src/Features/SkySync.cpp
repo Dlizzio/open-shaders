@@ -216,26 +216,18 @@ void SkySync::OnSkyUpdateColors(RE::Sky* sky)
 	if (!settings.Enabled || !sky)
 		return;
 
-	ApplySunlightDimming(sky);
+	if (settings.DimSunlightUnderHorizon && currentDim > 0.0f && currentDim < 1.0f) {
+		auto& dirLight = sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kSunlight)];
+		dirLight.red *= currentDim;
+		dirLight.green *= currentDim;
+		dirLight.blue *= currentDim;
+	}
 
 	if (gVolumetricLighting) {
 		float vlFactor = shadowFader.vlIntensityFactor;
 		if (settings.DimVolumetricLighting)
 			vlFactor *= currentDim;
 		gVolumetricLighting->intensity *= vlFactor;
-	}
-}
-
-void SkySync::ApplySunlightDimming(RE::Sky* sky) const
-{
-	if (!settings.Enabled || !sky)
-		return;
-
-	if (settings.DimSunlightUnderHorizon && currentDim > 0.0f && currentDim < 1.0f) {
-		auto& dirLight = sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kSunlight)];
-		dirLight.red *= currentDim;
-		dirLight.green *= currentDim;
-		dirLight.blue *= currentDim;
 	}
 }
 

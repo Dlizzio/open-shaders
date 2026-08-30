@@ -777,7 +777,8 @@ void ColorGrading::DrawSettings()
 		constexpr int kSDRColorSpace = 0;  // sRGB / BT709 gamut
 		const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
 
-		const bool wideGamutActive = globals::features::linearLighting.IsACEScgActive();
+		auto& llSettings = globals::features::linearLighting.settings;
+		const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
 		const char* inputSpaceName = wideGamutActive ? spaces[5] : spaces[0];
 		ImGui::TextDisabled(T(TKEY("input_color_space"), "Input Color Space: %s (%s)"), inputSpaceName, wideGamutActive ? T(TKEY("input_color_space_auto_detected"), "auto-detected from Linear Lighting ACEScg") : T(TKEY("input_color_space_fixed"), "fixed"));
 		ImGui::Combo(T(TKEY("working_color_space"), "Working Color Space"), &settings.processColorSpace, spaces.data(), (int)spaces.size());
@@ -872,7 +873,8 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 	auto& tonemappers = TonemapperInfo::GetTonemappers();
 
 	// Auto-detect input color space: ACEScg when wide gamut mode is active, otherwise sRGB
-	const bool wideGamutActive = globals::features::linearLighting.IsACEScgActive();
+	auto& llSettings = globals::features::linearLighting.settings;
+	const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
 	const int kInputColorSpace = wideGamutActive ? 5 : 0;  // 5 = ACEScg, 0 = sRGB
 	constexpr int kHDRColorSpace = 2;                      // BT2020
 	constexpr int kSDRColorSpace = 0;                      // sRGB / BT709 gamut

@@ -498,13 +498,13 @@ void Effects11::OverridePointLightColor(float3& a_color)
 	a_color = Intensity(a_color, settingManager.GetInterpolatedTimeOfDayValue("PointLightingIntensity", "ENVIRONMENT"));
 }
 
-void Effects11::OverrideAmbientLighting(RE::NiColor (&a_directionalAmbientColors)[3][2])
+void Effects11::OverrideAmbientLighting(DirectionalAmbientColors& DirectionalAmbientColors)
 {
 	auto& settingManager = SettingManager::GetSingleton();
 
 	for (int i = 0; i < 3; i++) {
 		for (int j = 0; j < 2; j++) {
-			auto& ambientLightingColor = a_directionalAmbientColors[i][j];
+			auto& ambientLightingColor = DirectionalAmbientColors.directionalAmbientColors[i][j];
 
 			float3 ambientLightingColorF3 = NiToF3(ambientLightingColor);
 

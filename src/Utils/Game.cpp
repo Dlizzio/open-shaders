@@ -2,7 +2,6 @@
 
 #include <atomic>
 
-#include "Features/LinearLighting.h"
 #include "Globals.h"
 #include "State.h"
 
@@ -97,7 +96,7 @@ namespace Util
 		Dest.m[2][3] = Source.translate.z;
 	}
 
-	float4 TryGetWaterData(float offsetX, float offsetY, bool a_linearLighting)
+	float4 TryGetWaterData(float offsetX, float offsetY)
 	{
 		if (globals::game::shadowState) {
 			if (auto tes = RE::TES::GetSingleton()) {
@@ -106,34 +105,44 @@ namespace Util
 				position.y += offsetY;
 				if (auto cell = tes->GetCell(position)) {
 					float4 data = float4(1.0f, 1.0f, 1.0f, -FLT_MAX);
-					RE::TESWaterForm* water = nullptr;
+
+					bool extraCellWater = false;
 
 					if (auto extraCellWaterType = cell->extraList.GetByType<RE::ExtraCellWaterType>()) {
-						water = extraCellWaterType->water;
-					}
+						if (auto water = extraCellWaterType->water) {
+							{
+								data = { float(water->data.deepWaterColor.red) + float(water->data.shallowWaterColor.red),
+									float(water->data.deepWaterColor.green) + float(water->data.shallowWaterColor.green),
+									float(water->data.deepWaterColor.blue) + float(water->data.shallowWaterColor.blue) };
 
-					if (!water) {
-						if (auto worldSpace = tes->GetRuntimeData2().worldSpace) {
-							water = worldSpace->worldWater;
+								data.x /= 255.0f;
+								data.y /= 255.0f;
+								data.z /= 255.0f;
+
+								data.x *= 0.5;
+								data.y *= 0.5;
+								data.z *= 0.5;
+								extraCellWater = true;
+							}
 						}
 					}
 
-					if (water) {
-						data = {
-							(float(water->data.deepWaterColor.red) + float(water->data.shallowWaterColor.red)) / 510.0f,
-							(float(water->data.deepWaterColor.green) + float(water->data.shallowWaterColor.green)) / 510.0f,
-							(float(water->data.deepWaterColor.blue) + float(water->data.shallowWaterColor.blue)) / 510.0f
-						};
-					}
+					if (!extraCellWater) {
+						if (auto worldSpace = tes->GetRuntimeData2().worldSpace) {
+							if (auto water = worldSpace->worldWater) {
+								data = { float(water->data.deepWaterColor.red) + float(water->data.shallowWaterColor.red),
+									float(water->data.deepWaterColor.green) + float(water->data.shallowWaterColor.green),
+									float(water->data.deepWaterColor.blue) + float(water->data.shallowWaterColor.blue) };
 
-					if (a_linearLighting && water) {
-						const auto linear = globals::features::linearLighting.GetLinearAuthoredColor(
-							water,
-							LinearLightingColors::Semantic::WaterForm,
-							RE::NiColor{ data.x, data.y, data.z });
-						data.x = linear.red;
-						data.y = linear.green;
-						data.z = linear.blue;
+								data.x /= 255.0f;
+								data.y /= 255.0f;
+								data.z /= 255.0f;
+
+								data.x *= 0.5;
+								data.y *= 0.5;
+								data.z *= 0.5;
+							}
+						}
 					}
 
 					if (auto sky = globals::game::sky) {
@@ -141,16 +150,6 @@ namespace Util
 						data.x *= color.red;
 						data.y *= color.green;
 						data.z *= color.blue;
-					}
-
-					if (a_linearLighting && water) {
-						const auto working = globals::features::linearLighting.GetWorkingLinearColor(
-							water,
-							LinearLightingColors::Semantic::WaterForm,
-							RE::NiColor{ data.x, data.y, data.z });
-						data.x = working.red;
-						data.y = working.green;
-						data.z = working.blue;
 					}
 
 					data.w = cell->GetExteriorWaterHeight() - position.z;

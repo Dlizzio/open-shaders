@@ -586,21 +586,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	pbrSurfaceProperties.BaseColor = baseColor.xyz;
 
-	float3 subsurfaceColor = PBRParams2.xyz;
+	pbrSurfaceProperties.SubsurfaceColor = PBRParams2.xyz;
 	pbrSurfaceProperties.Thickness = PBRParams2.w;
 	[branch] if ((PBRFlags & PBR::Flags::HasFeatureTexture0) != 0)
 	{
 		float4 sampledSubsurfaceProperties = TexSubsurfaceSampler.Sample(SampSubsurfaceSampler, input.TexCoord.xy);
-		subsurfaceColor *= sampledSubsurfaceProperties.xyz;
+		pbrSurfaceProperties.SubsurfaceColor *= sampledSubsurfaceProperties.xyz;
 		pbrSurfaceProperties.Thickness *= sampledSubsurfaceProperties.w;
 	}
-	pbrSurfaceProperties.SubsurfaceColor = subsurfaceColor;
 
 	float3 specularColorPBR = 0;
 #			endif  // TRUE_PBR
 	float3 transmissionColor = 0;
 
-	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
+	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
 	float3 dirLightColorMultiplier = 1;
 
 #			if defined(EXP_HEIGHT_FOG)
@@ -639,8 +639,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(TRUE_PBR)
 	{
-		float3 pbrDirLightColor = ENABLE_LL ? dirLightColor : SharedData::DirLightColor.xyz;
-		PBR::LightProperties lightProperties = PBR::InitLightProperties(pbrDirLightColor, dirLightColorMultiplier * dirDetailedShadow, 1);
+		PBR::LightProperties lightProperties = PBR::InitLightProperties(SharedData::DirLightColor.xyz, dirLightColorMultiplier * dirDetailedShadow, 1);
 		float3 dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor;
 		PBR::GetDirectLightInput(dirDiffuseColor, coatDirDiffuseColor, dirTransmissionColor, dirSpecularColor, normal, normal, viewDirection, viewDirection, DirLightDirection, DirLightDirection, lightProperties, pbrSurfaceProperties, tbn, input.TexCoord.xy);
 		lightsDiffuseColor += dirDiffuseColor;
@@ -663,7 +662,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 		lightsDiffuseColor += dirLightColor * dirDetailedShadow * GetFoliageTransmission(dirLightAngle, dot(viewDirection, SharedData::DirLightDirection.xyz)) * Color::VanillaNormalization();
 
-	float3 vertexColor = Color::AuthoredVertexColor(input.Color.xyz);
+	float3 vertexColor = Color::AuthoredColor(input.Color.xyz);
 	float vertexAO = max(max(input.Color.r, input.Color.g), input.Color.b);
 
 #				if defined(SKYLIGHTING)
@@ -910,7 +909,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
-	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
+	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
 
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (!SharedData::InInterior)
@@ -991,7 +991,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddy = ddy_coarse(input.WorldPosition);
 	float3 normal = -normalize(cross(ddx, ddy));
 
-	float3 vertexColor = Color::AuthoredVertexColor(input.Color.xyz);
+	float3 vertexColor = Color::AuthoredColor(input.Color.xyz);
 	float vertexAO = max(max(input.Color.r, input.Color.g), input.Color.b);
 
 #			if defined(SKYLIGHTING)

@@ -139,13 +139,6 @@ public:
 	};
 
 	Settings settings;
-	bool creatorColorCacheValid = false;
-	std::array<std::uint32_t, 3> creatorColorSource{};
-	float3 creatorColorLinear{ 1.0f, 1.0f, 1.0f };
-	float3 creatorColorACEScg{ 1.0f, 1.0f, 1.0f };
-
-	/** @brief Returns shader settings with the creator color prepared for the active working space. */
-	Settings GetCommonBufferData(bool a_linearLighting, bool a_acescg);
 
 	inline static constexpr Util::Settings::RestartTable<Settings, 1> kRestartFields{ {
 		UTIL_RESTART_FIELD(Settings, EnabledSSR, "Screen Space Reflections"),

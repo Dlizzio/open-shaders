@@ -11,6 +11,14 @@
 #	define ENABLE_ACEScg SharedData::linearLightingSettings.enableACEScg
 #endif
 
+#if defined(PSHADER) && defined(LIGHTING)
+cbuffer LLPerGeometry : register(b8)
+{
+	float emissiveMult;
+	float3 pad0;
+};
+#endif
+
 #if defined(PSHADER) && defined(CS_UTILITY) && !defined(LIGHT_LIMIT_FIX)
 cbuffer CSUtilityPerGeometry : register(b3)
 {
@@ -25,12 +33,12 @@ cbuffer CSUtilityPerGeometry : register(b3)
 
 namespace Color
 {
+	static float GammaCorrectionValue = 2.2;
 	static const uint PointLightFlagLinear = POINT_LIGHT_FLAG_LINEAR;
 	static const uint PointLightFlagSpot = POINT_LIGHT_FLAG_SPOT;
 	static const uint PointLightFlagOmnidirectionalBulb = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
 	static const uint PackedPointLightFlagVectorSize = 4;
 	static const uint MaxVanillaPointLightFlags = 8;
-	static const float AuthoredColorGamma = 1.8;
 
 	// Copyright 2019 Google LLC.
 	// SPDX-License-Identifier: Apache-2.0
@@ -223,52 +231,37 @@ namespace Color
 
 	float3 AuthoredGammaToLinear(float3 color)
 	{
-		return pow(abs(color), AuthoredColorGamma);
+		return pow(abs(color), SharedData::linearLightingSettings.authoredColorGamma);
 	}
 
 	float3 LinearToAuthoredGamma(float3 color)
 	{
-		return pow(abs(color), 1.0 / AuthoredColorGamma);
+		return pow(abs(color), 1.0 / SharedData::linearLightingSettings.authoredColorGamma);
 	}
 
-	float3 AuthoredGammaToWorkingLinear(float3 color)
+	float3 DecodeAuthoredColor(float3 color)
 	{
 		return GamutTransform(AuthoredGammaToLinear(color));
 	}
 
-	float3 WorkingLinearToAuthoredGamma(float3 color)
+	float3 EncodeAuthoredColor(float3 color)
 	{
 		return LinearToAuthoredGamma(ENABLE_ACEScg ? AP1TosRGB(color) : color);
 	}
 
-	float3 SkyrimGammaToWorkingLinear(float3 color)
+	float3 AuthoredColor(float3 color)
 	{
-		return GamutTransform(SkyrimGammaToLinear(color));
+		return ENABLE_LL ? DecodeAuthoredColor(color) : color;
 	}
 
-	float3 WorkingLinearToSkyrimGamma(float3 color)
+	float3 LLGammaToLinear(float3 color)
 	{
-		return LinearToSkyrimGamma(ENABLE_ACEScg ? AP1TosRGB(color) : color);
+		return ENABLE_LL ? SkyrimGammaToLinear(color) : color;
 	}
 
-	float3 WorkingLinearToSrgb(float3 color)
+	float3 LLLinearToGamma(float3 color)
 	{
-		return LinearToSrgb(ENABLE_ACEScg ? AP1TosRGB(color) : color);
-	}
-
-	float3 LinearSRGBToWorking(float3 color)
-	{
-		return ENABLE_LL ? GamutTransform(color) : color;
-	}
-
-	float3 AuthoredTextureColor(float3 color)
-	{
-		return ENABLE_LL ? AuthoredGammaToWorkingLinear(color) : color;
-	}
-
-	float3 AuthoredVertexColor(float3 color)
-	{
-		return ENABLE_LL ? AuthoredGammaToWorkingLinear(color) : color;
+		return ENABLE_LL ? LinearToSkyrimGamma(color) : color;
 	}
 
 	float3 Diffuse(float3 color)
@@ -281,21 +274,22 @@ namespace Color
 		// TRUE_PBR: input is already linear sRGB; gamut-convert only
 		return ENABLE_LL ? GamutTransform(color) : LinearToSrgb(color);
 #	else
-		return AuthoredTextureColor(color);
+		return AuthoredColor(color) * (ENABLE_LL ? SharedData::linearLightingSettings.vanillaDiffuseColorMult : 1.0);
 #	endif
 	}
 
-	float3 DiffuseWithLinearTint(float3 color, float3 tint)
+	float3 DiffuseWithAuthoredTint(float3 color, float3 tint)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL ? GamutTransform(color) * tint : Diffuse(color) * tint;
+		return ENABLE_LL ? GamutTransform(color * AuthoredGammaToLinear(tint)) : Diffuse(color) * tint;
 #	else
-		return ENABLE_LL ? AuthoredTextureColor(color) * tint : Diffuse(color * tint);
+		return Diffuse(color * tint);
 #	endif
 	}
 
-	float3 Light(float3 color)
+	float3 Light(float3 color, bool isLinear = false)
 	{
+		color = (ENABLE_LL && !isLinear) ? DecodeAuthoredColor(color) : (ENABLE_LL && isLinear) ? GamutTransform(color) : color;
 #	if defined(TRUE_PBR)
 		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #	else
@@ -305,28 +299,28 @@ namespace Color
 
 	float3 EffectLight(float3 color, bool isLinear = false)
 	{
-		return ENABLE_LL && !isLinear ? AuthoredGammaToWorkingLinear(color) : color;
+		return ENABLE_LL ? GamutTransform(isLinear ? color : AuthoredGammaToLinear(color)) : color;
 	}
 
 	float3 EffectLightToGamma(float3 color)
 	{
-		return ENABLE_LL ? WorkingLinearToAuthoredGamma(color) : color;
+		return ENABLE_LL ? EncodeAuthoredColor(color) : color;
 	}
 
 	float3 SceneGammaToLinear(float3 color)
 	{
-		return ENABLE_LL ? AuthoredGammaToWorkingLinear(color) : SkyrimGammaToLinear(color);
+		return ENABLE_LL ? DecodeAuthoredColor(color) : SkyrimGammaToLinear(color);
 	}
 
 	float3 SceneLinearToGamma(float3 color)
 	{
-		return ENABLE_LL ? WorkingLinearToAuthoredGamma(color) : LinearToSkyrimGamma(color);
+		return ENABLE_LL ? EncodeAuthoredColor(color) : LinearToSkyrimGamma(color);
 	}
 
-	float3 DirectionalLight(float3 color)
+	float3 DirectionalLight(float3 color, bool isLinear = false)
 	{
-		return Light(color) *
-		       (ENABLE_LL ? Math::PI : 1.0f) *
+		return Light(color, isLinear) *
+		       ((ENABLE_LL && !isLinear) ? Math::PI : 1.0f) *
 		       SharedData::csUtilitySettings.directionalLightMult;
 	}
 
@@ -347,7 +341,7 @@ namespace Color
 
 	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0)
 	{
-		return Light(color) *
+		return Light(color, isLinear) *
 		       ((ENABLE_LL && !isLinear) ? Math::PI : 1.0f) *
 		       GetPointLightMultiplier(isLinear) *
 		       GetPointLightTypeMultiplier(isLinear, lightFlags);
@@ -355,7 +349,7 @@ namespace Color
 
 	float3 EffectPointLight(float3 color, bool isLinear = false, uint lightFlags = 0)
 	{
-		return color *
+		return EffectLight(color, isLinear) *
 		       GetPointLightMultiplier(isLinear) *
 		       GetPointLightTypeMultiplier(isLinear, lightFlags);
 	}
@@ -370,23 +364,30 @@ namespace Color
 		return 0;
 #	endif
 	}
+#	if defined(LIGHTING)
+	float3 EmitColor(float3 color)
+	{
+		return ENABLE_LL ? DecodeAuthoredColor(color / max(emissiveMult, 1e-5)) * emissiveMult * SharedData::linearLightingSettings.emitColorMult : color;
+	}
+#	endif
+
 	float3 Glowmap(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL ? GamutTransform(color) : LinearToSrgb(color);
+		return ENABLE_LL ? GamutTransform(color) * SharedData::linearLightingSettings.glowmapMult : LinearToSrgb(color);
 #	else
-		return AuthoredTextureColor(color);
+		return AuthoredColor(color) * (ENABLE_LL ? SharedData::linearLightingSettings.glowmapMult : 1.0);
 #	endif
 	}
 
 	float3 Ambient(float3 color)
 	{
-		return LinearSRGBToWorking(color);
+		return AuthoredColor(color);
 	}
 
 	float3 Fog(float3 color)
 	{
-		return LinearSRGBToWorking(color);
+		return AuthoredColor(color);
 	}
 
 	float3 BlendFog(float3 color, float3 fogColor, float fogFactor, float colorScale, float fogColorScale)
@@ -398,12 +399,32 @@ namespace Color
 		float3 linearSrgbFogColor = ENABLE_ACEScg ? AP1TosRGB(fogColor) : fogColor;
 		float3 gammaColor = colorScale * LinearToAuthoredGamma(linearSrgbColor);
 		float3 gammaFogColor = fogColorScale * LinearToAuthoredGamma(linearSrgbFogColor);
-		return AuthoredGammaToWorkingLinear(lerp(gammaColor, gammaFogColor, fogFactor));
+		return DecodeAuthoredColor(lerp(gammaColor, gammaFogColor, fogFactor));
 	}
 
 	float3 BlendFog(float3 color, float3 fogColor, float fogFactor)
 	{
 		return BlendFog(color, fogColor, fogFactor, 1.0, 1.0);
+	}
+
+	float3 Effect(float3 color)
+	{
+		return color;
+	}
+
+	float3 Sky(float3 color)
+	{
+		return AuthoredColor(color);
+	}
+
+	float3 Water(float3 color)
+	{
+		return AuthoredColor(color);
+	}
+
+	float3 RadianceToLinear(float3 color)
+	{
+		return ENABLE_LL ? color : SkyrimGammaToLinear(color);
 	}
 
 	float IrradianceToLinear(float color)
@@ -431,6 +452,10 @@ namespace Color
 		return ENABLE_LL ? 1.0 / Math::PI : 1.0f;
 	}
 
+	float VanillaDiffuseColorMult()
+	{
+		return ENABLE_LL ? SharedData::linearLightingSettings.vanillaDiffuseColorMult : 1.0f;
+	}
 #else
 	const static float PBRLightingScale = 1.0;
 	const static float ReflectionNormalisationScale = 1.0;
