@@ -48,6 +48,15 @@ vcpkg_execute_required_process(
     LOGNAME "cppwinrt-generate-${TARGET_TRIPLET}"
 )
 
+# cppwinrt.exe emits lowercase `#include <directxmath.h>`; a case-sensitive filesystem
+# resolves it to xwin's SDK copy instead of vcpkg's, duplicate-defining every XM_* constant.
+file(GLOB CPPWINRT_GENERATED_HEADERS "${CURRENT_PACKAGES_DIR}/include/winrt/base.h" "${CURRENT_PACKAGES_DIR}/include/winrt/winrt.ixx")
+foreach(header IN LISTS CPPWINRT_GENERATED_HEADERS)
+    file(READ "${header}" CPPWINRT_HEADER_CONTENTS)
+    string(REPLACE "#include <directxmath.h>" "#include <DirectXMath.h>" CPPWINRT_HEADER_CONTENTS "${CPPWINRT_HEADER_CONTENTS}")
+    file(WRITE "${header}" "${CPPWINRT_HEADER_CONTENTS}")
+endforeach()
+
 set(CPPWINRT_LIB "${src}/build/native/lib/${CPPWINRT_ARCH}/cppwinrt_fast_forwarder.lib")
 file(INSTALL "${CPPWINRT_LIB}" DESTINATION "${CURRENT_PACKAGES_DIR}/lib")
 if(NOT DEFINED VCPKG_BUILD_TYPE)
