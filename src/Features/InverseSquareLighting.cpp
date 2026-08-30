@@ -3,6 +3,7 @@
 #include "Features/InverseSquareLighting/Common.h"
 #include "Features/InverseSquareLighting/RadiusMath.h"
 #include "LightLimitFix.h"
+#include "Globals.h"
 #include <numbers>
 
 void InverseSquareLighting::PostPostLoad()

@@ -63,6 +63,8 @@ public:
 	 * @param sky The sky object whose directional light color may be modified.
 	 */
 	void OnSkyUpdateColors(RE::Sky* sky);
+	/** @brief Reapplies the idempotent sunlight color modifier after a color-domain publication. */
+	void ApplySunlightDimming(RE::Sky* sky) const;
 
 	/** @brief Installs rendering hooks and detects conflicting mods after plugin load. */
 	virtual void PostPostLoad() override;

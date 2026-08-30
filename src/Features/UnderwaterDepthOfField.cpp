@@ -4,6 +4,7 @@
 #include "Deferred.h"
 #include "Globals.h"
 #include "GpuPass.h"
+#include "Features/LinearLighting.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 #include "Utils/LazyShader.h"
@@ -102,7 +103,10 @@ namespace
 		if (cameraNear <= 0.0f || cameraFar <= cameraNear)
 			return false;
 
-		const auto waterColor = Util::TryGetWaterData(0.0f, 0.0f);
+		auto waterColor = Util::TryGetWaterData(
+			0.0f,
+			0.0f,
+			globals::features::linearLighting.IsLinearLightingActive());
 		a_constants.fogColor = {
 			waterColor.x,
 			waterColor.y,

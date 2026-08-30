@@ -8,6 +8,7 @@
 #include "Features/CloudShadows.h"
 #include "Features/IBL.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LinearLighting.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
 #include "Globals.h"
@@ -90,6 +91,35 @@ void ExponentialHeightFog::SaveSettings(json& o_json)
 ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
 {
 	Settings data = settings;
+	auto& linearLighting = globals::features::linearLighting;
+	if (linearLighting.IsLinearLightingActive()) {
+		auto decode = [&](const float4& a_color, LinearLightingColors::Semantic a_semantic) {
+			const auto decoded = linearLighting.GetWorkingAuthoredColor(
+				this,
+				a_semantic,
+				RE::NiColor{ a_color.x, a_color.y, a_color.z });
+			return float4{ decoded.red, decoded.green, decoded.blue, a_color.w };
+		};
+		data.fogInscatteringColor = decode(
+			data.fogInscatteringColor,
+			LinearLightingColors::Semantic::ExponentialFogInscattering);
+		data.inscatteringTint = decode(
+			data.inscatteringTint,
+			LinearLightingColors::Semantic::ExponentialFogTint);
+		data.volumetricFogEmissive = decode(
+			data.volumetricFogEmissive,
+			LinearLightingColors::Semantic::VolumetricFogEmissive);
+		const auto volumetricFogAlbedo = linearLighting.GetWorkingLinearColor(
+			this,
+			LinearLightingColors::Semantic::VolumetricFogAlbedo,
+			{ data.volumetricFogAlbedo.x, data.volumetricFogAlbedo.y, data.volumetricFogAlbedo.z });
+		data.volumetricFogAlbedo = {
+			volumetricFogAlbedo.red,
+			volumetricFogAlbedo.green,
+			volumetricFogAlbedo.blue,
+			data.volumetricFogAlbedo.w
+		};
+	}
 
 #if defined(ENABLE_EFFECTS11)
 	if (globals::features::effects11.loaded) {

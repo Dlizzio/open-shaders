@@ -266,37 +266,43 @@ namespace WeatherExtensions
 {
 	struct Sky_UpdateColors
 	{
-		static void thunk(RE::Sky* sky, float a_delta)
+		static void thunk(RE::Sky* sky)
 		{
-			func(sky, a_delta);
+			globals::features::linearLighting.BeginSkyColorUpdate(sky);
+			func(sky);
 #if defined(ENABLE_EFFECTS11)
 			if (globals::features::effects11.loaded)
 				globals::features::effects11.OnSkyUpdateColors(sky);
 #endif
+			globals::features::linearLighting.UpdateSkyColors(sky);
 			globals::features::skySync.OnSkyUpdateColors(sky);
-			globals::features::linearLighting.UpdateWeatherLightingColors(sky);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
 	struct Sky_SetDirectionalAmbientColors
 	{
-		static void thunk(Effects11::DirectionalAmbientColors& DirectionalAmbientColors, RE::NiColor* AmbientSpecularTint, float AmbientSpecularFresnel)
+		struct DirectionalAmbientColors
 		{
+			RE::NiColor colors[3][2];
+		};
+
+		static void thunk(DirectionalAmbientColors& a_directionalAmbientColors, RE::NiColor* a_ambientSpecularTint, float a_ambientSpecularFresnel)
+		{
+			auto converted = a_directionalAmbientColors;
+			auto specularTint = a_ambientSpecularTint ? *a_ambientSpecularTint : RE::NiColor{};
 #if defined(ENABLE_EFFECTS11)
 			if (globals::features::effects11.loaded) {
 				globals::features::effects11.CheckCommonData();
-				if (globals::features::effects11.enableEffect) {
-					// The engine passes Sky's own cube by reference, so overriding in place would
-					// compound on every call Sky has not recomputed colors for.
-					Effects11::DirectionalAmbientColors overridden = DirectionalAmbientColors;
-					globals::features::effects11.OverrideAmbientLighting(overridden);
-					func(overridden, AmbientSpecularTint, AmbientSpecularFresnel);
-					return;
-				}
+				if (globals::features::effects11.enableEffect)
+					globals::features::effects11.OverrideAmbientLighting(converted.colors);
 			}
 #endif
-			func(DirectionalAmbientColors, AmbientSpecularTint, AmbientSpecularFresnel);
+			auto& linearLighting = globals::features::linearLighting;
+			if (linearLighting.IsLinearLightingActive())
+				linearLighting.DecodeDirectionalAmbientColors(converted.colors, a_ambientSpecularTint ? std::addressof(specularTint) : nullptr);
+
+			func(converted, a_ambientSpecularTint ? std::addressof(specularTint) : nullptr, a_ambientSpecularFresnel);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1028,14 +1034,14 @@ namespace Hooks
 	// Returns true when LightLimitFix wants to cull this render pass because the geometry was
 	// recognized as a particle light marked with `Cull = true` in its INI config. The SEH guard
 	// fails open so a transient bad render-pass pointer cannot crash a render-thread hook.
-	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique)
+	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass)
 	{
 #if defined(_MSC_VER)
 		__try
 #endif
 		{
 			return globals::features::lightLimitFix.loaded &&
-			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
+			       !globals::features::lightLimitFix.CheckParticleLights(a_pass);
 		}
 #if defined(_MSC_VER)
 		__except (1) {
@@ -1050,7 +1056,7 @@ namespace Hooks
 		bool a_alphaTest,
 		uint32_t a_renderFlags)
 	{
-		if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique))
+		if (ShouldSkipRenderPassForParticleLights(a_pass))
 			return;
 
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
@@ -1062,7 +1068,7 @@ namespace Hooks
 		bool a_alphaTest,
 		uint32_t a_renderFlags)
 	{
-		if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique))
+		if (ShouldSkipRenderPassForParticleLights(a_pass))
 			return;
 
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
@@ -1074,16 +1080,10 @@ namespace Hooks
 		bool a_alphaTest,
 		uint32_t a_renderFlags)
 	{
-		if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique))
+		if (ShouldSkipRenderPassForParticleLights(a_pass))
 			return;
 
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-	}
-
-	void Sky_UpdateColors::thunk(RE::Sky* sky, float a_delta)
-	{
-		func(sky, a_delta);
-		globals::features::skySync.OnSkyUpdateColors(sky);
 	}
 
 	void BSShaderAccumulator_RenderEffects::thunk(void* accumulator, uint32_t renderFlags)
@@ -1173,7 +1173,7 @@ namespace Hooks
 		stl::write_thunk_call<TESWaterReflections_Update_Actor_GetLOSPosition>(REL::RelocationID(31373, 32160).address() + REL::Relocate(0x1AD, 0x1CA, 0x1ed));
 
 		logger::info("Hooking weather extensions");
-		stl::detour_thunk<WeatherExtensions::Sky_UpdateColors>(REL::RelocationID(25686, 26233));
+		stl::detour_thunk<WeatherExtensions::Sky_UpdateColors>(REL::VariantID(25685, 26232, 0x3C1FF0).address());
 		stl::detour_thunk<WeatherExtensions::Sky_SetDirectionalAmbientColors>(REL::RelocationID(98989, 105643));
 
 		logger::info("Hooking MenuManager::DrawInterfaceStart for menu TAA");

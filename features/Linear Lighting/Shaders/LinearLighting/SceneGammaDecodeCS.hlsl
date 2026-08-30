@@ -12,6 +12,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
 		return;
 
 	float4 color = SceneColor[pixel];
-	color.rgb = Color::DecodeAuthoredColor(color.rgb);
+	color.rgb = Color::AuthoredGammaToWorkingLinear(color.rgb);
 	SceneColor[pixel] = color;
 }

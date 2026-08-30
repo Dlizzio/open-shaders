@@ -4,6 +4,7 @@
 #include "TruePBR/BSLightingShaderMaterialPBRLandscape.h"
 
 #include "Features/InteriorSun.h"
+#include "Features/LinearLighting.h"
 #include "Hooks.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
@@ -975,10 +976,14 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 					shaderFlags.set(PBRShaderFlags::ColoredCoat);
 				}
 
+				const auto coatColor = globals::features::linearLighting.GetWorkingLinearColor(
+					pbrMaterial,
+					LinearLightingColors::Semantic::TruePBRCoat,
+					pbrMaterial->GetCoatColor());
 				std::array<float, 4> PBRParams2;
-				PBRParams2[0] = pbrMaterial->GetCoatColor().red;
-				PBRParams2[1] = pbrMaterial->GetCoatColor().green;
-				PBRParams2[2] = pbrMaterial->GetCoatColor().blue;
+				PBRParams2[0] = coatColor.red;
+				PBRParams2[1] = coatColor.green;
+				PBRParams2[2] = coatColor.blue;
 				PBRParams2[3] = pbrMaterial->GetCoatStrength();
 				shadowState->SetPSConstant(PBRParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams2);
 
@@ -992,20 +997,28 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 				if (pbrMaterial->pbrFlags.any(PBRFlags::Subsurface)) {
 					shaderFlags.set(PBRShaderFlags::Subsurface);
 
+					const auto subsurfaceColor = globals::features::linearLighting.GetWorkingLinearColor(
+						pbrMaterial,
+						LinearLightingColors::Semantic::TruePBRSubsurface,
+						pbrMaterial->GetSubsurfaceColor());
 					std::array<float, 4> PBRParams2;
-					PBRParams2[0] = pbrMaterial->GetSubsurfaceColor().red;
-					PBRParams2[1] = pbrMaterial->GetSubsurfaceColor().green;
-					PBRParams2[2] = pbrMaterial->GetSubsurfaceColor().blue;
+					PBRParams2[0] = subsurfaceColor.red;
+					PBRParams2[1] = subsurfaceColor.green;
+					PBRParams2[2] = subsurfaceColor.blue;
 					PBRParams2[3] = pbrMaterial->GetSubsurfaceOpacity();
 					shadowState->SetPSConstant(PBRParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams2);
 				}
 				if (pbrMaterial->pbrFlags.any(PBRFlags::Fuzz)) {
 					shaderFlags.set(PBRShaderFlags::Fuzz);
 
+					const auto fuzzColor = globals::features::linearLighting.GetWorkingLinearColor(
+						pbrMaterial,
+						LinearLightingColors::Semantic::TruePBRFuzz,
+						pbrMaterial->GetFuzzColor());
 					std::array<float, 4> PBRParams3;
-					PBRParams3[0] = pbrMaterial->GetFuzzColor().red;
-					PBRParams3[1] = pbrMaterial->GetFuzzColor().green;
-					PBRParams3[2] = pbrMaterial->GetFuzzColor().blue;
+					PBRParams3[0] = fuzzColor.red;
+					PBRParams3[1] = fuzzColor.green;
+					PBRParams3[2] = fuzzColor.blue;
 					PBRParams3[3] = pbrMaterial->GetFuzzWeight();
 					shadowState->SetPSConstant(PBRParams3, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.MultiLayerParallaxData);
 				} else {

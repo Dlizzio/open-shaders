@@ -150,7 +150,7 @@ void CSUtility::DrawSettings()
 		if (ImGui::BeginTabItem(T(TKEY("tab_multipliers"), "Multipliers"))) {
 			activeSettingsPage = SettingsPage::Multipliers;
 			if (ImGui::TreeNodeEx(T(TKEY("lighting"), "Lighting"), ImGuiTreeNodeFlags_DefaultOpen)) {
-				const bool linearLightingEnabled = globals::features::linearLighting.settings.enableLinearLighting;
+				const bool linearLightingEnabled = globals::features::linearLighting.IsLinearLightingActive();
 				DrawMultiplierSlider(T(TKEY("global_point_lighting"), "Global Point Lighting"), settings.pointLightMult);
 				DrawLinearMultiplierSlider(T(TKEY("global_point_lighting_linear"), "Global Point Lighting (Linear)"), settings.linearPointLightMult, linearLightingEnabled);
 				DrawMultiplierSlider(T(TKEY("spotlights"), "Spotlights"), settings.spotlightMult);

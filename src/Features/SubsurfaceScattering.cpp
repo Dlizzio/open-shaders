@@ -3,6 +3,7 @@
 #include "../I18n/I18n.h"
 #include "Deferred.h"
 #include "GpuPass.h"
+#include "LinearLighting.h"
 #include "ShaderCache.h"
 #include "State.h"
 
@@ -252,8 +253,19 @@ void SubsurfaceScattering::DrawSSS()
 		// Burley always does full albedo removal/reapply; scatter mode only applies to Separable SSS.
 		blurCBData.ScatterMode = (settings.SSMode == 0) ? (uint)std::clamp(settings.ScatterMode, (int)kPreScatter, (int)kPreAndPostScatter) : (uint)kPostScatter;
 
-		blurCBData.MeanFreePathBase = settings.MeanFreePathBase;
-		blurCBData.MeanFreePathHuman = settings.MeanFreePathHuman;
+		const bool useWorkingMeanFreePath = settings.SSMode == 1 && globals::features::linearLighting.IsACEScgActive();
+		auto prepareMeanFreePath = [useWorkingMeanFreePath](const float4& a_meanFreePath) {
+			if (!useWorkingMeanFreePath)
+				return a_meanFreePath;
+
+			const auto workingColor = globals::features::linearLighting.GetWorkingLinearColor(
+				&a_meanFreePath,
+				LinearLightingColors::Semantic::SubsurfaceMeanFreePath,
+				{ a_meanFreePath.x, a_meanFreePath.y, a_meanFreePath.z });
+			return float4{ workingColor.red, workingColor.green, workingColor.blue, a_meanFreePath.w };
+		};
+		blurCBData.MeanFreePathBase = prepareMeanFreePath(settings.MeanFreePathBase);
+		blurCBData.MeanFreePathHuman = prepareMeanFreePath(settings.MeanFreePathHuman);
 
 		blurCB->Update(blurCBData);
 	}

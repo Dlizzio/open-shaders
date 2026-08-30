@@ -54,7 +54,9 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 	return _GetFeatureBufferData(
 		globals::features::grassLighting.settings,
 		globals::features::extendedMaterials.settings,
-		globals::features::dynamicCubemaps.settings,
+		globals::features::dynamicCubemaps.GetCommonBufferData(
+			globals::features::linearLighting.IsLinearLightingActive(),
+			globals::features::linearLighting.IsACEScgActive()),
 		globals::features::terrainShadows.GetCommonBufferData(),
 		globals::features::lightLimitFix.GetCommonBufferData(),
 		globals::features::wetnessEffects.GetCommonBufferData(),

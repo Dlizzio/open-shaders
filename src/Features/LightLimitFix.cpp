@@ -48,6 +48,25 @@ namespace
 	constexpr float kJsonPlacedLightIntensityMin = 0.0f;
 	constexpr float kJsonPlacedLightIntensityMax = 8.0f;
 
+	void PreparePointLightColor(LightLimitFix::LightData& a_light, RE::NiLight* a_niLight)
+	{
+		auto& linearLighting = globals::features::linearLighting;
+		if (!a_niLight || !linearLighting.IsLinearLightingActive())
+			return;
+
+		const RE::NiColor source{ a_light.color.x, a_light.color.y, a_light.color.z };
+		const auto working = a_light.lightFlags.any(LightLimitFix::LightFlags::Linear) ?
+		                         linearLighting.GetWorkingLinearColor(
+							 a_niLight,
+							 LinearLightingColors::Semantic::ProcessedPointLight,
+							 source) :
+		                         linearLighting.GetWorkingAuthoredColor(
+							 a_niLight,
+							 LinearLightingColors::Semantic::ProcessedPointLight,
+							 source);
+		a_light.color = { working.red, working.green, working.blue };
+	}
+
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{
 		if (!std::isfinite(a_value))
@@ -892,6 +911,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			if (inWorld && effects11.enableEffect)
 				effects11.OverridePointLightColor(light.color);
 #endif
+			PreparePointLightColor(light, niLight);
 
 			SetLightPosition(light, niLight->world.translate, inWorld);
 
@@ -1205,6 +1225,7 @@ void LightLimitFix::UpdateLights()
 						if (effects11.enableEffect)
 							effects11.OverridePointLightColor(light.color);
 #endif
+						PreparePointLightColor(light, niLight);
 
 						SetPointLightTypeFlags(light, bsLight);
 						light.fade *= bsLight->lodDimmer;
@@ -1251,6 +1272,7 @@ void LightLimitFix::UpdateLights()
 						// light.color *= runtimeData.fade;
 						light.fade = runtimeData.fade;
 					}
+					PreparePointLightColor(light, niLight);
 
 					SetPointLightTypeFlags(light, shadowLight);
 					light.fade *= shadowLight->lodDimmer;

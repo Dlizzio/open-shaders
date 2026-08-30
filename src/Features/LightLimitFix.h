@@ -177,7 +177,10 @@ public:
 	{
 		bool billboard;
 		RE::BSGeometry* node;
-		RE::NiColorA color;
+		RE::NiColorA authoredColor;
+		float3 linearColorGain{ 1.0f, 1.0f, 1.0f };
+		float3 authoredStaticColor{};
+		float3 linearStaticBase{};
 		float radiusMult = 1.0f;
 	};
 
@@ -191,6 +194,7 @@ public:
 		bool hasGradientConfig = false;
 		ParticleLights::GradientConfig gradientConfig{};
 		RE::NiColorA baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
+		float3 baseColorGain{ 1.0f, 1.0f, 1.0f };
 		std::uint64_t configVersion = 0;
 	};
 
@@ -429,7 +433,7 @@ public:
 
 	ParticleLightReference GetParticleLightConfigs(RE::BSRenderPass* a_pass);
 	bool AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightReference a_reference);
-	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
+	bool CheckParticleLights(RE::BSRenderPass* a_pass);
 	void ProcessQueuedParticleLights(eastl::vector<LightData>& lightsData);
 
 	/** @brief Adjusts the saturation of an RGB color value. */

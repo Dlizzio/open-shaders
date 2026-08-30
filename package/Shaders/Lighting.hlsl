@@ -1189,7 +1189,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if ((PBRFlags & PBR::Flags::HasFeatureTexture0) != 0)
 	{
 		float4 sampledCoatProperties = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
-		sampledCoatColor.rgb *= Color::Diffuse(sampledCoatProperties.rgb);
+		sampledCoatColor.rgb *= ENABLE_LL ? Color::LinearSRGBToWorking(sampledCoatProperties.rgb) : Color::Diffuse(sampledCoatProperties.rgb);
 		sampledCoatColor.a *= sampledCoatProperties.a;
 	}
 #			if !defined(FACEGEN)
@@ -1516,13 +1516,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
 		baseColor.xyz = GetFacegenBaseColor(baseColor.xyz, uv);
 	} else {
-		baseColor.xyz = Color::SkyrimGammaToLinear(GetFacegenBaseColor(Color::LinearToSkyrimGamma(baseColor.xyz), uv));
+		baseColor.xyz = Color::SkyrimGammaToWorkingLinear(GetFacegenBaseColor(Color::WorkingLinearToSkyrimGamma(baseColor.xyz), uv));
 	}
 #	elif defined(FACEGEN_RGB_TINT)
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
 		baseColor.xyz = GetFacegenRGBTintBaseColor(baseColor.xyz, uv);
 	} else {
-		baseColor.xyz = Color::SkyrimGammaToLinear(GetFacegenRGBTintBaseColor(Color::LinearToSkyrimGamma(baseColor.xyz), uv));
+		baseColor.xyz = Color::SkyrimGammaToWorkingLinear(GetFacegenRGBTintBaseColor(Color::WorkingLinearToSkyrimGamma(baseColor.xyz), uv));
 	}
 #	endif  // FACEGEN
 
@@ -1536,7 +1536,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 hairTint = 0;
 
 	if (SharedData::hairSpecularSettings.Enabled) {
-		hairTint = lerp(1, Color::Diffuse(TintColor.xyz), input.Color.y);
+		hairTint = lerp(1, ENABLE_LL ? TintColor.xyz : Color::Diffuse(TintColor.xyz), input.Color.y);
 		baseColor.xyz *= hairTint;
 		baseColor.xyz = Hair::Saturation(baseColor.xyz, SharedData::hairSpecularSettings.HairSaturation);
 		baseColor.xyz *= SharedData::hairSpecularSettings.BaseColorMult;
@@ -1568,7 +1568,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	lodLandColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
 #		endif
 
-	lodLandColor.xyz = Color::AuthoredColor(lodLandColor.xyz) * Color::VanillaDiffuseColorMult();
+	lodLandColor.xyz = Color::AuthoredTextureColor(lodLandColor.xyz);
 #		if defined(LOD_BLENDING)
 	lodLandColor.xyz = pow(abs(lodLandColor.xyz), SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
 #		endif  // LOD_BLENDING
@@ -1708,7 +1708,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float detailNormalScale = ProjectedUVParams3.y * ProjectedUVParams.z;
 		float3 projDetailNormal = Triplanar::SampleStochastic(TexProjDetail, SampProjDetailSampler, projWorldPos, triWeights, detailNormalScale, screenNoise).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
-		float3 projBaseColor = Color::DiffuseWithAuthoredTint(
+		float3 projBaseColor = Color::DiffuseWithLinearTint(
 			Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz,
 			ProjectedUVParams2.xyz);
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
@@ -1732,7 +1732,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // SNOW
 	} else {
 		if (projWeight > 0) {
-			baseColor.xyz = Color::Diffuse(ProjectedUVParams2.xyz);
+			baseColor.xyz = ENABLE_LL ? ProjectedUVParams2.xyz : Color::Diffuse(ProjectedUVParams2.xyz);
 #			if defined(SNOW)
 			useSnowDecalSpecular = true;
 #			endif  // SNOW
@@ -1829,17 +1829,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	{
 		material.SubsurfaceColor = PBRParams2.xyz;
 		material.Thickness = PBRParams2.w;
-		[branch] if ((PBRFlags & PBR::Flags::HasFeatureTexture0) != 0)
+		const bool hasSubsurfaceTexture = (PBRFlags & PBR::Flags::HasFeatureTexture0) != 0;
+		[branch] if (hasSubsurfaceTexture)
 		{
 			float4 sampledSubsurfaceProperties = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
 
-			// If LL is off, Diffuse returns sRGB
-			material.SubsurfaceColor *= Color::Diffuse(sampledSubsurfaceProperties.xyz);
-
 			if (!SharedData::linearLightingSettings.enableLinearLighting) {
+				material.SubsurfaceColor *= Color::Diffuse(sampledSubsurfaceProperties.xyz);
 				material.SubsurfaceColor = Color::LinearToSrgb(
 					Color::SrgbToLinear(material.SubsurfaceColor) * pbrVertexColor);
 			} else {
+				material.SubsurfaceColor *= Color::LinearSRGBToWorking(sampledSubsurfaceProperties.xyz);
 				material.SubsurfaceColor *= pbrVertexColor;
 			}
 
@@ -1878,7 +1878,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		[branch] if ((PBRFlags & PBR::Flags::HasFeatureTexture1) != 0)
 		{
 			float4 sampledFuzzProperties = TexBackLightSampler.Sample(SampBackLightSampler, uv);
-			material.FuzzColor *= Color::Diffuse(sampledFuzzProperties.xyz);
+			material.FuzzColor *= ENABLE_LL ? Color::LinearSRGBToWorking(sampledFuzzProperties.xyz) : Color::Diffuse(sampledFuzzProperties.xyz);
 			material.FuzzWeight *= sampledFuzzProperties.w;
 		}
 		material.FuzzWeight = lerp(material.FuzzWeight, 0, projectedMaterialWeight);
@@ -1908,7 +1908,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.F0 = enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0;
 #			if defined(SPECULAR)
 	if (enableVanillaFresnel && !isEyeMaterial) {
-		material.F0 = saturate(glossiness * SpecularColor.xyz / Math::PI);
+		material.F0 = saturate(glossiness * material.SpecularColor / Math::PI);
 		float roughnessFromSpecular = (1.0 - glossiness) * (1.0 - glossiness);
 		float roughnessFromShininess = ShininessToRoughness(material.Shininess);
 		material.Roughness = lerp(roughnessFromShininess, roughnessFromSpecular, SharedData::vanillaFresnelSettings.SpecularRoughnessBlend * (1.0 - glossiness));
@@ -2029,11 +2029,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				bool usingDynamicCubemap = envColorBase.a < 1.0;
 
 				if (usingDynamicCubemap) {
-					material.F0 = Color::SkyrimGammaToLinear(envColorBase.rgb);
+					material.F0 = Color::SkyrimGammaToWorkingLinear(envColorBase.rgb);
 					material.Roughness = envColorBase.a;
 				} else {
 #			if defined(VANILLA_FRESNEL)
-					material.F0 = saturate(Color::SkyrimGammaToLinear(envColorBase.rgb) * Math::PI * SharedData::vanillaFresnelSettings.CubemapToF0Multiplier);
+					material.F0 = saturate(Color::SkyrimGammaToWorkingLinear(envColorBase.rgb) * Math::PI * SharedData::vanillaFresnelSettings.CubemapToF0Multiplier);
 					material.Roughness = material.Roughness;
 #			else
 					material.F0 = 1.0;
@@ -2043,7 +2043,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(CREATOR)
 				if (SharedData::cubemapCreatorSettings.Enabled) {
-					material.F0 = Color::GamutTransform(Color::SrgbToLinear(SharedData::cubemapCreatorSettings.CubemapColor.rgb));
+					material.F0 = SharedData::cubemapCreatorSettings.CubemapColor.rgb;
 					material.Roughness = SharedData::cubemapCreatorSettings.CubemapColor.a;
 				}
 #			endif
@@ -2090,7 +2090,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 		if (!dynamicCubemap) {
-			float3 envColorBase = Color::SkyrimGammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
+			float3 envColorBase = Color::SkyrimGammaToWorkingLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
 			envColor = envColorBase.xyz * envMask;
 		}
 	}
@@ -2240,8 +2240,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	waterRoughnessSpecular = max(saturate(1.0 - wetnessGlossinessSpecular), wetnessMinPuddleRoughness);
 #	endif
 
-	float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && (inWorld || inReflection) && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz);
 
 #	if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
@@ -2712,7 +2711,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // EYE
 
 	// sRGB by default, linear if LL on
-	float3 emitColor = Color::EmitColor(EmitColor);
+	float3 emitColor = EmitColor;
 #	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	bool hasEmissive = (0x3F & (Permutation::PixelShaderDescriptor >> 24)) == Permutation::LightingTechnique::Glowmap;
 #		if defined(TRUE_PBR)
@@ -2724,7 +2723,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 glowColor = Color::Glowmap(TexGlowSampler.Sample(SampGlowSampler, uv).xyz);
 
 #		if defined(TRUE_PBR)
-		float3 emitVertexColor = Color::SrgbToLinear(input.Color.xyz);
+		float3 emitVertexColor = Color::GamutTransform(Color::SrgbToLinear(input.Color.xyz));
 		float emitVertexAO = max(max(emitVertexColor.r, emitVertexColor.g), emitVertexColor.b);
 		emitVertexColor = emitVertexAO == 0.0f ? 1.0f : emitVertexColor * lerp(1 / max(emitVertexAO, 1e-4), 1, SharedData::truePBRSettings.VertexAOStrength);
 
@@ -2805,7 +2804,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(HAIR)
-	float3 vertexColor = lerp(1, Color::AuthoredColor(TintColor.xyz), input.Color.y);
+	float3 vertexColor = lerp(1, TintColor.xyz, input.Color.y);
 	float vertexAO = 1;
 #		if defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled)
@@ -2815,7 +2814,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPosition.xyz, ambientNormal);
 #		endif
 #	elif defined(SKYLIGHTING)
-	float3 vertexColor = Color::AuthoredColor(input.Color.xyz);
+	float3 vertexColor = Color::AuthoredVertexColor(input.Color.xyz);
 #		if defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)
 	float vertexAO = 1;
 #		else
@@ -2830,7 +2829,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 	float3 vertexColor = 1;
 #		else
-	float3 vertexColor = Color::AuthoredColor(input.Color.xyz);
+	float3 vertexColor = Color::AuthoredVertexColor(input.Color.xyz);
 #		endif
 #		if defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)
 	float vertexAO = 1;
@@ -3241,7 +3240,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
 	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting) {
-		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);
+		psout.Diffuse.xyz = Color::WorkingLinearToSrgb(psout.Diffuse.xyz);
 	}
 #	endif
 

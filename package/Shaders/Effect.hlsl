@@ -495,6 +495,7 @@ cbuffer PerGeometry : register(b2)
 	float4 AlphaTestRef : packoffset(c9);
 	float4 MembraneRimColor : packoffset(c10);
 	float4 MembraneVars : packoffset(c11);
+	uint ExtendedFlags : packoffset(c12);
 #	else
 	float4 PLightPositionX[2] : packoffset(c0);
 	float4 PLightPositionY[2] : packoffset(c2);
@@ -508,6 +509,7 @@ cbuffer PerGeometry : register(b2)
 	float4 AlphaTestRef : packoffset(c12);
 	float4 MembraneRimColor : packoffset(c13);
 	float4 MembraneVars : packoffset(c14);
+	uint ExtendedFlags : packoffset(c15);
 #	endif
 };
 
@@ -536,11 +538,40 @@ cbuffer PerGeometry : register(b2)
 #		include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #	endif
 
+bool UsesGammaEffectTarget()
+{
+	return (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget) != 0;
+}
+
+float3 EffectAuthoredToTarget(float3 color)
+{
+	return ENABLE_LL && !UsesGammaEffectTarget() ? Color::AuthoredGammaToWorkingLinear(color) : color;
+}
+
+float3 EffectLinearToTarget(float3 color)
+{
+	return ENABLE_LL && UsesGammaEffectTarget() ? Color::WorkingLinearToAuthoredGamma(color) : color;
+}
+
+uint GetEffectPointLightFlags(uint lightIndex)
+{
+	static const uint laneWidth = 3;
+	const uint packedFlags = (ExtendedFlags >> (lightIndex * laneWidth)) & 0x7u;
+	uint lightFlags = 0;
+	lightFlags |= (packedFlags & 0x1u) != 0 ? Color::PointLightFlagLinear : 0;
+	lightFlags |= (packedFlags & 0x2u) != 0 ? Color::PointLightFlagSpot : 0;
+	lightFlags |= (packedFlags & 0x4u) != 0 ? Color::PointLightFlagOmnidirectionalBulb : 0;
+	return lightFlags;
+}
+
 float3 GetEffectDirectionalLighting()
 {
-	float intensity = (ENABLE_LL && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0;
-	return Color::EffectLight(SharedData::DirLightColor.xyz / max(intensity, ShadowSampling::MinDirectionalLightMultiplier), SharedData::linearLightingSettings.isDirLightLinear) *
-	       intensity * SharedData::csUtilitySettings.directionalLightMult;
+	return SharedData::DirLightColor.xyz * SharedData::csUtilitySettings.directionalLightMult;
+}
+
+float3 GetEffectDirectionalReference()
+{
+	return ENABLE_LL ? SharedData::linearLightingSettings.directionalLightingReference : GetEffectDirectionalLighting();
 }
 
 void ExtractEffectLightingReference(
@@ -568,7 +599,7 @@ void ExtractEffectLighting(float3 inputColor, float3 ambientLighting, out float3
 	ExtractEffectLightingReference(
 		Color::EffectLightToGamma(inputColor),
 		Color::EffectLightToGamma(ambientLighting),
-		Color::EffectLightToGamma(GetEffectDirectionalLighting()),
+		GetEffectDirectionalReference(),
 		dirColor,
 		ambientColor);
 }
@@ -587,7 +618,8 @@ float3 GetLightingColor(
 {
 	const bool isSkyObject = Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject;
 	const float3 weatherLightingColor = isSkyObject ? SharedData::linearLightingSettings.skyStaticsColor : SharedData::linearLightingSettings.effectLightingColor;
-	float3 color = ENABLE_LL ? Color::EffectLight(weatherLightingColor, true) * SharedData::linearLightingSettings.dirLightMult : DLightColor.xyz;
+	const float3 weatherLightingReference = isSkyObject ? SharedData::linearLightingSettings.skyStaticsReference : SharedData::linearLightingSettings.effectLightingReference;
+	float3 color = ENABLE_LL ? weatherLightingColor : DLightColor.xyz;
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
 	shadowedWeatherReference = 0.0;
 	shadowedInfluencedWeatherReference = 0.0;
@@ -618,9 +650,9 @@ float3 GetLightingColor(
 #		else
 		float3 effectAmbientLighting = ShadowSampling::GetAmbientLighting();
 #		endif
-		float3 weatherReference = Color::EffectLightToGamma(color);
+		float3 weatherReference = ENABLE_LL ? weatherLightingReference : color;
 		float3 ambientReference = Color::EffectLightToGamma(effectAmbientLighting);
-		float3 directionalReference = Color::EffectLightToGamma(GetEffectDirectionalLighting());
+		float3 directionalReference = GetEffectDirectionalReference();
 		ExtractEffectLightingReference(weatherReference, ambientReference, directionalReference, dirColor, ambientColor);
 		applyWeatherInfluenceToShadows = lightingInfluence > 0.0 && lightingInfluence < 1.0;
 		if (applyWeatherInfluenceToShadows) {
@@ -730,9 +762,30 @@ float3 GetLightingColor(
 #		else
 		float pointScale = 1.0;
 #		endif
-		color.x += dot(Color::EffectPointLight(PLightColorR.xxx).x * lightFadeMul, 1.0.xxxx) * pointScale;
-		color.y += dot(Color::EffectPointLight(PLightColorG.xxx).x * lightFadeMul, 1.0.xxxx) * pointScale;
-		color.z += dot(Color::EffectPointLight(PLightColorB.xxx).x * lightFadeMul, 1.0.xxxx) * pointScale;
+		if (ENABLE_LL) {
+			float4 pointLightRed;
+			float4 pointLightGreen;
+			float4 pointLightBlue;
+			[unroll] for (uint lightIndex = 0; lightIndex < 4; ++lightIndex)
+			{
+				const uint lightFlags = GetEffectPointLightFlags(lightIndex);
+				const float3 pointLightColor = Color::EffectPointLight(
+					float3(PLightColorR[lightIndex], PLightColorG[lightIndex], PLightColorB[lightIndex]),
+					(lightFlags & Color::PointLightFlagLinear) != 0,
+					lightFlags);
+				pointLightRed[lightIndex] = pointLightColor.r;
+				pointLightGreen[lightIndex] = pointLightColor.g;
+				pointLightBlue[lightIndex] = pointLightColor.b;
+			}
+			color += float3(
+				dot(pointLightRed * lightFadeMul, 1.0.xxxx),
+				dot(pointLightGreen * lightFadeMul, 1.0.xxxx),
+				dot(pointLightBlue * lightFadeMul, 1.0.xxxx)) * pointScale;
+		} else {
+			color.x += dot(Color::EffectPointLight(PLightColorR.xxx).x * lightFadeMul, 1.0.xxxx) * pointScale;
+			color.y += dot(Color::EffectPointLight(PLightColorG.xxx).x * lightFadeMul, 1.0.xxxx) * pointScale;
+			color.z += dot(Color::EffectPointLight(PLightColorB.xxx).x * lightFadeMul, 1.0.xxxx) * pointScale;
+		}
 	}
 
 	return color;
@@ -740,7 +793,8 @@ float3 GetLightingColor(
 #	else
 float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPosition, float depth, uint eyeIndex, inout float shadowVariance, float noise)
 {
-	color = Color::EffectLight(color);
+	if (UsesGammaEffectTarget())
+		color = Color::EffectLight(color);
 
 	float3 dirColor;
 	float3 ambientColor;
@@ -784,7 +838,7 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 	}
 #		endif
 
-	return dirColor + ambientColor;
+	return EffectAuthoredToTarget(dirColor + ambientColor);
 }
 #	endif
 
@@ -842,8 +896,11 @@ PS_OUTPUT main(PS_INPUT input)
 	softMul = saturate(-input.TexCoord0.w + LightingInfluence.y / ((1 - depth) * CameraDataEffect.z + CameraDataEffect.y));
 #	endif
 
+	const bool isGrayscaleToColor =
+		(Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor) != 0;
 	float lightingInfluence = LightingInfluence.x;
-	float3 propertyColor = Color::Effect(PropertyColor.xyz);
+	float3 effectPropertyColor = PropertyColor.xyz;
+	float3 propertyColor = effectPropertyColor;
 	float3 shadowedWeatherReference = 0.0;
 	float3 shadowedInfluencedWeatherReference = 0.0;
 	bool applyWeatherInfluenceToShadows = false;
@@ -950,11 +1007,14 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		endif
-	propertyColor = Color::EffectLightToGamma(propertyColor);
 	if (applyWeatherInfluenceToShadows) {
+		propertyColor = Color::EffectLightToGamma(propertyColor);
 		propertyColor = shadowedInfluencedWeatherReference +
 		                lightingInfluence * (propertyColor - shadowedWeatherReference);
+		propertyColor = EffectAuthoredToTarget(propertyColor);
 		lightingInfluence = 1.0;
+	} else {
+		propertyColor = EffectLinearToTarget(propertyColor);
 	}
 #	elif defined(MEMBRANE)
 	propertyColor *= 0;
@@ -968,7 +1028,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 	{
 		baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-		baseTexColor.xyz = Color::Effect(baseTexColor.xyz);
+#	if !defined(BLOOD)
+		baseTexColor.xyz = isGrayscaleToColor ? baseTexColor.xyz : EffectAuthoredToTarget(baseTexColor.xyz);
+#	endif
 		baseColor *= baseTexColor;
 		if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::IgnoreTexAlpha || Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) {
 			baseColor.w = 1;
@@ -979,9 +1041,12 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColorMul = float4(1, 1, 1, 1);
 #	else
 	float4 baseColorMul = BaseColor;
-	baseColorMul.xyz = Color::Effect(baseColorMul.xyz);
 #		if defined(VC) && !defined(PROJECTED_UV)
-	baseColorMul *= float4(Color::Effect(input.Color.xyz), input.Color.w);
+#			if defined(BLOOD)
+	baseColorMul *= input.Color;
+#			else
+	baseColorMul *= float4(isGrayscaleToColor ? input.Color.xyz : EffectAuthoredToTarget(input.Color.xyz), input.Color.w);
+#			endif
 #		endif
 #	endif
 
@@ -1013,6 +1078,7 @@ PS_OUTPUT main(PS_INPUT input)
 		bloodMul *= (deltaY / AlphaTestRef.y);
 	}
 	baseColor.xyz = saturate(float3(2, 1, 1) - bloodMul.xxx) * (-bloodMul * AlphaTestRef.z + 1);
+	baseColor.xyz = EffectAuthoredToTarget(baseColor.xyz);
 #	endif
 
 	alpha *= PropertyColor.w;
@@ -1020,7 +1086,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float baseColorScale = BaseColorScale.x;
 
 #	if defined(MEMBRANE)
-	baseColor.xyz = (PropertyColor.xyz + baseColor.xyz) * alpha + membraneColor.xyz * membraneColor.w;
+	baseColor.xyz = (effectPropertyColor + baseColor.xyz) * alpha + membraneColor.xyz * membraneColor.w;
 	alpha += membraneColor.w;
 	baseColorScale = MembraneVars.z;
 #	endif
@@ -1028,13 +1094,13 @@ PS_OUTPUT main(PS_INPUT input)
 	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha)
 		alpha = TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.w, alpha)).w;
 
-	[branch] if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor)
+	[branch] if (isGrayscaleToColor)
 	{
 		float2 grayscaleToColorUv = float2(baseTexColor.y, baseColorMul.x);
 #	if defined(MEMBRANE)
 		grayscaleToColorUv.y = PropertyColor.x;
 #	endif
-		baseColor.xyz = Color::Effect(baseColorScale * TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz);
+		baseColor.xyz = baseColorScale * EffectAuthoredToTarget(TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz);
 	}
 
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence);
@@ -1052,7 +1118,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 	float fogFactor = input.FogParam.w;
-	float3 fogColor = Color::Effect(input.FogParam.xyz);
+	float3 fogColor = Color::Fog(input.FogParam.xyz);
 #		if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
@@ -1079,6 +1145,12 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 	}
 #		endif
+	if (ENABLE_LL) {
+#		if defined(EXP_HEIGHT_FOG)
+		vanillaFogColor = EffectLinearToTarget(vanillaFogColor);
+#		endif
+		fogColor = EffectLinearToTarget(fogColor);
+	}
 #		if defined(ADDBLEND)
 #			if defined(EXP_HEIGHT_FOG)
 	float3 blendedColor = lightColor * (1 - vanillaFogFactor) * (1 - expFogFactor);

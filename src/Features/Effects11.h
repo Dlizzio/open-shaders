@@ -105,11 +105,7 @@ public:
 	void CheckCommonData();
 	void OverridePointLightColor(float3& a_color);
 
-	struct DirectionalAmbientColors
-	{
-		RE::NiColor directionalAmbientColors[3][2];
-	};
-	void OverrideAmbientLighting(DirectionalAmbientColors& DirectionalAmbientColors);
+	void OverrideAmbientLighting(RE::NiColor (&a_directionalAmbientColors)[3][2]);
 
 	void ModifySky(RE::BSRenderPass* Pass);
 	__declspec(noinline) void ModifyParticle(RE::BSRenderPass* Pass);

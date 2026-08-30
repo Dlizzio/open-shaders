@@ -232,7 +232,7 @@ namespace ExponentialHeightFog
 			float3 lightDirection = normalize(SharedData::DirLightDirection.xyz);
 			float cosTheta = dot(lightDirection, viewDirection);
 			float phase = HenyeyGreenstein(cosTheta, SharedData::exponentialHeightFogSettings.directionalInscatteringAnisotropy);
-			float3 directionalLightInscattering = Color::GamutTransform(SharedData::DirLightColor.xyz) * phase;
+			float3 directionalLightInscattering = SharedData::DirLightColor.xyz * phase;
 			directionalInscattering = directionalLightInscattering * (1.0f - expFogFactor) * SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier;
 		}
 

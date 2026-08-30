@@ -363,7 +363,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(GRAYSCALE_TO_COLOR)
 	float3 grayScaleColor =
 		TexGrayscaleTexture.Sample(SampGrayscaleTexture, float2(sourceColor.y, input.Color.x)).xyz;
-	baseColor.xyz = grayScaleColor;
+	baseColor.xyz = Color::AuthoredTextureColor(grayScaleColor);
 #	endif
 #	if defined(GRAYSCALE_TO_ALPHA)
 	float grayScaleAlpha =
@@ -386,7 +386,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirSoftShadow = 1.0;
 	float dirDetailedShadow = 1.0;
 
-	float3 dirLightColor = Color::GamutTransform(SharedData::DirLightColor.xyz);
+	float3 dirLightColor = SharedData::DirLightColor.xyz;
 
 	// HasDirectionalShadows() admits Interior Sun cells to the directional shadow
 	// sampling path (matching Lighting.hlsl).
@@ -406,7 +406,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, float3(0, 0, -1));
 	}
 #	endif
-	ambientColor = Color::GamutTransform(ambientColor);
+	ambientColor = Color::Ambient(ambientColor);
 
 	// Exactly one of dirSoftShadow / dirDetailedShadow is < 1.0 (the two paths
 	// above are mutually exclusive); the other stays at its default 1.0.
