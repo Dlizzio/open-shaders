@@ -691,6 +691,11 @@ void Menu::Init()
 
 	auto& imgui_io = ImGui::GetIO();
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_DockingEnable;
+	// Skyrim delivers input as a frame-sized batch. ImGui's default trickle mode may consume only
+	// part of such a batch to spread rapid transitions over subsequent frames. High-rate wheel input
+	// can therefore grow InputEventsQueue without bound and replay stale cursor/input state seconds
+	// later. Consume the complete batch in the next NewFrame instead.
+	imgui_io.ConfigInputTrickleEventQueue = false;
 	imgui_io.ConfigDockingWithShift = settings.RequireShiftToDock;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_HasGamepad;
 
@@ -706,7 +711,7 @@ void Menu::Init()
 	handler.ReadLineFn = [](ImGuiContext*, ImGuiSettingsHandler* h, void*, const char* line) {
 		float w, ht;
 		if (sscanf(line, "DisplaySize=%f,%f", &w, &ht) == 2)
-			*static_cast<float2*>(h->UserData) = { w, ht };
+			*static_cast<float2*>(h->UserData) = float2{ w, ht };
 	};
 	handler.WriteAllFn = [](ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextBuffer* buf) {
 		auto& ds = ImGui::GetIO().DisplaySize;
@@ -1142,8 +1147,6 @@ void Menu::ProcessInputEventQueue()
 			if (event.keyCode > 7) {  // middle scroll
 				if (ew && ew->previewMode == EditorWindow::PreviewMode::FreeCamera) {
 					ew->AdjustFlySpeed(event.keyCode == 8 ? 1.0f : -1.0f);
-				} else if (!flying) {
-					io.AddMouseWheelEvent(0, event.value * (event.keyCode == 8 ? 1 : -1));
 				}
 			} else if (!flying) {
 				if (event.keyCode > 5)
@@ -1352,6 +1355,19 @@ void Menu::ProcessInputEventQueue()
 			}
 		}
 	}
+
+	const auto directInputWheelRaw = _directInputWheelDelta.exchange(0, std::memory_order_relaxed);
+	const float wheelY = static_cast<float>(directInputWheelRaw) / static_cast<float>(WHEEL_DELTA);
+	if (wheelY != 0.0f)
+		io.AddMouseWheelEvent(0.0f, wheelY);
+
+	_keyEventQueue.clear();
+}
+
+void Menu::RecordDirectInputWheelDelta(std::int32_t delta)
+{
+	if (delta != 0)
+		_directInputWheelDelta.fetch_add(delta, std::memory_order_relaxed);
 }
 
 bool Menu::IsCapturingHotkeyInput() const

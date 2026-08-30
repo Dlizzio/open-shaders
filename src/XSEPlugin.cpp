@@ -11,8 +11,6 @@
 #include "State.h"
 #include "VRAPI/CSpluginapi.h"
 
-#include "ENB/ENBSeriesAPI.h"
-
 #define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;
@@ -159,11 +157,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 bool Load()
 {
-	if (ENB_API::RequestENBAPI()) {
-		logger::info("ENB detected, disabling all hooks and features");
-		return true;
-	}
-
 	if (REL::Module::IsVR()) {  // Pre-ReInit check; globals::game::isVR not populated yet
 		// Floor covers 0.238.0's BSShadowLight::ctor (100810) / BSLight::IsInRange
 		// (101299) and 0.250.0's SetBackHemisphereAccumulator (101600, guarded by

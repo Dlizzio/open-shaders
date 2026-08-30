@@ -25,7 +25,7 @@ option(
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 2.9.0
+    VERSION 2.10.1
     LANGUAGES CXX
 )
 
@@ -206,7 +206,8 @@ set_source_files_properties(
     "${STB_IMAGE_WRITE_IMPL}"
     PROPERTIES
         SKIP_PRECOMPILE_HEADERS ON
-        COMPILE_OPTIONS "$<$<C_COMPILER_ID:MSVC>:/W0>"
+        COMPILE_OPTIONS
+            "$<$<OR:$<C_COMPILER_ID:MSVC>,$<C_COMPILER_ID:Clang>>:/W0>"
 )
 
 target_link_libraries(

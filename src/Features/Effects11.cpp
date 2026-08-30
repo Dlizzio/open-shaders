@@ -12,13 +12,177 @@
 
 #include "CloudShadows.h"
 #include "Deferred.h"
+#include "Globals.h"
 #include "GpuPass.h"
 #include "IBL.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TerrainShadows.h"
 #include "Utils/D3D.h"
+#include "Utils/DevBenchUx.h"
 #include "Utils/Game.h"
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Effects11::Settings,
+	presetLocation)
+
+void Effects11::Initialize()
+{
+	auto& presetManager = PresetManager::GetSingleton();
+	presetManager.Rescan();
+
+	ResolveActivePresetLocation();
+}
+
+void Effects11::LoadSettings(json& o_json)
+{
+	settings = o_json;
+}
+
+void Effects11::SaveSettings(json& o_json)
+{
+	o_json = settings;
+}
+
+void Effects11::ResolveActivePresetLocation()
+{
+	auto& presetManager = PresetManager::GetSingleton();
+	const auto& locations = presetManager.GetDiscoveredLocations();
+
+	if (!settings.presetLocation.empty()) {
+		if (const auto* match = presetManager.FindByRelativeKey(settings.presetLocation))
+			presetManager.SetActiveLocation(match->root);
+		else
+			presetManager.SetActiveLocation({});
+		return;
+	}
+
+	const PresetLocation* dataRoot = nullptr;
+	const PresetLocation* gameRoot = nullptr;
+	std::vector<const PresetLocation*> dataSubfolders;
+
+	for (const auto& loc : locations) {
+		switch (loc.kind) {
+		case PresetLocationKind::DataRoot:
+			dataRoot = &loc;
+			break;
+		case PresetLocationKind::GameRoot:
+			gameRoot = &loc;
+			break;
+		case PresetLocationKind::DataSubfolder:
+			dataSubfolders.push_back(&loc);
+			break;
+		}
+	}
+
+	if (dataRoot) {
+		presetManager.SetActiveLocation(dataRoot->root);
+	} else if (gameRoot) {
+		presetManager.SetActiveLocation(gameRoot->root);
+	} else if (dataSubfolders.size() == 1) {
+		presetManager.SetActiveLocation(dataSubfolders.front()->root);
+	} else {
+		presetManager.SetActiveLocation({});
+	}
+}
+
+namespace
+{
+	// Macro argument splitting only respects parens, not braces, so these devbench
+	// callbacks are named functions rather than lambdas with a braced json literal.
+	json QueryListPresetLocations(const Feature*, const json&)
+	{
+		auto& presetManager = PresetManager::GetSingleton();
+		const auto* active = presetManager.GetActiveLocation();
+		json locations = json::array();
+		for (const auto& loc : presetManager.GetDiscoveredLocations()) {
+			json effectStatus = json::array();
+			for (const auto& status : loc.effectStatus) {
+				effectStatus.push_back(json{
+					{ "flagName", status.flagName },
+					{ "enabled", status.enabled },
+					{ "fileExists", status.fileExists },
+				});
+			}
+
+			json entry;
+			entry["root"] = loc.root.string();
+			entry["label"] = loc.label;
+			entry["active"] = active && active->root == loc.root;
+			entry["headerComment"] = loc.headerComment;
+			entry["effectStatus"] = effectStatus;
+			locations.push_back(entry);
+		}
+		json result;
+		result["locations"] = locations;
+		result["activeRoot"] = active ? active->root.string() : std::string{};
+		return result;
+	}
+
+	void CommandRescanPresetLocations(Feature*, const json&)
+	{
+		PresetManager::GetSingleton().Rescan();
+	}
+
+	void CommandSelectPresetLocation(Feature*, const json& args)
+	{
+		const std::string root = args.value("root", std::string{});
+		auto& presetManager = PresetManager::GetSingleton();
+		for (const auto& loc : presetManager.GetDiscoveredLocations()) {
+			if (loc.root.string() == root) {
+				presetManager.SetActiveLocation(loc.root);
+				globals::features::effects11.settings.presetLocation = presetManager.ToRelativeKey(loc.root);
+				SettingManager::GetSingleton().Load();
+				EffectManager::GetSingleton().Apply();
+				return;
+			}
+		}
+		logger::warn("[Effects11] selectPresetLocation: no discovered location matches root '{}'", root);
+	}
+
+	// A free function, not an inline lambda: the aggregate-initializer commas below
+	// would otherwise split across FEATURE_QUERY's macro arguments.
+	json QueryWeatherState(const Feature*, const json&)
+	{
+		const auto& weather = ENBHelper::GetWeatherInfo();
+		const auto& location = ENBHelper::GetLocationInfo();
+		const auto& time = ENBHelper::GetTimeInfo();
+		auto& weatherManager = WeatherManager::GetSingleton();
+		return json{
+			{ "currentWeatherFormID", weather.currentWeatherFormID },
+			{ "outgoingWeatherFormID", weather.outgoingWeatherFormID },
+			{ "effectiveCurrentWeatherID", weatherManager.GetEffectiveWeatherID(weather.currentWeatherFormID & 0x00FFFFFF) },
+			{ "effectiveOutgoingWeatherID", weatherManager.GetEffectiveWeatherID(weather.outgoingWeatherFormID & 0x00FFFFFF) },
+			{ "weatherTransition", weather.weatherTransition },
+			{ "currentClassification", weather.currentClassification },
+			{ "outgoingClassification", weather.outgoingClassification },
+			{ "locationFormID", location.locationFormID & 0x00FFFFFF },
+			{ "worldSpaceFormID", location.worldSpaceFormID & 0x00FFFFFF },
+			{ "isInterior", location.isInterior },
+			{ "gameHour", time.gameHour },
+			{ "dayOfYear", time.dayOfYear },
+		};
+	}
+}
+
+void Effects11::RegisterUxActions()
+{
+	FEATURE_QUERY("listPresetLocations",
+		"ENB preset locations found on disk (game root, Data, and Data subfolders) and which one is active. Params: none.",
+		QueryListPresetLocations);
+	FEATURE_COMMAND("rescanPresetLocations",
+		"Re-scans game root, Data root, and Data subfolders for enbseries.ini + enbseries\\ pairs -- the same code path as clicking Rescan. Does not change the active selection. Params: none.",
+		CommandRescanPresetLocations);
+	FEATURE_COMMAND("selectPresetLocation",
+		"Selects a discovered ENB preset location and hot-swaps to it -- the same code path as picking it from the dropdown (reloads settings, reapplies effects, no restart). Params: root (string, must match a listPresetLocations root value).",
+		CommandSelectPresetLocation);
+	FEATURE_QUERY("getWeatherState",
+		"Snapshot of Effects11's per-frame weather/location state: raw and location-overridden "
+		"(effective, per WeatherManager's _locationweather.ini) weather form IDs, transition, "
+		"interior/worldspace/location, and game time. Stands in for what third-party mods (e.g. "
+		"Lux) used to read from ENB's binary state via ENB Helper Plus.",
+		QueryWeatherState);
+}
 
 Effects11::PerFrame Effects11::GetCommonBufferData()
 {
@@ -40,7 +204,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 
 	data.VolumetricRaysDesaturation = settingManager.GetInterpolatedTimeOfDayValue("Desaturation", "GAMEVOLUMETRICRAYS");
 	auto colorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("ColorFilter", "GAMEVOLUMETRICRAYS");
-	data.VolumetricRaysColorFilter = { colorFilter.x, colorFilter.y, colorFilter.z };
+	data.VolumetricRaysColorFilter = float3{ colorFilter.x, colorFilter.y, colorFilter.z };
 
 	data.UseProceduralGradientWeights = enableEffect && settingManager.GetValue<bool>("UseProceduralGradientWeights", "SKY");
 	data.ProceduralGradientWeightCurve = settingManager.GetInterpolatedTimeOfDayValue("ProceduralGradientWeightCurve", "SKY");
@@ -185,8 +349,10 @@ void Effects11::LoadRaindropTexture()
 
 void Effects11::SetupResources()
 {
+	Initialize();
+
+	// Initialize() -> Apply() already loads the raindrop texture; do not load it again here.
 	EffectManager::GetSingleton().Initialize();
-	LoadRaindropTexture();
 }
 
 void Effects11::ClearShaderCache()

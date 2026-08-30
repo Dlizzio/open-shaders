@@ -2018,7 +2018,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 			perfMode.IsHookActive() &&
 			(upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR);
 		if (dlssperfRenderResPath) {
-			resolutionScale = { 1.0f, 1.0f };
+			resolutionScale = float2{ 1.0f, 1.0f };
 
 			auto renderWidth = static_cast<int>(perfMode.GetRenderEyeWidth());
 			auto displayWidth = static_cast<int>(perfMode.GetDisplayEyeWidth());
@@ -2027,7 +2027,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 			GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
 			// Loading screens reset the upscaler every frame; unintegrated jitter only wobbles the image.
 			if (globals::state->isLoadingMenuOpen)
-				jitter = { 0.0f, 0.0f };
+				jitter = float2{ 0.0f, 0.0f };
 
 			if (globals::game::isVR)
 				a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
@@ -2052,7 +2052,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 			GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
 			// Loading screens reset the upscaler every frame; unintegrated jitter only wobbles the image.
 			if (globals::state->isLoadingMenuOpen)
-				jitter = { 0.0f, 0.0f };
+				jitter = float2{ 0.0f, 0.0f };
 
 			if (globals::game::isVR)
 				a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
@@ -2062,7 +2062,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 			a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
 		}
 	} else {
-		resolutionScale = { 1.0f, 1.0f };
+		resolutionScale = float2{ 1.0f, 1.0f };
 
 		if (globals::game::isVR)
 			jitter.x = -a_viewport->projectionPosScaleX * screenWidth;
@@ -3116,6 +3116,20 @@ void Upscaling::ApplySharpening()
 {
 	if (!settings.sharpnessEnabledDLSS || settings.sharpnessDLSS <= 0.0f)
 		return;
+
+	// Streamline::Upscale already redirected DLSS to write into refraTempTex when
+	// sharpening is active, so RCAS reads it directly here -- no CopyResource needed.
+	if (perfMode.IsHookActive() && perfMode.GetTestTexture()) {
+		if (!IsPerfModeSharpenRedirectActive())
+			return;
+
+		CS_GPU_PASS("Upscaling::Sharpening");
+
+		float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
+		currentSharpness = exp2(-currentSharpness);
+		rcas.ApplySharpen(perfMode.GetRefraTempSRV(), perfMode.GetTestTextureUAV(), currentSharpness);
+		return;
+	}
 
 	if (!sharpenerTexture)
 		return;

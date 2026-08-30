@@ -13,6 +13,13 @@ shadertoolsconfig.json
 
 tools/__pycache__/
 
+# Semantic Release's plugin dependencies (CI installs these into the
+# checkout via cycjimmy/semantic-release-action); also produced by a local
+# `npm install` for testing .releaserc.js/tools/release-first-parent-plugin.js.
+/node_modules/
+/package.json
+/package-lock.json
+
 # feature_version_audit.py --apply-bumps output, read by
 # tools/release-notes-feature-audit-plugin.js during Semantic Release
 /feature-audit-notes.md
