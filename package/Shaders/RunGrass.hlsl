@@ -56,13 +56,7 @@ struct VS_OUTPUT
 };
 
 // Constant Buffers (Flat and VR)
-cbuffer PerGeometry : register(
-#ifdef VSHADER
-						  b2
-#else
-						  b3
-#endif
-					  )
+cbuffer PerGeometry : register(b2)
 {
 #if !defined(VR)
 	row_major float4x4 WorldViewProj[1] : packoffset(c0);

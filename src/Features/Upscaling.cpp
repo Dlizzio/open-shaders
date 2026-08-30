@@ -18,7 +18,6 @@
 #include "Utils/DevBenchUx.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
-#include "Utils/VersionedRelocation.h"
 #include <Windows.h>
 #include <algorithm>
 #include <cfloat>

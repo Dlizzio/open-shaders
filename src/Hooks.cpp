@@ -3,7 +3,6 @@
 #include "ShaderTools/BSShaderHooks.h"
 #include "ShaderTools/LegacyGraphicsCompatibility.h"
 #include "Utils/ExternalEmittance.h"
-#include "Utils/VersionedRelocation.h"
 
 #include "Feature.h"
 #include "Globals.h"

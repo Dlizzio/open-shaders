@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Utils/LazyShader.h"
-#include "Utils/VersionedRelocation.h"
 
 /** @brief Provides seamless depth-based blending between terrain and objects to eliminate harsh transitions. */
 struct TerrainBlending : Feature

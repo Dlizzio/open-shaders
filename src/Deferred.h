@@ -6,7 +6,6 @@
 #include "RE/B/BSShadowDirectionalLight.h"
 #include "RE/B/BSShadowLight.h"
 #include "Utils/LazyShader.h"
-#include "Utils/VersionedRelocation.h"
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
 #define SPECULAR RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED

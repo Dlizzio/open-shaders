@@ -145,10 +145,8 @@ namespace LegacyGraphicsCompatibility
 
 	void BindLegacyGrassPerGeometryToPixelShader()
 	{
-		if (!IsLegacyVersion()) {
-			return;
-		}
-
+		// Unconditional: native grass setup never writes real PerGeometry data to
+		// the pixel stage on any runtime, so this must run regardless of IsLegacyVersion().
 		constexpr std::size_t grassPerGeometrySize = 22 * 4 * sizeof(float);
 		static_assert(grassPerGeometrySize == 0x160);
 
