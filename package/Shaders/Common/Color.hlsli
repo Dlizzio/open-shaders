@@ -382,7 +382,9 @@ namespace Color
 
 	float3 Ambient(float3 color)
 	{
-		return AuthoredColor(color);
+		return AuthoredColor(color) *
+		       SharedData::csUtilitySettings.ambientLightMult *
+		       (ENABLE_LL ? SharedData::linearLightingSettings.ambientMult : 1.0);
 	}
 
 	float3 Fog(float3 color)

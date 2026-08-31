@@ -43,6 +43,7 @@ namespace
 	{
 		const CSUtility::Settings defaults{};
 		a_settings.skyBrightness = ClampFiniteOrDefault(a_settings.skyBrightness, kSkyBrightnessMin, kSkyBrightnessMax, defaults.skyBrightness);
+		a_settings.ambientLightMult = ClampFiniteOrDefault(a_settings.ambientLightMult, kMultiplierMin, kMultiplierMax, defaults.ambientLightMult);
 		a_settings.directionalLightMult = ClampFiniteOrDefault(a_settings.directionalLightMult, kMultiplierMin, kMultiplierMax, defaults.directionalLightMult);
 		a_settings.pointLightMult = ClampFiniteOrDefault(a_settings.pointLightMult, kMultiplierMin, kMultiplierMax, defaults.pointLightMult);
 		a_settings.linearPointLightMult = ClampFiniteOrDefault(a_settings.linearPointLightMult, kMultiplierMin, kMultiplierMax, defaults.linearPointLightMult);
@@ -124,6 +125,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CSUtility::Settings,
 	skyBrightness,
+	ambientLightMult,
 	directionalLightMult,
 	pointLightMult,
 	linearPointLightMult,
@@ -151,13 +153,14 @@ void CSUtility::DrawSettings()
 			activeSettingsPage = SettingsPage::Multipliers;
 			if (ImGui::TreeNodeEx(T(TKEY("lighting"), "Lighting"), ImGuiTreeNodeFlags_DefaultOpen)) {
 				const bool linearLightingEnabled = globals::features::linearLighting.settings.enableLinearLighting;
+				DrawMultiplierSlider(T(TKEY("ambient_multiplier"), "Ambient Multiplier"), settings.ambientLightMult);
+				DrawMultiplierSlider(T(TKEY("directional_light_multiplier"), "Directional Light Multiplier"), settings.directionalLightMult);
 				DrawMultiplierSlider(T(TKEY("global_point_lighting"), "Global Point Lighting"), settings.pointLightMult);
 				DrawLinearMultiplierSlider(T(TKEY("global_point_lighting_linear"), "Global Point Lighting (Linear)"), settings.linearPointLightMult, linearLightingEnabled);
 				DrawMultiplierSlider(T(TKEY("spotlights"), "Spotlights"), settings.spotlightMult);
 				DrawLinearMultiplierSlider(T(TKEY("spotlights_linear"), "Spotlights (Linear)"), settings.linearSpotlightMult, linearLightingEnabled);
 				DrawMultiplierSlider(T(TKEY("omnidirectional_bulbs"), "Omnidirectional Bulbs"), settings.omnidirectionalBulbMult);
 				DrawLinearMultiplierSlider(T(TKEY("omnidirectional_bulbs_linear"), "Omnidirectional Bulbs (Linear)"), settings.linearOmnidirectionalBulbMult, linearLightingEnabled);
-				DrawMultiplierSlider(T(TKEY("directional_light_multiplier"), "Directional Light Multiplier"), settings.directionalLightMult);
 				ImGui::TreePop();
 			}
 			ImGui::EndTabItem();
@@ -250,6 +253,7 @@ void CSUtility::RestoreCurrentPageDefaultSettings()
 		settings.water = defaults.water;
 		break;
 	case SettingsPage::Multipliers:
+		settings.ambientLightMult = defaults.ambientLightMult;
 		settings.directionalLightMult = defaults.directionalLightMult;
 		settings.pointLightMult = defaults.pointLightMult;
 		settings.linearPointLightMult = defaults.linearPointLightMult;
@@ -272,7 +276,8 @@ bool CSUtility::ReapplyCurrentPageOverrideSettings()
 {
 	static constexpr std::array<std::string_view, 1> atmosphereKeys{ "skyBrightness" };
 	static constexpr std::array<std::string_view, 1> waterKeys{ "water" };
-	static constexpr std::array<std::string_view, 7> multiplierKeys{
+	static constexpr std::array<std::string_view, 8> multiplierKeys{
+		"ambientLightMult",
 		"directionalLightMult",
 		"pointLightMult",
 		"linearPointLightMult",
@@ -311,6 +316,7 @@ CSUtility::PerFrameData CSUtility::GetCommonBufferData() const
 
 	PerFrameData data{};
 	data.skyBrightness = sanitizedSettings.skyBrightness;
+	data.ambientLightMult = sanitizedSettings.ambientLightMult;
 	data.directionalLightMult = sanitizedSettings.directionalLightMult;
 	data.pointLightMult = sanitizedSettings.pointLightMult;
 	data.linearPointLightMult = sanitizedSettings.linearPointLightMult;

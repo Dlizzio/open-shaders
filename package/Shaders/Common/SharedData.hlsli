@@ -243,6 +243,7 @@ namespace SharedData
 	struct CSUtilitySettings
 	{
 		float skyBrightness;
+		float ambientLightMult;
 		float directionalLightMult;
 		float pointLightMult;
 		float linearPointLightMult;
@@ -258,6 +259,7 @@ namespace SharedData
 		float waterFresnelMin;
 		float waterFresnelMax;
 		float waterMuddiness;
+		float3 pad0;
 	};
 
 	struct LinearLightingSettings
@@ -271,7 +273,7 @@ namespace SharedData
 		float emitColorMult;
 		float glowmapMult;
 		float3 effectLightingColor;
-		float pad0;
+		float ambientMult;
 		float3 skyStaticsColor;
 		float pad1;
 	};

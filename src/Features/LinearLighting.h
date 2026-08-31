@@ -30,9 +30,10 @@ struct LinearLighting : Feature
 		uint enableACEScg = false;
 
 		// Lighting multipliers
-		float vanillaDiffuseColorMult = 1.0f;
+		float ambientMult = 0.32f;
+		float vanillaDiffuseColorMult = 1.5f;
 		float emitColorMult = 1.0f;
-		float glowmapMult = 0.66f;
+		float glowmapMult = 1.0f;
 	} settings;
 
 	struct alignas(16) PerFrameData
@@ -46,7 +47,7 @@ struct LinearLighting : Feature
 		float emitColorMult;
 		float glowmapMult;
 		RE::NiColor effectLightingColor;
-		float pad0;
+		float ambientMult;
 		RE::NiColor skyStaticsColor;
 		float pad1;
 	};

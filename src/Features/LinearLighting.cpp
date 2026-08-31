@@ -19,6 +19,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
 	enableACEScg,
+	ambientMult,
 	vanillaDiffuseColorMult,
 	emitColorMult,
 	glowmapMult)
@@ -50,6 +51,7 @@ void LinearLighting::DrawSettings()
 							  "Requires Linear Lighting and Post Processing enabled.\n"
 							  "All sRGB-gamut textures and colors will be converted to ACEScg during shading."));
 
+	ImGui::SliderFloat(T(TKEY("ambient_multiplier"), "Ambient Multiplier"), &settings.ambientMult, kMultiplierMin, kMultiplierMax, "%.2f");
 	ImGui::SliderFloat(T(TKEY("vanilla_diffuse_color_multiplier"), "Vanilla Diffuse Color Multiplier"), &settings.vanillaDiffuseColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
 	ImGui::SliderFloat(T(TKEY("emissive_color_multiplier"), "Emissive Color Multiplier"), &settings.emitColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
 	ImGui::SliderFloat(T(TKEY("glowmap_multiplier"), "Glowmap Multiplier"), &settings.glowmapMult, kMultiplierMin, kMultiplierMax, "%.2f");
@@ -211,6 +213,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
 	data.emitColorMult = settings.emitColorMult;
 	data.glowmapMult = settings.glowmapMult;
+	data.ambientMult = settings.ambientMult;
 	if (!weatherLightingColorsInitialized)
 		UpdateWeatherLightingColors(globals::game::sky);
 	data.effectLightingColor = effectLightingColor;
@@ -221,6 +224,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
+			data.ambientMult = 1.0f;
 			data.vanillaDiffuseColorMult = 1.0f;
 			data.dirLightMult = 1.0f;
 			data.emitColorMult = 1.0f;
