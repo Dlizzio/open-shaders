@@ -2815,7 +2815,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPosition.xyz, ambientNormal);
 #		endif
 #	elif defined(SKYLIGHTING)
-	float3 vertexColor = Color::AuthoredColor(input.Color.xyz);
+	float3 vertexColor = input.Color.xyz;
 #		if defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)
 	float vertexAO = 1;
 #		else
