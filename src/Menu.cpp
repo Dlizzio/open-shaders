@@ -1360,8 +1360,6 @@ void Menu::ProcessInputEventQueue()
 	const float wheelY = static_cast<float>(directInputWheelRaw) / static_cast<float>(WHEEL_DELTA);
 	if (wheelY != 0.0f)
 		io.AddMouseWheelEvent(0.0f, wheelY);
-
-	_keyEventQueue.clear();
 }
 
 void Menu::RecordDirectInputWheelDelta(std::int32_t delta)
