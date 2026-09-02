@@ -16,6 +16,7 @@
 #include "imgui_internal.h"
 #include "imgui_stdlib.h"
 
+#include "../Feature.h"
 #include "../Globals.h"
 #include "../I18n/I18n.h"
 #include "../Menu.h"
@@ -24,6 +25,7 @@
 #include "../Utils/FileSystem.h"
 #include "../Utils/Form.h"
 #include "../Utils/Format.h"
+#include "../Utils/Game.h"
 #include "../Utils/StringUtils.h"
 
 namespace SceneSettingsUI
@@ -128,6 +130,34 @@ namespace SceneSettingsUI
 		drawList->AddRectFilled(
 			ImVec2(center.x - halfStroke, center.y - outerHalfExtent),
 			ImVec2(center.x + halfStroke, center.y + outerHalfExtent), glyphColor);
+		return pressed;
+	}
+
+	static bool DrawSceneCloseButton(const char* id, float size)
+	{
+		const bool pressed = ImGui::InvisibleButton(id, ImVec2(size, size));
+		const auto minimum = ImGui::GetItemRectMin();
+		const auto maximum = ImGui::GetItemRectMax();
+		const bool held = ImGui::IsItemActive() || pressed;
+		const bool hovered = ImGui::IsItemHovered();
+		const auto color = ImGui::GetColorU32(
+			held ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered :
+													 ImGuiCol_Button);
+		ImGui::RenderFrame(minimum, maximum, color, true, ImGui::GetStyle().FrameRounding);
+
+		const ImVec2 center(
+			(minimum.x + maximum.x) * 0.5f,
+			(minimum.y + maximum.y) * 0.5f);
+		const float halfExtent = std::max(3.0f, size * 0.2f);
+		const float stroke = std::max(2.0f, size * 0.1f);
+		auto* drawList = ImGui::GetWindowDrawList();
+		const auto glyphColor = ImGui::GetColorU32(ImGuiCol_Text);
+		drawList->AddLine(
+			ImVec2(center.x - halfExtent, center.y - halfExtent),
+			ImVec2(center.x + halfExtent, center.y + halfExtent), glyphColor, stroke);
+		drawList->AddLine(
+			ImVec2(center.x + halfExtent, center.y - halfExtent),
+			ImVec2(center.x - halfExtent, center.y + halfExtent), glyphColor, stroke);
 		return pressed;
 	}
 
@@ -645,7 +675,7 @@ namespace SceneSettingsUI
 				auto refreshedMember = std::ranges::find_if(
 					refreshedDescriptor->members, [&](const auto& candidate) {
 						return candidate.settingPath == member.settingPath && candidate.key == member.key &&
-						       candidate.componentIndex == member.componentIndex;
+					           candidate.componentIndex == member.componentIndex;
 					});
 				if (refreshedMember != refreshedDescriptor->members.end())
 					member.value = refreshedMember->value;
@@ -1039,6 +1069,7 @@ namespace SceneSettingsUI
 		static RE::TESDataHandler* cachedDataHandler = nullptr;
 		static size_t cachedWeatherCount = std::numeric_limits<size_t>::max();
 		static std::vector<RE::TESWeather*> targets;
+		static std::unordered_set<RE::FormID> targetIds;
 		auto* dataHandler = RE::TESDataHandler::GetSingleton();
 		const auto weatherCount = dataHandler ?
 		                              dataHandler->GetFormArray<RE::TESWeather>().size() :
@@ -1048,15 +1079,16 @@ namespace SceneSettingsUI
 			cachedDataHandler = dataHandler;
 			cachedWeatherCount = weatherCount;
 			targets.clear();
+			targetIds.clear();
 			if (dataHandler)
 				for (auto* weather : dataHandler->GetFormArray<RE::TESWeather>())
-					if (weather && weather->GetFormID() != 0)
+					if (weather && weather->GetFormID() != 0 &&
+						targetIds.insert(weather->GetFormID()).second)
 						targets.push_back(weather);
 		}
 		const auto addWeather = [&](RE::TESWeather* weather) {
-			if (weather && std::ranges::none_of(targets, [&](const auto* candidate) {
-					return candidate->GetFormID() == weather->GetFormID();
-				})) {
+			if (weather && weather->GetFormID() != 0 &&
+				targetIds.insert(weather->GetFormID()).second) {
 				targets.push_back(weather);
 				targetsChanged = true;
 			}
@@ -1127,19 +1159,58 @@ namespace SceneSettingsUI
 		ImGui::SetNextItemWidth(-FLT_MIN);
 		if (Util::BeginSearchableCombo(id, preview.c_str(), ImGuiComboFlags_None,
 				nullptr, kSceneTargetComboVisibleItems)) {
+			auto* manager = SceneSettingsManager::GetSingleton();
+			std::set<RE::FormID> classified;
+			std::vector<RE::TESWeather*> currentGroup;
+			std::vector<RE::TESWeather*> configuredGroup;
+			std::vector<RE::TESWeather*> availableGroup;
 			for (auto* weather : weatherTargets) {
-				auto label = GetWeatherTargetLabel(weather);
-				if (!Util::SearchableComboMatches(label))
+				if (manager->GetWeatherConfig(weather->GetFormID()).entries.empty())
 					continue;
-				const bool selected = weather->GetFormID() == weatherId;
-				auto itemLabel = std::format("{}##CopyWeather{:08X}", label, weather->GetFormID());
-				if (ImGui::Selectable(itemLabel.c_str(), selected)) {
-					weatherId = weather->GetFormID();
-					changed = true;
-				}
-				if (selected)
-					ImGui::SetItemDefaultFocus();
+				configuredGroup.push_back(weather);
+				classified.insert(weather->GetFormID());
 			}
+			if (auto* sky = globals::game::sky) {
+				for (auto* current : { sky->currentWeather, sky->lastWeather }) {
+					if (!current || classified.contains(current->GetFormID()))
+						continue;
+					auto candidate = std::ranges::find_if(weatherTargets, [&](const auto* weather) {
+						return weather->GetFormID() == current->GetFormID();
+					});
+					if (candidate == weatherTargets.end())
+						continue;
+					currentGroup.push_back(*candidate);
+					classified.insert(current->GetFormID());
+				}
+			}
+			for (auto* weather : weatherTargets)
+				if (!classified.contains(weather->GetFormID()))
+					availableGroup.push_back(weather);
+
+			const auto drawGroup = [&](const char* groupLabel,
+									   const std::vector<RE::TESWeather*>& candidates) {
+				bool groupVisible = false;
+				for (auto* weather : candidates) {
+					auto label = GetWeatherTargetLabel(weather);
+					if (!Util::SearchableComboMatches(label))
+						continue;
+					if (!groupVisible) {
+						ImGui::SeparatorText(groupLabel);
+						groupVisible = true;
+					}
+					const bool selected = weather->GetFormID() == weatherId;
+					auto itemLabel = std::format("{}##CopyWeather{:08X}", label, weather->GetFormID());
+					if (ImGui::Selectable(itemLabel.c_str(), selected)) {
+						weatherId = weather->GetFormID();
+						changed = true;
+					}
+					if (selected)
+						ImGui::SetItemDefaultFocus();
+				}
+			};
+			drawGroup(T("feature.scene_manager.weather.group.current", "Current"), currentGroup);
+			drawGroup(T("feature.scene_manager.weather.group.configured", "Configured"), configuredGroup);
+			drawGroup(T("feature.scene_manager.weather.group.available", "Available"), availableGroup);
 			Util::EndSearchableCombo();
 		}
 		return changed;
@@ -1590,6 +1661,973 @@ namespace SceneSettingsUI
 
 		if (state.copy.conflictPromptOpen)
 			DrawCopyConflictPopup(state.copy);
+	}
+
+	struct FeatureSceneTargetState
+	{
+		SceneSettingsManager::SceneContextType type =
+			SceneSettingsManager::SceneContextType::TimeOfDay;
+		Period period = Period::Day;
+		RE::FormID weatherId = 0;
+		SceneSettingsManager::LocationTargetType locationType =
+			SceneSettingsManager::LocationTargetType::Location;
+		std::string locationFormKey;
+
+		auto operator<=>(const FeatureSceneTargetState&) const = default;
+	};
+
+	struct FeatureLocationPickerEntry
+	{
+		size_t targetIndex = 0;
+		std::string identity;
+		std::string displayLabel;
+		std::string selectableLabel;
+		bool configured = false;
+	};
+
+	struct FeatureLocationPickerCache
+	{
+		static constexpr size_t kInvalidTargetIndex = std::numeric_limits<size_t>::max();
+
+		size_t targetCount = std::numeric_limits<size_t>::max();
+		std::uint64_t revision = std::numeric_limits<std::uint64_t>::max();
+		std::string locale;
+		std::vector<FeatureLocationPickerEntry> entries;
+		std::map<std::string, size_t> indicesByIdentity;
+		std::vector<size_t> configuredIndices;
+		std::vector<size_t> unconfiguredIndices;
+		std::vector<size_t> currentIndices;
+		std::vector<std::uint8_t> currentMembership;
+		std::vector<size_t> visibleIndices;
+		size_t selectedTargetIndex = kInvalidTargetIndex;
+	};
+
+	struct FeaturePageEditorState
+	{
+		std::string featureShortName;
+		std::vector<SceneSettingsManager::SceneContextType> supportedTypes;
+		FeatureSceneTargetState edit;
+		FeatureSceneTargetState destination;
+		std::optional<SceneSettingsManager::SceneContextId> activeContext;
+		std::optional<SceneSettingsManager::SceneContextId> copySource;
+		CopySettingState copy;
+		FeatureLocationPickerCache locationPicker;
+		Util::ConfirmationPopup deleteSettings;
+		bool copyOpenRequested = false;
+		bool conflictOpenRequested = false;
+	};
+
+	static FeaturePageEditorState s_featurePageEditor;
+
+	static bool FeatureSupportsSceneContext(const std::string& featureShortName,
+		SceneSettingsManager::SceneContextType type)
+	{
+		switch (type) {
+		case SceneSettingsManager::SceneContextType::Interior:
+			return SceneSettingsManager::IsFeatureAllowedForType(
+				SceneType::InteriorOnly, featureShortName);
+		case SceneSettingsManager::SceneContextType::TimeOfDay:
+		case SceneSettingsManager::SceneContextType::Weather:
+			return SceneSettingsManager::IsFeatureAllowedForType(
+				SceneType::TimeOfDay, featureShortName);
+		case SceneSettingsManager::SceneContextType::Location:
+			return SceneSettingsManager::IsFeatureAllowedForType(
+				SceneType::Location, featureShortName);
+		default:
+			return false;
+		}
+	}
+
+	static std::vector<SceneSettingsManager::SceneContextType> GetFeatureSceneContextTypes(
+		const std::string& featureShortName)
+	{
+		std::vector<SceneSettingsManager::SceneContextType> types;
+		for (const auto type : {
+				 SceneSettingsManager::SceneContextType::Interior,
+				 SceneSettingsManager::SceneContextType::TimeOfDay,
+				 SceneSettingsManager::SceneContextType::Weather,
+				 SceneSettingsManager::SceneContextType::Location })
+			if (FeatureSupportsSceneContext(featureShortName, type))
+				types.push_back(type);
+		return types;
+	}
+
+	static void SetFeatureTargetFromContext(FeatureSceneTargetState& target,
+		const SceneSettingsManager::SceneContextId& context)
+	{
+		target.type = context.type;
+		target.period = context.period;
+		target.weatherId = context.weatherId;
+		target.locationType = context.locationType;
+		target.locationFormKey = context.locationFormKey;
+	}
+
+	static std::optional<SceneSettingsManager::SceneContextId> GetFeatureSceneContext(
+		const FeatureSceneTargetState& target)
+	{
+		switch (target.type) {
+		case SceneSettingsManager::SceneContextType::Interior:
+			return SceneSettingsManager::SceneContextId{
+				.type = SceneSettingsManager::SceneContextType::Interior,
+			};
+		case SceneSettingsManager::SceneContextType::TimeOfDay:
+			if (target.period == Period::Count)
+				return std::nullopt;
+			return SceneSettingsManager::SceneContextId{
+				.type = SceneSettingsManager::SceneContextType::TimeOfDay,
+				.period = target.period,
+			};
+		case SceneSettingsManager::SceneContextType::Weather:
+			if (target.weatherId == 0)
+				return std::nullopt;
+			return SceneSettingsManager::SceneContextId{
+				.type = SceneSettingsManager::SceneContextType::Weather,
+				.period = SceneSettingsManager::GetSingleton()->IsWeatherShowTimeOfDay(
+							  target.weatherId) ?
+				              target.period :
+				              Period::Count,
+				.weatherId = target.weatherId,
+			};
+		case SceneSettingsManager::SceneContextType::Location:
+			if (target.locationFormKey.empty())
+				return std::nullopt;
+			return SceneSettingsManager::SceneContextId{
+				.type = SceneSettingsManager::SceneContextType::Location,
+				.locationType = target.locationType,
+				.locationFormKey = target.locationFormKey,
+			};
+		default:
+			return std::nullopt;
+		}
+	}
+
+	static bool SelectDefaultLocationTarget(FeatureSceneTargetState& target,
+		const std::vector<SceneSettingsManager::LocationTarget>& targets,
+		const std::vector<SceneSettingsManager::LocationTarget>& currentTargets)
+	{
+		auto selected = std::ranges::find_if(targets, [&](const auto& candidate) {
+			return candidate.type == target.locationType &&
+			       candidate.formKey == target.locationFormKey;
+		});
+		if (selected != targets.end())
+			return false;
+		if (targets.empty()) {
+			target.locationFormKey.clear();
+			return false;
+		}
+		auto fallback = targets.end();
+		for (auto current = currentTargets.rbegin(); current != currentTargets.rend(); ++current) {
+			fallback = std::ranges::find_if(targets, [&](const auto& candidate) {
+				return candidate.type == current->type && candidate.formKey == current->formKey;
+			});
+			if (fallback != targets.end())
+				break;
+		}
+		if (fallback == targets.end())
+			fallback = std::ranges::find_if(targets, [&](const auto& candidate) {
+				return !SceneSettingsManager::GetSingleton()
+				            ->GetLocationConfig(candidate.type, candidate.formKey)
+				            .entries.empty();
+			});
+		if (fallback == targets.end())
+			fallback = targets.begin();
+		target.locationType = fallback->type;
+		target.locationFormKey = fallback->formKey;
+		return true;
+	}
+
+	static bool NormalizeFeatureSceneTarget(FeatureSceneTargetState& target)
+	{
+		const auto previous = target;
+		if (target.type == SceneSettingsManager::SceneContextType::TimeOfDay &&
+			target.period == Period::Count)
+			target.period = SceneSettingsManager::GetCurrentPeriod();
+		if (target.type == SceneSettingsManager::SceneContextType::Weather) {
+			const auto& weatherTargets = GetSceneWeatherTargets();
+			auto selected = std::ranges::find_if(weatherTargets, [&](const auto* weather) {
+				return weather->GetFormID() == target.weatherId;
+			});
+			if (selected == weatherTargets.end()) {
+				if (auto* sky = globals::game::sky; sky && sky->currentWeather)
+					selected = std::ranges::find_if(weatherTargets, [&](const auto* weather) {
+						return weather->GetFormID() == sky->currentWeather->GetFormID();
+					});
+				if (selected == weatherTargets.end() && !weatherTargets.empty())
+					selected = weatherTargets.begin();
+				target.weatherId = selected != weatherTargets.end() ?
+				                       (*selected)->GetFormID() :
+				                       0;
+			}
+			if (target.weatherId != 0) {
+				if (SceneSettingsManager::GetSingleton()->IsWeatherShowTimeOfDay(target.weatherId)) {
+					if (target.period == Period::Count)
+						target.period = SceneSettingsManager::GetCurrentPeriod();
+				} else {
+					target.period = Period::Count;
+				}
+			}
+		}
+		if (target.type == SceneSettingsManager::SceneContextType::Location) {
+			auto* manager = SceneSettingsManager::GetSingleton();
+			SelectDefaultLocationTarget(target, manager->GetLocationManagementTargets(),
+				manager->GetCurrentLocationTargets());
+		}
+		return target != previous;
+	}
+
+	static std::string GetFeatureLocationTargetIdentity(
+		const SceneSettingsManager::LocationTarget& target)
+	{
+		return std::format("{}:{}", static_cast<int>(target.type), target.formKey);
+	}
+
+	static void RefreshFeatureLocationPickerCache(
+		const std::vector<SceneSettingsManager::LocationTarget>& targets,
+		FeatureLocationPickerCache& cache)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto revision = manager->GetEntryPresentationRevision();
+		const auto locale = I18n::GetSingleton()->GetCurrentLocale();
+		if (cache.targetCount == targets.size() && cache.revision == revision &&
+			cache.locale == locale)
+			return;
+
+		cache.targetCount = targets.size();
+		cache.revision = revision;
+		cache.locale = locale;
+		cache.entries.clear();
+		cache.entries.reserve(targets.size());
+		cache.indicesByIdentity.clear();
+		cache.configuredIndices.clear();
+		cache.unconfiguredIndices.clear();
+		for (size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
+			const auto& target = targets[targetIndex];
+			auto identity = GetFeatureLocationTargetIdentity(target);
+			auto displayLabel = GetLocationTargetLabel(target);
+			const bool configured =
+				!manager->GetLocationConfig(target.type, target.formKey).entries.empty();
+			const size_t cacheIndex = cache.entries.size();
+			cache.indicesByIdentity.emplace(identity, cacheIndex);
+			cache.entries.push_back({
+				.targetIndex = targetIndex,
+				.identity = std::move(identity),
+				.displayLabel = std::move(displayLabel),
+				.configured = configured,
+			});
+			auto& entry = cache.entries.back();
+			entry.selectableLabel = std::format("{}##FeatureScene{}", entry.displayLabel, entry.identity);
+			(configured ? cache.configuredIndices : cache.unconfiguredIndices).push_back(cacheIndex);
+		}
+		cache.currentIndices.clear();
+		cache.currentMembership.assign(cache.entries.size(), 0);
+		cache.visibleIndices.clear();
+		cache.selectedTargetIndex = FeatureLocationPickerCache::kInvalidTargetIndex;
+	}
+
+	static bool DrawFeatureLocationPicker(const char* id, FeatureSceneTargetState& target,
+		FeatureLocationPickerCache& cache)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto& targets = manager->GetLocationManagementTargets();
+		const auto& currentTargets = manager->GetCurrentLocationTargets();
+		RefreshFeatureLocationPickerCache(targets, cache);
+		bool changed = false;
+		auto selected = cache.indicesByIdentity.find(
+			std::format("{}:{}", static_cast<int>(target.locationType), target.locationFormKey));
+		if (selected == cache.indicesByIdentity.end()) {
+			changed |= SelectDefaultLocationTarget(target, targets, currentTargets);
+			selected = cache.indicesByIdentity.find(
+				std::format("{}:{}", static_cast<int>(target.locationType), target.locationFormKey));
+		}
+		cache.selectedTargetIndex = selected != cache.indicesByIdentity.end() ?
+		                                cache.entries[selected->second].targetIndex :
+		                                FeatureLocationPickerCache::kInvalidTargetIndex;
+		const auto preview = cache.selectedTargetIndex < targets.size() ?
+		                         GetLocationTargetLabel(targets[cache.selectedTargetIndex]) :
+		                         std::string(T("feature.scene_manager.location.select_target",
+									 "Select a region, location type, location, or cell..."));
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		if (Util::BeginSearchableCombo(id, preview.c_str(), ImGuiComboFlags_None,
+				nullptr, kSceneTargetComboVisibleItems)) {
+			cache.currentIndices.clear();
+			std::fill(cache.currentMembership.begin(), cache.currentMembership.end(), 0);
+			for (auto current = currentTargets.rbegin(); current != currentTargets.rend(); ++current) {
+				const auto found = cache.indicesByIdentity.find(
+					GetFeatureLocationTargetIdentity(*current));
+				if (found == cache.indicesByIdentity.end())
+					continue;
+				const size_t cacheIndex = found->second;
+				if (cache.entries[cacheIndex].configured || cache.currentMembership[cacheIndex])
+					continue;
+				cache.currentMembership[cacheIndex] = 1;
+				cache.currentIndices.push_back(cacheIndex);
+			}
+
+			const auto drawGroup = [&](const char* groupLabel,
+									   const std::vector<size_t>& candidates,
+									   bool excludeCurrent = false) {
+				cache.visibleIndices.clear();
+				int selectedVisibleIndex = -1;
+				for (const auto cacheIndex : candidates) {
+					if (excludeCurrent && cache.currentMembership[cacheIndex])
+						continue;
+					const auto& entry = cache.entries[cacheIndex];
+					if (!Util::SearchableComboMatches(entry.displayLabel))
+						continue;
+					const auto& candidate = targets[entry.targetIndex];
+					if (candidate.type == target.locationType &&
+						candidate.formKey == target.locationFormKey)
+						selectedVisibleIndex = static_cast<int>(cache.visibleIndices.size());
+					cache.visibleIndices.push_back(cacheIndex);
+				}
+				if (cache.visibleIndices.empty())
+					return;
+				ImGui::SeparatorText(groupLabel);
+				ImGuiListClipper clipper;
+				clipper.Begin(static_cast<int>(cache.visibleIndices.size()));
+				if (selectedVisibleIndex >= 0)
+					clipper.IncludeItemByIndex(selectedVisibleIndex);
+				while (clipper.Step()) {
+					for (int visibleIndex = clipper.DisplayStart;
+						visibleIndex < clipper.DisplayEnd; ++visibleIndex) {
+						const auto& entry = cache.entries[cache.visibleIndices[visibleIndex]];
+						const auto& candidate = targets[entry.targetIndex];
+						const bool isSelected = candidate.type == target.locationType &&
+						                        candidate.formKey == target.locationFormKey;
+						if (ImGui::Selectable(entry.selectableLabel.c_str(), isSelected)) {
+							target.locationType = candidate.type;
+							target.locationFormKey = candidate.formKey;
+							cache.selectedTargetIndex = entry.targetIndex;
+							changed = true;
+						}
+						if (isSelected)
+							ImGui::SetItemDefaultFocus();
+					}
+				}
+			};
+			drawGroup(T("feature.scene_manager.location.group.current", "Current"),
+				cache.currentIndices);
+			drawGroup(T("feature.scene_manager.location.group.configured", "Configured"),
+				cache.configuredIndices);
+			drawGroup(T("feature.scene_manager.location.group.available", "Available"),
+				cache.unconfiguredIndices, true);
+			Util::EndSearchableCombo();
+		}
+		return changed;
+	}
+
+	static bool DrawFeatureSceneTypePicker(const char* id,
+		std::span<const SceneSettingsManager::SceneContextType> supportedTypes,
+		SceneSettingsManager::SceneContextType& selectedType)
+	{
+		bool changed = false;
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		if (ImGui::BeginCombo(id, GetCopySourceTypeLabel(selectedType))) {
+			for (const auto type : supportedTypes) {
+				const bool selected = type == selectedType;
+				if (ImGui::Selectable(GetCopySourceTypeLabel(type), selected)) {
+					selectedType = type;
+					changed = true;
+				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+			ImGui::EndCombo();
+		}
+		return changed;
+	}
+
+	static void InitializeFeatureSceneTarget(Feature* feature, FeatureSceneTargetState& target)
+	{
+		const auto featureShortName = feature->GetShortName();
+		target = {};
+		target.period = SceneSettingsManager::GetCurrentPeriod();
+		if (auto* sky = globals::game::sky; sky && sky->currentWeather)
+			target.weatherId = sky->currentWeather->GetFormID();
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto& currentLocations = manager->GetCurrentLocationTargets();
+
+		if (Util::IsInterior() && FeatureSupportsSceneContext(
+									  featureShortName, SceneSettingsManager::SceneContextType::Interior)) {
+			target.type = SceneSettingsManager::SceneContextType::Interior;
+		} else if (FeatureSupportsSceneContext(
+					   featureShortName, SceneSettingsManager::SceneContextType::TimeOfDay)) {
+			target.type = SceneSettingsManager::SceneContextType::TimeOfDay;
+		} else if (!currentLocations.empty() && FeatureSupportsSceneContext(
+													featureShortName, SceneSettingsManager::SceneContextType::Location)) {
+			target.type = SceneSettingsManager::SceneContextType::Location;
+		} else {
+			const auto types = GetFeatureSceneContextTypes(featureShortName);
+			if (!types.empty())
+				target.type = types.front();
+		}
+		if (target.type == SceneSettingsManager::SceneContextType::Location)
+			SelectDefaultLocationTarget(
+				target, manager->GetLocationManagementTargets(), currentLocations);
+	}
+
+	static bool DrawFeatureTargetPicker(const char* idPrefix, FeatureSceneTargetState& target,
+		bool copyDestination, FeatureLocationPickerCache& locationPicker)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		bool changed = target.type == SceneSettingsManager::SceneContextType::Weather ||
+		                       target.type == SceneSettingsManager::SceneContextType::Location ?
+		                   false :
+		                   NormalizeFeatureSceneTarget(target);
+		switch (target.type) {
+		case SceneSettingsManager::SceneContextType::Interior:
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted(T("feature.scene_manager.tab.interior", "Interior"));
+			break;
+		case SceneSettingsManager::SceneContextType::TimeOfDay:
+			changed |= DrawCopyPeriodPicker(
+				std::format("{}Period", idPrefix).c_str(), target.period);
+			break;
+		case SceneSettingsManager::SceneContextType::Weather:
+			{
+				const auto previousTarget = target;
+				const auto& weatherTargets = GetSceneWeatherTargets();
+				const auto drawWeather = [&]() {
+					changed |= DrawCopyWeatherPicker(
+						std::format("{}Weather", idPrefix).c_str(), weatherTargets, target.weatherId);
+					const bool weatherChanged = target.weatherId != previousTarget.weatherId;
+					const bool showTimeOfDay =
+						target.weatherId != 0 && manager->IsWeatherShowTimeOfDay(target.weatherId);
+					if (weatherChanged || copyDestination) {
+						if (showTimeOfDay) {
+							if (target.period == Period::Count)
+								target.period = SceneSettingsManager::GetCurrentPeriod();
+						} else {
+							target.period = Period::Count;
+						}
+					}
+					return showTimeOfDay;
+				};
+				if (!copyDestination) {
+					const auto layoutId = std::format("{}WeatherLayout", idPrefix);
+					if (ImGui::BeginTable(layoutId.c_str(), 2,
+							ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings)) {
+						ImGui::TableSetupColumn("##WeatherTarget", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+						ImGui::TableSetupColumn("##WeatherPeriod", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+						ImGui::TableNextRow();
+						ImGui::TableSetColumnIndex(0);
+						drawWeather();
+						ImGui::TableSetColumnIndex(1);
+						changed |= DrawCopyPeriodPicker(
+							std::format("{}WeatherPeriod", idPrefix).c_str(), target.period, true);
+						ImGui::EndTable();
+					}
+				} else {
+					const bool showTimeOfDay = drawWeather();
+					if (showTimeOfDay)
+						changed |= DrawCopyPeriodPicker(
+							std::format("{}WeatherPeriod", idPrefix).c_str(), target.period);
+				}
+				changed |= target != previousTarget;
+			}
+			break;
+		case SceneSettingsManager::SceneContextType::Location:
+			changed |= DrawFeatureLocationPicker(
+				std::format("{}Location", idPrefix).c_str(), target, locationPicker);
+			break;
+		}
+		return changed;
+	}
+
+	static bool IsConsoleIdentifier(std::string_view value)
+	{
+		return !value.empty() && std::ranges::all_of(value, [](unsigned char character) {
+			return std::isalnum(character) != 0 || character == '_';
+		});
+	}
+
+	static const SceneSettingsManager::LocationTarget* GetSelectedFeatureLocationTarget(
+		const FeatureSceneTargetState& target, const FeatureLocationPickerCache& cache)
+	{
+		const auto& targets = SceneSettingsManager::GetSingleton()->GetLocationManagementTargets();
+		if (cache.selectedTargetIndex >= targets.size())
+			return nullptr;
+		const auto& selected = targets[cache.selectedTargetIndex];
+		return selected.type == target.locationType && selected.formKey == target.locationFormKey ?
+		           &selected :
+		           nullptr;
+	}
+
+	static std::optional<std::string> GetCellTravelCommand(RE::TESObjectCELL* cell)
+	{
+		if (!cell)
+			return std::nullopt;
+		const auto cocCode = Util::GetFormEditorID(cell);
+		if (IsConsoleIdentifier(cocCode))
+			return std::format("coc {}", cocCode);
+		if (!cell->IsExteriorCell())
+			return std::nullopt;
+		auto* coordinates = cell->GetCoordinates();
+		auto* worldSpace = cell->GetRuntimeData().worldSpace;
+		const auto worldSpaceEditorId = Util::GetFormEditorID(worldSpace);
+		if (!coordinates || !IsConsoleIdentifier(worldSpaceEditorId))
+			return std::nullopt;
+		return std::format(
+			"cow {} {} {}", worldSpaceEditorId, coordinates->cellX, coordinates->cellY);
+	}
+
+	static std::optional<std::string> GetLocationTravelCommand(
+		const SceneSettingsManager::LocationTarget& target)
+	{
+		if (IsConsoleIdentifier(target.cocCode))
+			return std::format("coc {}", target.cocCode);
+
+		RE::TESObjectCELL* cell = nullptr;
+		if (target.type == SceneSettingsManager::LocationTargetType::Cell) {
+			cell = RE::TESForm::LookupByID<RE::TESObjectCELL>(target.formId);
+		} else if (target.type == SceneSettingsManager::LocationTargetType::Location) {
+			if (auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(target.formId)) {
+				auto marker = location->worldLocMarker ? location->worldLocMarker.get() : nullptr;
+				if (marker)
+					cell = marker->GetParentCell();
+			}
+		}
+		return GetCellTravelCommand(cell);
+	}
+
+	static void PreviewFeatureSceneContext(const SceneSettingsManager::SceneContextId& context,
+		const std::optional<std::string>& locationTravelCommand)
+	{
+		if (context.type == SceneSettingsManager::SceneContextType::Location) {
+			if (locationTravelCommand)
+				RE::Console::ExecuteCommand(locationTravelCommand->c_str());
+			return;
+		}
+		if (context.type == SceneSettingsManager::SceneContextType::TimeOfDay ||
+			(context.type == SceneSettingsManager::SceneContextType::Weather &&
+				context.period != Period::Count)) {
+			const auto periodIndex = static_cast<int>(context.period);
+			if (periodIndex >= 0 && periodIndex < kPeriodCount) {
+				if (auto* calendar = globals::game::calendar; calendar && calendar->gameHour) {
+					float hour = (SceneSettingsManager::kPeriodHours[periodIndex][0] +
+									 SceneSettingsManager::kPeriodHours[periodIndex][1]) *
+					             0.5f;
+					if (hour >= 24.0f)
+						hour -= 24.0f;
+					calendar->gameHour->value = hour;
+					Util::RequestTimeJumpTransition();
+				}
+			}
+		}
+		if (context.type != SceneSettingsManager::SceneContextType::Weather)
+			return;
+		const auto& weatherTargets = GetSceneWeatherTargets();
+		auto selected = std::ranges::find_if(weatherTargets, [&](const auto* weather) {
+			return weather->GetFormID() == context.weatherId;
+		});
+		if (selected != weatherTargets.end())
+			if (auto* sky = globals::game::sky)
+				sky->ForceWeather(*selected, false);
+	}
+
+	static bool CanPreviewFeatureSceneContext(
+		const SceneSettingsManager::SceneContextId& context,
+		const std::optional<std::string>& locationTravelCommand)
+	{
+		if (context.type == SceneSettingsManager::SceneContextType::Interior)
+			return false;
+		if (context.type == SceneSettingsManager::SceneContextType::Location)
+			return locationTravelCommand.has_value();
+		if ((context.type == SceneSettingsManager::SceneContextType::TimeOfDay ||
+				context.period != Period::Count) &&
+			(!globals::game::calendar || !globals::game::calendar->gameHour))
+			return false;
+		return context.type != SceneSettingsManager::SceneContextType::Weather ||
+		       (globals::game::sky && context.weatherId != 0);
+	}
+
+	static void InitializeFeatureCopyDestination(FeaturePageEditorState& state)
+	{
+		state.destination = state.edit;
+		if (auto different = std::ranges::find_if(state.supportedTypes, [&](const auto type) {
+				return type != state.edit.type;
+			});
+			different != state.supportedTypes.end()) {
+			state.destination.type = *different;
+		} else if (state.destination.type == SceneSettingsManager::SceneContextType::TimeOfDay) {
+			state.destination.period = static_cast<Period>(
+				(static_cast<int>(state.destination.period) + 1) % kPeriodCount);
+		}
+		NormalizeFeatureSceneTarget(state.destination);
+	}
+
+	static void RefreshFeatureCopySettings(FeaturePageEditorState& state)
+	{
+		if (!state.copySource)
+			return;
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto revision = manager->GetEntryPresentationRevision();
+		if (state.copy.revision == revision &&
+			state.copy.selectionSourceContext == state.copySource)
+			return;
+
+		state.copy.sourceSettings = manager->GetCopySourceSettings(
+			*state.copySource, EntrySource::User);
+		std::erase_if(state.copy.sourceSettings, [&](const auto& setting) {
+			return setting.setting.featureShortName != state.featureShortName;
+		});
+		state.copy.selectedSettings.clear();
+		for (const auto& setting : state.copy.sourceSettings)
+			state.copy.selectedSettings.insert(setting.setting);
+		state.copy.selectionSourceContext = state.copySource;
+		state.copy.revision = revision;
+		state.copy.preflightSourceContext.reset();
+		state.copy.preflightDestination.reset();
+		state.copy.preflightSettings.clear();
+		state.copy.preflightCandidates.clear();
+	}
+
+	static void RefreshFeatureCopyPreflight(FeaturePageEditorState& state,
+		const SceneSettingsManager::SceneContextId& destination)
+	{
+		if (!state.copySource)
+			return;
+		auto selectedSettings = GetSelectedCopySettings(state.copy);
+		if (state.copy.preflightSourceContext == state.copySource &&
+			state.copy.preflightDestination == destination &&
+			state.copy.preflightSourceLayer == EntrySource::User &&
+			state.copy.preflightSettings == selectedSettings)
+			return;
+		state.copy.preflightSourceContext = state.copySource;
+		state.copy.preflightDestination = destination;
+		state.copy.preflightSourceLayer = EntrySource::User;
+		state.copy.preflightSettings = std::move(selectedSettings);
+		state.copy.preflightCandidates = SceneSettingsManager::GetSingleton()->GetCopyCandidates(
+			*state.copySource, destination, EntrySource::User, state.copy.preflightSettings);
+	}
+
+	static void DrawFeatureCopyPopup(FeaturePageEditorState& state)
+	{
+		ImGui::SetNextWindowSizeConstraints(ImVec2(C::Em(24.0f), 0.0f),
+			ImVec2(C::Em(36.0f), FLT_MAX));
+		if (ImGui::BeginPopup("##FeatureSceneCopy", ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::SeparatorText(T("feature.scene_manager.copy.to", "Copy to"));
+			DrawFeatureSceneTypePicker(
+				"##FeatureCopyDestinationType", state.supportedTypes, state.destination.type);
+			DrawFeatureTargetPicker(
+				"##FeatureCopyDestination", state.destination, true, state.locationPicker);
+			const auto destination = GetFeatureSceneContext(state.destination);
+			RefreshFeatureCopySettings(state);
+
+			const bool distinctDestination = destination && state.copySource &&
+			                                 *destination != *state.copySource;
+			if (distinctDestination)
+				RefreshFeatureCopyPreflight(state, *destination);
+			else
+				state.copy.preflightCandidates.clear();
+			const auto compatibleCount = static_cast<size_t>(std::count_if(
+				state.copy.preflightCandidates.begin(), state.copy.preflightCandidates.end(),
+				[](const auto& candidate) { return candidate.compatible; }));
+			const auto maskedCount = static_cast<size_t>(std::count_if(
+				state.copy.preflightCandidates.begin(), state.copy.preflightCandidates.end(),
+				[](const auto& candidate) {
+					return candidate.compatible && candidate.maskedByOverwrite;
+				}));
+			if (!distinctDestination) {
+				ImGui::TextDisabled("%s", T("feature.scene_manager.copy.select_destination",
+											  "Select a destination first."));
+			} else {
+				ImGui::TextDisabled("%s", std::vformat(
+											  T("feature.scene_manager.copy.selected_compatible",
+												  "Selected compatible settings ({0})"),
+											  std::make_format_args(compatibleCount))
+											  .c_str());
+			}
+			if (maskedCount != 0)
+				Util::Text::WrappedError("%s", std::vformat(
+												   T("feature.scene_manager.copy.masked_destination",
+													   "{0} copied User Settings will remain overridden until the destination overwrites are paused or removed."),
+												   std::make_format_args(maskedCount))
+												   .c_str());
+
+			const auto selectedSettings = GetSelectedCopySettings(state.copy);
+			const bool canCopy = distinctDestination && !selectedSettings.empty() &&
+			                     compatibleCount != 0;
+			ImGui::BeginDisabled(!canCopy);
+			if (ImGui::Button(T("feature.scene_manager.copy.copy_selected",
+								  "Copy Selected Settings"),
+					ImVec2(-FLT_MIN, 0.0f))) {
+				const bool hasConflicts = std::ranges::any_of(
+					state.copy.preflightCandidates, [](const auto& candidate) {
+						return candidate.compatible && candidate.conflicts;
+					});
+				if (hasConflicts) {
+					state.copy.conflictSource = state.copySource;
+					state.copy.conflictDestination = destination;
+					state.copy.conflictSourceLayer = EntrySource::User;
+					state.copy.conflictSettings = selectedSettings;
+					state.copy.conflictPromptOpen = true;
+					state.conflictOpenRequested = true;
+					ImGui::CloseCurrentPopup();
+				} else {
+					const auto result = SceneSettingsManager::GetSingleton()->CopySettings(
+						*state.copySource, *destination, EntrySource::User,
+						SceneSettingsManager::CopyConflictPolicy::SkipExisting, selectedSettings);
+					if (result.Changed()) {
+						state.copy.revision = std::numeric_limits<std::uint64_t>::max();
+						ImGui::CloseCurrentPopup();
+					}
+				}
+			}
+			ImGui::EndDisabled();
+			if (ImGui::Button(T("feature.scene_manager.action.cancel", "Cancel"),
+					ImVec2(-FLT_MIN, 0.0f)))
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+
+		if (state.conflictOpenRequested) {
+			const auto conflictPopupId = std::format("{}##CopyPanel",
+				T("feature.scene_manager.copy.conflicts_title", "Existing Settings"));
+			ImGui::OpenPopup(conflictPopupId.c_str());
+			state.conflictOpenRequested = false;
+		}
+		if (state.copy.conflictPromptOpen)
+			DrawCopyConflictPopup(state.copy);
+	}
+
+	bool CanEditFeaturePage(Feature* feature)
+	{
+		if (!feature)
+			return false;
+		const auto featureShortName = feature->GetShortName();
+		return FeatureSupportsSceneContext(
+				   featureShortName, SceneSettingsManager::SceneContextType::Interior) ||
+		       FeatureSupportsSceneContext(
+				   featureShortName, SceneSettingsManager::SceneContextType::TimeOfDay) ||
+		       FeatureSupportsSceneContext(
+				   featureShortName, SceneSettingsManager::SceneContextType::Location);
+	}
+
+	bool BeginFeaturePageEditing(Feature* feature)
+	{
+		if (!CanEditFeaturePage(feature))
+			return false;
+		EndFeaturePageEditing(true);
+		auto& state = s_featurePageEditor;
+		if (!state.featureShortName.empty())
+			return false;
+		state = {};
+		state.featureShortName = feature->GetShortName();
+		state.supportedTypes = GetFeatureSceneContextTypes(state.featureShortName);
+		InitializeFeatureSceneTarget(feature, state.edit);
+		const auto context = GetFeatureSceneContext(state.edit);
+		if (context && SceneSettingsManager::GetSingleton()->BeginFeatureSceneEdit(feature, *context)) {
+			state.activeContext = context;
+		}
+		InitializeFeatureCopyDestination(state);
+		return true;
+	}
+
+	bool IsFeaturePageEditing(Feature* feature)
+	{
+		return feature && !s_featurePageEditor.featureShortName.empty() &&
+		       s_featurePageEditor.featureShortName == feature->GetShortName();
+	}
+
+	static bool FinishActiveFeatureSceneEdit(FeaturePageEditorState& state, bool storeChanges)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		if (!manager->IsFeatureSceneEditing(state.featureShortName)) {
+			state.activeContext.reset();
+			return true;
+		}
+		if (storeChanges && !manager->StoreFeatureSceneEdit())
+			return false;
+		manager->EndFeatureSceneEdit(false);
+		state.activeContext.reset();
+		return !manager->IsFeatureSceneEditing(state.featureShortName);
+	}
+
+	static bool CanBeginFeatureSceneContext(
+		const SceneSettingsManager::SceneContextId& context)
+	{
+		if (context.type != SceneSettingsManager::SceneContextType::Location)
+			return true;
+		const auto& currentTargets = SceneSettingsManager::GetSingleton()->GetCurrentLocationTargets();
+		return std::ranges::any_of(currentTargets, [&](const auto& target) {
+			return target.type == context.locationType &&
+			       target.formKey == context.locationFormKey;
+		});
+	}
+
+	void EndFeaturePageEditing(bool storeChanges)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto featureShortName = s_featurePageEditor.featureShortName;
+		manager->EndFeatureSceneEdit(storeChanges);
+		if (manager->IsFeatureSceneEditing(featureShortName))
+			return;
+		s_featurePageEditor = {};
+	}
+
+	bool DrawFeaturePageControls(Feature* feature, bool enabled)
+	{
+		if (!feature)
+			return false;
+		auto* manager = SceneSettingsManager::GetSingleton();
+		auto& state = s_featurePageEditor;
+		const auto featureShortName = feature->GetShortName();
+		if (!state.featureShortName.empty() && state.featureShortName != featureShortName)
+			EndFeaturePageEditing(true);
+		if (!enabled && state.featureShortName == featureShortName)
+			EndFeaturePageEditing(true);
+		if (state.featureShortName != featureShortName)
+			return false;
+		if (!manager->IsFeatureSceneEditing(featureShortName))
+			state.activeContext.reset();
+
+		const auto previousTarget = state.edit;
+		bool closeEditor = false;
+		std::optional<SceneSettingsManager::SceneContextId> requestedContext;
+		const auto cellPadding = ImGui::GetStyle().CellPadding;
+		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,
+			ImVec2(std::max(1.0f, cellPadding.x * 0.5f), cellPadding.y));
+		if (ImGui::BeginTable("##FeatureSceneEditorBar", 8,
+				ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings)) {
+			const auto title = manager->HasPendingFeatureSceneEdits() ?
+			                       std::format("{} *", T("feature.scene_manager.name", "Scene Manager")) :
+			                       std::string(T("feature.scene_manager.name", "Scene Manager"));
+			ImGui::TableSetupColumn("##SceneManagerTitle", ImGuiTableColumnFlags_WidthFixed,
+				ImGui::CalcTextSize(title.c_str()).x);
+			ImGui::TableSetupColumn("##SceneManagerType", ImGuiTableColumnFlags_WidthStretch,
+				0.65f);
+			ImGui::TableSetupColumn("##SceneManagerTarget", ImGuiTableColumnFlags_WidthStretch,
+				1.3f);
+			ImGui::TableSetupColumn("##SceneManagerPreview", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("##SceneManagerSave", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("##SceneManagerCopy", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("##SceneManagerDelete", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("##SceneManagerClose", ImGuiTableColumnFlags_WidthFixed,
+				ImGui::GetFrameHeight());
+			ImGui::TableNextRow();
+
+			ImGui::TableSetColumnIndex(0);
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted(title.c_str());
+
+			ImGui::TableSetColumnIndex(1);
+			const bool typeChanged = DrawFeatureSceneTypePicker(
+				"##FeatureSceneEditType", state.supportedTypes, state.edit.type);
+			if (typeChanged)
+				NormalizeFeatureSceneTarget(state.edit);
+
+			ImGui::TableSetColumnIndex(2);
+			DrawFeatureTargetPicker(
+				"##FeatureSceneEdit", state.edit, false, state.locationPicker);
+
+			bool canSwitchContext = true;
+			if (state.edit.type == SceneSettingsManager::SceneContextType::Weather &&
+				state.edit.weatherId != 0) {
+				const bool requestedTimeOfDay = state.edit.period != Period::Count;
+				if (manager->IsWeatherShowTimeOfDay(state.edit.weatherId) != requestedTimeOfDay) {
+					canSwitchContext = FinishActiveFeatureSceneEdit(state, true);
+					if (canSwitchContext)
+						manager->SetWeatherShowTimeOfDay(
+							state.edit.weatherId, requestedTimeOfDay);
+				}
+			}
+
+			requestedContext = GetFeatureSceneContext(state.edit);
+			if (canSwitchContext && state.activeContext != requestedContext) {
+				canSwitchContext = FinishActiveFeatureSceneEdit(state, true);
+				if (canSwitchContext) {
+					if (requestedContext && CanBeginFeatureSceneContext(*requestedContext) &&
+						manager->BeginFeatureSceneEdit(feature, *requestedContext))
+						state.activeContext = requestedContext;
+					state.copySource.reset();
+					state.copy.Reset();
+				}
+			}
+			if (!canSwitchContext) {
+				if (state.activeContext)
+					SetFeatureTargetFromContext(state.edit, *state.activeContext);
+				else
+					state.edit = previousTarget;
+			}
+			requestedContext = GetFeatureSceneContext(state.edit);
+			std::optional<std::string> locationTravelCommand;
+			if (requestedContext &&
+				requestedContext->type == SceneSettingsManager::SceneContextType::Location)
+				if (const auto* target = GetSelectedFeatureLocationTarget(
+						state.edit, state.locationPicker))
+					locationTravelCommand = GetLocationTravelCommand(*target);
+
+			ImGui::TableSetColumnIndex(3);
+			const bool canPreview = requestedContext &&
+			                        CanPreviewFeatureSceneContext(
+										*requestedContext, locationTravelCommand);
+			ImGui::BeginDisabled(!canPreview);
+			const bool previewPressed = ImGui::ArrowButton(
+				"##FeatureScenePreview", ImGuiDir_Right);
+			ImGui::EndDisabled();
+			if (previewPressed && requestedContext)
+				PreviewFeatureSceneContext(*requestedContext, locationTravelCommand);
+
+			ImGui::TableSetColumnIndex(4);
+			ImGui::BeginDisabled(!state.activeContext);
+			if (ImGui::Button(T("menu.save_settings", "Save Settings")))
+				manager->StoreFeatureSceneEdit();
+			ImGui::EndDisabled();
+
+			ImGui::TableSetColumnIndex(5);
+			ImGui::BeginDisabled(!requestedContext);
+			if (ImGui::Button(T("feature.scene_manager.copy.to", "Copy to")) && requestedContext) {
+				const bool sourceReady = !state.activeContext || manager->StoreFeatureSceneEdit();
+				if (sourceReady) {
+					state.copy.Reset();
+					state.copy.sourceLayer = EntrySource::User;
+					state.copySource = requestedContext;
+					InitializeFeatureCopyDestination(state);
+					state.copyOpenRequested = true;
+				}
+			}
+			ImGui::EndDisabled();
+
+			ImGui::TableSetColumnIndex(6);
+			ImGui::BeginDisabled(!requestedContext);
+			if (ImGui::Button(T("feature.scene_manager.action.delete", "Delete")))
+				state.deleteSettings.Request();
+			ImGui::EndDisabled();
+
+			ImGui::TableSetColumnIndex(7);
+			const float closeButtonSize = ImGui::GetFrameHeight();
+			closeEditor = DrawSceneCloseButton("##FeatureSceneEditorClose", closeButtonSize);
+			ImGui::EndTable();
+		}
+		ImGui::PopStyleVar();
+		if (closeEditor) {
+			EndFeaturePageEditing(true);
+			return IsFeaturePageEditing(feature);
+		}
+		if (state.copyOpenRequested) {
+			ImGui::OpenPopup("##FeatureSceneCopy");
+			state.copyOpenRequested = false;
+		}
+		DrawFeatureCopyPopup(state);
+
+		state.deleteSettings.title = std::format("{}##FeatureSceneDelete",
+			T("feature.scene_manager.edit.delete_title", "Delete Scene Settings?"));
+		state.deleteSettings.message = T("feature.scene_manager.edit.delete_message",
+			"Remove this feature's User Settings from the selected scene?");
+		state.deleteSettings.confirmLabel = T("feature.scene_manager.action.delete", "Delete");
+		state.deleteSettings.cancelLabel = T("feature.scene_manager.action.cancel", "Cancel");
+		if (state.deleteSettings.Draw() && requestedContext) {
+			FinishActiveFeatureSceneEdit(state, false);
+			manager->DeleteFeatureSceneSettings(featureShortName, *requestedContext);
+			if (CanBeginFeatureSceneContext(*requestedContext) &&
+				manager->BeginFeatureSceneEdit(feature, *requestedContext))
+				state.activeContext = requestedContext;
+			state.copySource.reset();
+			state.copy.Reset();
+		}
+		ImGui::Separator();
+		return true;
 	}
 
 	// Core add-setting dialog: renders UI and delegates data ops to callbacks.
@@ -4158,9 +5196,9 @@ namespace SceneSettingsUI
 		                               &targetPicker.entries[s_locationState.selectedTargetIndex] :
 		                               nullptr;
 		auto preview = target && previewEntry ? previewEntry->displayLabel :
-		               target ? GetLocationTargetLabel(*target) :
-		                        std::string(T("feature.scene_manager.location.select_target",
-									"Select a region, location type, location, or cell..."));
+		               target                 ? GetLocationTargetLabel(*target) :
+		                                        std::string(T("feature.scene_manager.location.select_target",
+													"Select a region, location type, location, or cell..."));
 		bool targetSelectionChanged = false;
 		if (Util::BeginSearchableCombo(T("feature.scene_manager.location.target", "Target"),
 				preview.c_str(), ImGuiComboFlags_None, nullptr, kSceneTargetComboVisibleItems)) {

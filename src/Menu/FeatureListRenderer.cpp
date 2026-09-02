@@ -12,6 +12,7 @@
 #include "FeatureConstraints.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
+#include "Features/SceneManagerUI.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -677,6 +678,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 {
+	SceneManagerUI::EndFeaturePageEditing(true);
 	ProfilingRenderer::DeactivateFeatureTimers();
 	ImGui::PushID(menu.name.c_str());
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
@@ -692,12 +694,14 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const std::string&)
 {
+	SceneManagerUI::EndFeaturePageEditing(true);
 	// std::unreachable() from c++23
 	// you are not supposed to have selected a label!
 }
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const CategoryHeader&)
 {
+	SceneManagerUI::EndFeaturePageEditing(true);
 	// Category headers are not selectable in the right panel
 	ImGui::TextDisabled("%s", T("menu.features.select_feature_left", "Please select a feature from the left."));
 }
@@ -705,6 +709,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const CategoryHeader&)
 void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 {
 	if (feat == &globals::features::csEditor) {
+		SceneManagerUI::EndFeaturePageEditing(true);
 		ProfilingRenderer::DeactivateFeatureTimers();
 		return;
 	}
@@ -718,42 +723,65 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 
 	ImGui::PushID(featureName.c_str());
 	const float profilingHeight = ProfilingRenderer::PrepareFeatureTimers(featureName, featureProfilingAvailable);
-	if (!featureProfilingAvailable) {
-		g_featurePageLayouts.erase(featureName);
-		if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true))
-			RenderFeatureMaterial(feat, isDisabled, isLoaded, hasFailedMessage);
-		ImGui::EndChild();
-		ImGui::PopID();
-		RenderReactiveConstraintWarningDialog();
-		return;
-	}
+	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+		auto* sceneManager = globals::sceneSettingsManager;
+		const bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) &&
+		                             !sceneManager->IsFeaturePaused(featureName);
+		const bool canEditSceneSettings = SceneManagerUI::CanEditFeaturePage(feat);
+		const auto featureActionsLayout = RenderFeatureHeader(
+			feat, isDisabled, isLoaded, canEditSceneSettings);
+		RenderFeatureActions(feat, isDisabled, isLoaded, sceneControlled,
+			canEditSceneSettings, featureActionsLayout);
+		const bool sceneEditing = SceneManagerUI::DrawFeaturePageControls(
+			feat, !isDisabled && isLoaded);
+		const float pageViewportHeight = std::max(ImGui::GetContentRegionAvail().y, 0.0f);
 
-	auto& pageLayout = g_featurePageLayouts[featureName];
-	const float pageViewportHeight = std::max(
-		ImGui::GetContentRegionAvail().y - ImGui::GetStyle().WindowPadding.y * 2.0f,
-		0.0f);
-	const float predictedProfilingStart = std::max(pageLayout.materialHeight, pageViewportHeight - profilingHeight);
-	const float predictedContentHeight = predictedProfilingStart + profilingHeight;
-	const float contentHeightDelta = predictedContentHeight - pageLayout.contentHeight;
-	const bool profilingWasAtBottom = pageLayout.scrollMaxY <= FEATURE_PAGE_BOTTOM_TOLERANCE ||
-	                                  pageLayout.scrollY >= pageLayout.scrollMaxY - FEATURE_PAGE_BOTTOM_TOLERANCE;
+		if (!featureProfilingAvailable) {
+			g_featurePageLayouts.erase(featureName);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+			const bool settingsVisible = ImGui::BeginChild("##FeatureSettingsScroll", { 0, 0 }, false);
+			ImGui::PopStyleVar();
+			if (settingsVisible)
+				RenderFeatureMaterial(feat, isDisabled, isLoaded, hasFailedMessage,
+					sceneControlled, sceneEditing);
+			ImGui::EndChild();
+		} else {
+			auto& pageLayout = g_featurePageLayouts[featureName];
+			const float predictedProfilingStart = std::max(
+				pageLayout.materialHeight, pageViewportHeight - profilingHeight);
+			const float predictedContentHeight = predictedProfilingStart + profilingHeight;
+			const float contentHeightDelta = predictedContentHeight - pageLayout.contentHeight;
+			const bool profilingWasAtBottom =
+				pageLayout.scrollMaxY <= FEATURE_PAGE_BOTTOM_TOLERANCE ||
+				pageLayout.scrollY >= pageLayout.scrollMaxY - FEATURE_PAGE_BOTTOM_TOLERANCE;
 
-	ImGui::SetNextWindowContentSize(ImVec2(0.0f, predictedContentHeight));
-	if (pageLayout.measured && profilingWasAtBottom && std::abs(contentHeightDelta) >= FEATURE_PAGE_LAYOUT_EPSILON)
-		ImGui::SetNextWindowScroll(ImVec2(-1.0f, std::max(pageLayout.scrollY + contentHeightDelta, 0.0f)));
+			ImGui::SetNextWindowContentSize(ImVec2(0.0f, predictedContentHeight));
+			if (pageLayout.measured && profilingWasAtBottom &&
+				std::abs(contentHeightDelta) >= FEATURE_PAGE_LAYOUT_EPSILON)
+				ImGui::SetNextWindowScroll(
+					ImVec2(-1.0f, std::max(pageLayout.scrollY + contentHeightDelta, 0.0f)));
 
-	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-		const float materialStartY = ImGui::GetCursorPosY();
-		const float materialHeight = RenderFeatureMaterial(feat, isDisabled, isLoaded, hasFailedMessage);
-		const float profilingStart = std::max(materialHeight, pageViewportHeight - profilingHeight);
-		ImGui::SetCursorPosY(materialStartY + profilingStart);
-		ProfilingRenderer::RenderFeatureTimers(featureName);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+			const bool settingsVisible = ImGui::BeginChild("##FeatureSettingsScroll", { 0, 0 }, false);
+			ImGui::PopStyleVar();
+			if (settingsVisible) {
+				const float materialStartY = ImGui::GetCursorPosY();
+				const float materialHeight = RenderFeatureMaterial(feat, isDisabled, isLoaded,
+					hasFailedMessage, sceneControlled, sceneEditing);
+				const float profilingStart = std::max(
+					materialHeight, pageViewportHeight - profilingHeight);
+				ImGui::SetCursorPosY(materialStartY + profilingStart);
+				ProfilingRenderer::RenderFeatureTimers(featureName);
 
-		pageLayout.measured = true;
-		pageLayout.materialHeight = materialHeight;
-		pageLayout.contentHeight = profilingStart + profilingHeight;
-		pageLayout.scrollY = ImGui::GetScrollY();
-		pageLayout.scrollMaxY = ImGui::GetScrollMaxY();
+				pageLayout.measured = true;
+				pageLayout.materialHeight = materialHeight;
+				pageLayout.contentHeight = profilingStart + profilingHeight;
+				pageLayout.scrollY = ImGui::GetScrollY();
+				pageLayout.scrollMaxY = ImGui::GetScrollMaxY();
+			}
+			ImGui::EndChild();
+		}
 	}
 	ImGui::EndChild();
 	ImGui::PopID();
@@ -761,20 +789,18 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	RenderReactiveConstraintWarningDialog();
 }
 
-float FeatureListRenderer::DrawMenuVisitor::RenderFeatureMaterial(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage)
+float FeatureListRenderer::DrawMenuVisitor::RenderFeatureMaterial(Feature* feat,
+	bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled,
+	bool sceneEditing)
 {
 	const float materialStartY = ImGui::GetCursorPosY();
-	auto* sceneManager = globals::sceneSettingsManager;
-	const auto featureName = feat->GetShortName();
-	const bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
-	const auto featureActionsLayout = RenderFeatureHeader(feat, isDisabled, isLoaded);
-	RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
-	RenderFeatureActions(feat, isDisabled, isLoaded, sceneControlled, featureActionsLayout);
+	RenderFeatureSettings(
+		feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled, sceneEditing);
 	return std::max(ImGui::GetCursorPosY() - materialStartY, 0.0f);
 }
 
 FeatureListRenderer::DrawMenuVisitor::FeatureActionsLayout FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(
-	Feature* feat, bool isDisabled, bool isLoaded)
+	Feature* feat, bool isDisabled, bool isLoaded, bool canEditSceneSettings)
 {
 	const auto featureName = feat->GetShortName();
 	auto* overrideManager = SettingsOverrideManager::GetSingleton();
@@ -795,7 +821,8 @@ FeatureListRenderer::DrawMenuVisitor::FeatureActionsLayout FeatureListRenderer::
 	const std::string stageTag = Feature::GetReleaseStageTag(stage);  // empty for Release; color unused when tag is empty
 	const bool canRestoreDefaults = !isDisabled && isLoaded && feat->HasRestoreDefaults();
 	const bool canApplyOverrides = !isDisabled && isLoaded && hasOverrides;
-	const bool hasFeatureActions = !feat->IsAlwaysEnabled() || canRestoreDefaults || canApplyOverrides;
+	const bool hasFeatureActions = !feat->IsAlwaysEnabled() || canRestoreDefaults ||
+	                               canApplyOverrides || canEditSceneSettings;
 	const float actionsButtonSize = hasFeatureActions ? ImGui::GetFrameHeight() * FEATURE_ACTION_BUTTON_SCALE : 0.0f;
 	const float titleOnlyHeight = DrawFeatureHeader(
 		feat->GetDisplayName(), isLoaded ? feat->version : "", description, stageTag, StageTagColor(stage), actionsButtonSize);
@@ -804,7 +831,7 @@ FeatureListRenderer::DrawMenuVisitor::FeatureActionsLayout FeatureListRenderer::
 	const float buttonY = titleStartPos.y + (titleOnlyHeight - actionsButtonSize) * 0.5f;
 	const FeatureActionsLayout actionsLayout{
 		titleStartPos.x + availableWidth - actionsButtonSize,
-		buttonY + ImGui::GetScrollY(),
+		buttonY,
 		actionsButtonSize
 	};
 
@@ -816,6 +843,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 	bool isDisabled,
 	bool isLoaded,
 	bool sceneControlled,
+	bool canEditSceneSettings,
 	const FeatureActionsLayout& layout)
 {
 	auto& themeSettings = globals::menu->GetSettings().Theme;
@@ -824,7 +852,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 	const bool hasOverrides = feat->UsesMainSettings() && overrideManager && overrideManager->HasFeatureOverrides(featureName);
 	const bool canRestoreDefaults = !isDisabled && isLoaded && feat->HasRestoreDefaults();
 	const bool canApplyOverrides = !isDisabled && isLoaded && hasOverrides;
-
+	const bool sceneEditing = SceneManagerUI::IsFeaturePageEditing(feat);
 	if (layout.size <= 0.0f) {
 		if (g_featureActionsFlyoutFeature == featureName) {
 			Util::CloseFlyout(g_featureActionsFlyout);
@@ -905,10 +933,25 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 				}
 			}
 
+			if (canEditSceneSettings) {
+				if (Util::FlyoutMenuItem(
+						T("feature.scene_manager.name", "Scene Manager"),
+						sceneEditing,
+						!isDisabled && isLoaded,
+						FEATURE_ACTION_CHECKMARK_LEFT_OFFSET * Util::GetUIScale())) {
+					if (sceneEditing)
+						SceneManagerUI::EndFeaturePageEditing(true);
+					else
+						SceneManagerUI::BeginFeaturePageEditing(feat);
+					closeFlyout = true;
+				}
+			}
+
 			if (canRestoreDefaults || canApplyOverrides) {
-				if (!feat->IsAlwaysEnabled())
+				if (!feat->IsAlwaysEnabled() || canEditSceneSettings)
 					ImGui::Separator();
 				if (canRestoreDefaults) {
+					ImGui::BeginDisabled(sceneEditing);
 					if (Util::FlyoutMenuItem(
 							feat->HasScopedDefaultSettings() ?
 								T("menu.features.restore_page_defaults", "Restore Defaults (Page)") :
@@ -917,6 +960,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 						feat->RestoreCurrentPageDefaultSettings();
 						closeFlyout = true;
 					}
+					ImGui::EndDisabled();
 
 					if (auto _tt = Util::HoverTooltipWrapper()) {
 						ImGui::Text(
@@ -933,7 +977,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 								T("menu.features.apply_page_override", "Apply Override (Page)") :
 								T("menu.features.apply_override", "Apply Override"),
 							false,
-							!sceneControlled)) {
+							!sceneControlled && !sceneEditing)) {
 						closeFlyout = true;
 						SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 						if (feat->ReapplyCurrentPageOverrideSettings()) {
@@ -965,10 +1009,10 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 						}
 					}
 				}
-
-				if (closeFlyout)
-					Util::RequestCloseFlyout(g_featureActionsFlyout);
 			}
+
+			if (closeFlyout)
+				Util::RequestCloseFlyout(g_featureActionsFlyout);
 		}
 	}
 
@@ -979,7 +1023,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureActions(
 	ImGui::Dummy(ImVec2(0.0f, 0.0f));
 }
 
-void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled)
+void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat,
+	bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled,
+	bool sceneEditing)
 {
 	auto& themeSettings = globals::menu->GetSettings().Theme;
 
@@ -991,7 +1037,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		if (isLoaded) {
 			// Scene-specific settings toggle
 			// Show toggle whenever scene entries exist for this feature, even if feature-paused
-			{
+			if (!sceneEditing) {
 				const auto& featureShortName = feat->GetShortName();
 				auto* sceneMgr = globals::sceneSettingsManager;
 				bool scenePaused = sceneMgr->IsFeaturePaused(featureShortName);
@@ -1002,8 +1048,14 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 						scenePaused = !active;
 						sceneControlled = sceneMgr->HasActiveSettingsForFeature(featureShortName) && !scenePaused;
 					}
+					const auto toggleMinimum = ImGui::GetItemRectMin();
+					const auto toggleMaximum = ImGui::GetItemRectMax();
 					ImGui::SameLine();
-					ImGui::Text("%s", T("menu.features.scene_specific_settings", "Scene Specific Settings"));
+					auto labelPosition = ImGui::GetCursorScreenPos();
+					labelPosition.y = toggleMinimum.y +
+					                  (toggleMaximum.y - toggleMinimum.y - ImGui::GetTextLineHeight()) * 0.5f;
+					ImGui::SetCursorScreenPos(labelPosition);
+					ImGui::TextUnformatted(T("menu.features.scene_specific_settings", "Scene Specific Settings"));
 					if (auto _tt = Util::HoverTooltipWrapper()) {
 						const auto* tooltip = scenePaused ?
 						                          T("menu.features.scene_paused_tooltip", "Paused - click to resume") :
@@ -1016,7 +1068,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
 			{
-				SceneSettingsUIHooks::FeatureDrawGuard featureDrawGuard(feat, sceneControlled);
+				SceneSettingsUIHooks::FeatureDrawGuard featureDrawGuard(
+					feat, sceneControlled, sceneEditing);
 				feat->DrawSettings();
 			}
 

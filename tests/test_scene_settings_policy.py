@@ -26,6 +26,18 @@ def extract_initializer(source: str, name: str) -> str:
     return source[start + 1:end]
 
 
+def extract_function(source: str, name: str) -> str:
+    declaration = re.search(
+        rf"SceneSettingsManager::{re.escape(name)}\s*\(", source)
+    if not declaration:
+        raise AssertionError(f"Could not find {name}")
+    start = source.find("{", declaration.end())
+    end = GENERATOR.find_matching_brace(source, start)
+    if start < 0 or end < 0:
+        raise AssertionError(f"Could not parse {name}")
+    return source[start + 1:end]
+
+
 def extract_braced_rows(source: str) -> list[str]:
     rows = []
     position = 0
@@ -169,6 +181,32 @@ class SceneSettingsPolicyTests(unittest.TestCase):
                 "kLocationFeatureWhitelist",
                 "kTimeOfDayFeatureWhitelist"):
             self.assertIn(f"SceneSettingsPolicy::{name}", self.manager)
+
+    def test_feature_context_delete_is_scoped_and_transactional(self):
+        body = extract_function(self.manager, "DeleteFeatureSceneSettings")
+        self.assertIn("entry.source == EntrySource::User", body)
+        self.assertIn("entry.featureShortName == featureShortName", body)
+        self.assertIn("EntryBelongsToContext(entry, context)", body)
+        self.assertIn("CommitSceneSettingChanges();", body)
+        self.assertIn("PrepareWeatherUserSettingsMutation", body)
+        self.assertIn("PrepareLocationUserSettingsMutation", body)
+
+    def test_feature_edit_preview_preserves_overwrite_precedence(self):
+        body = extract_function(self.manager, "ApplyFeatureSceneEditPreview")
+        self.assertGreaterEqual(body.count("EntrySource::Overwrite"), 4)
+        self.assertIn("ResolveExteriorSettings(", body)
+        self.assertIn(
+            "overlayLocationEntries(EntrySource::Overwrite, preview)", body)
+        self.assertNotIn(
+            "for (const auto& [address, value] : edit.workingOverrides)\n"
+            "\t\tresolved[address] = value;",
+            body,
+        )
+
+    def test_failed_automatic_edit_close_is_not_force_discarded(self):
+        body = extract_function(self.manager, "Update")
+        self.assertIn("featureSceneEditAutoCloseAttempted", body)
+        self.assertNotIn("EndFeatureSceneEdit(false)", body)
 
     def test_named_feature_policy_does_not_leak_into_scene_manager_code(self):
         named_features = {

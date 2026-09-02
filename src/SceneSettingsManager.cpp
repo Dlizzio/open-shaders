@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "Globals.h"
+#include "Menu.h"
 #include "SceneSettingsCatalog.generated.h"
 #include "SceneSettingsPolicy.h"
 #include "State.h"
@@ -2782,6 +2783,16 @@ void SceneSettingsManager::Update()
 			return;
 		lastUpdateFrame = frame;
 	}
+	const bool shouldCloseFeatureSceneEdit = featureSceneEdit &&
+	                                         (!globals::menu || !globals::menu->IsEnabled ||
+												 (globals::state && (globals::state->isMainMenuOpen ||
+																		globals::state->isLoadingMenuOpen)));
+	if (!shouldCloseFeatureSceneEdit) {
+		featureSceneEditAutoCloseAttempted = false;
+	} else if (!featureSceneEditAutoCloseAttempted) {
+		featureSceneEditAutoCloseAttempted = true;
+		EndFeatureSceneEdit(true);
+	}
 	VerifyPendingApplies(true);
 	FlushDeferredSceneChanges();
 
@@ -3036,7 +3047,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 		suppressLocationTransitionUntilContextResolved = false;
 	};
 
-	if (!HasActiveSceneEntriesCached()) {
+	if (!HasActiveSceneEntriesCached() && !featureSceneEdit) {
 		applyFailures.clear();
 		if (!appliedSettings.empty() || !baselineSettings.empty())
 			RestoreAppliedSettings();
@@ -3073,6 +3084,14 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 		StartLocationTransitions(resolved, transitionTime, walkedBetweenWorldspaceCells);
 		locationOverridesDirty = false;
 	}
+	if (IsFeatureSceneEditPreviewActive()) {
+		const auto erased = std::erase_if(activeLocationTransitions, [&](const auto& item) {
+			return std::ranges::binary_search(
+				featureSceneEdit->editableAddresses, item.first);
+		});
+		if (erased != 0)
+			locationTransitionBatchesDirty = true;
+	}
 	RefreshLocationTransitionEndpoints(resolved);
 	if (!activeLocationTransitions.empty()) {
 		for (const auto& [address, transition] : activeLocationTransitions) {
@@ -3084,7 +3103,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 			}
 			const auto linear = transition.duration > 0.0f ?
 			                        std::clamp((transitionTime - transition.startTime) /
-											   transition.duration,
+												   transition.duration,
 										0.0f, 1.0f) :
 			                        1.0f;
 			const auto smooth = linear * linear * (3.0f - 2.0f * linear);
@@ -3107,7 +3126,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 			if (auto verificationIt = pendingApplyVerifications.find(address.featureShortName);
 				verificationIt != pendingApplyVerifications.end())
 				applied = std::ranges::find(
-					verificationIt->second.restorationAddresses, address) !=
+							  verificationIt->second.restorationAddresses, address) !=
 				          verificationIt->second.restorationAddresses.end();
 		} else if (auto appliedIt = appliedSettings.find(address);
 			appliedIt != appliedSettings.end() && IsNumericValue(appliedIt->second)) {
@@ -3177,7 +3196,7 @@ void SceneSettingsManager::StartLocationTransitions(
 		auto nextDurationIt = pendingLocationTransitionDurations.find(address);
 		const float duration = nextDurationIt != pendingLocationTransitionDurations.end() ?
 		                           nextDurationIt->second :
-		                         previousDurationIt != lastLocationTransitionDurations.end() ?
+		                       previousDurationIt != lastLocationTransitionDurations.end() ?
 		                           previousDurationIt->second :
 		                           locationTransitionSeconds;
 		const bool durationChanged = previousDurationIt != lastLocationTransitionDurations.end() &&
@@ -3236,7 +3255,7 @@ void SceneSettingsManager::StartLocationTransitions(
 		float startOverwriteLocationWeight = 0.0f;
 		float startOverwriteLocationWeightedValue = 0.0f;
 		const auto addLocationState = [&](float weight, bool hasLocationValue,
-			float locationValue, EntrySource locationSource) {
+										  float locationValue, EntrySource locationSource) {
 			if (weight <= 0.0f)
 				return;
 			if (!hasLocationValue) {
@@ -3276,24 +3295,24 @@ void SceneSettingsManager::StartLocationTransitions(
 		                                      nextSourceIt->second :
 		                                      EntrySource::User;
 		auto [transitionIt, inserted] = activeLocationTransitions.insert_or_assign(address, LocationTransition{
-																											.startValue = startValue,
-																											.targetValue = targetValue,
-																											.startTime = now,
-												.duration = duration,
-												.restoreAtEnd = restoreAtEnd,
-												.exitsLocationLayer = nextIt == nextOverrideValues.end(),
-												.liveStart = startNoLocationWeight > kBlendEpsilon ||
-												             startUserLocationWeight > kBlendEpsilon,
-												.liveTarget = true,
-												.startNoLocationWeight = startNoLocationWeight,
-												.startUserLocationWeight = startUserLocationWeight,
-												.startUserLocationWeightedValue = startUserLocationWeightedValue,
-												.startOverwriteLocationWeight = startOverwriteLocationWeight,
-												.startOverwriteLocationWeightedValue = startOverwriteLocationWeightedValue,
-												.hasTargetLocationValue = hasTargetLocationValue,
-												.targetLocationValue = hasTargetLocationValue ? nextIt->second.get<float>() : 0.0f,
-												.targetLocationSource = targetLocationSource,
-											});
+																								.startValue = startValue,
+																								.targetValue = targetValue,
+																								.startTime = now,
+																								.duration = duration,
+																								.restoreAtEnd = restoreAtEnd,
+																								.exitsLocationLayer = nextIt == nextOverrideValues.end(),
+																								.liveStart = startNoLocationWeight > kBlendEpsilon ||
+		                                                                                                     startUserLocationWeight > kBlendEpsilon,
+																								.liveTarget = true,
+																								.startNoLocationWeight = startNoLocationWeight,
+																								.startUserLocationWeight = startUserLocationWeight,
+																								.startUserLocationWeightedValue = startUserLocationWeightedValue,
+																								.startOverwriteLocationWeight = startOverwriteLocationWeight,
+																								.startOverwriteLocationWeightedValue = startOverwriteLocationWeightedValue,
+																								.hasTargetLocationValue = hasTargetLocationValue,
+																								.targetLocationValue = hasTargetLocationValue ? nextIt->second.get<float>() : 0.0f,
+																								.targetLocationSource = targetLocationSource,
+																							});
 		(void)transitionIt;
 		(void)inserted;
 		locationTransitionBatchesDirty = true;
@@ -3644,6 +3663,7 @@ SceneSettingsManager::ResolvedSettingMap& SceneSettingsManager::BuildResolvedSet
 	}
 	for (const auto& [address, value] : cachedLocationOverwriteSettings)
 		resolved[address] = value;
+	ApplyFeatureSceneEditPreview(resolved);
 	return resolved;
 }
 
@@ -3730,6 +3750,8 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 		for (const auto& update : pending)
 			appliedSettings[*update.address] = *update.value;
 		appliedFeatureNames.insert(featureShortName);
+		if (featureSceneEdit && featureSceneEdit->featureShortName == featureShortName)
+			RebaseFeatureSceneEditPreview();
 	}
 }
 
@@ -3883,7 +3905,8 @@ const SceneSettingsManager::PeriodSettingMap& SceneSettingsManager::BuildWeather
 
 void SceneSettingsManager::ResolveExteriorSettings(ResolvedSettingMap& resolved,
 	const std::array<float, kPeriodCount>& factors,
-	const ResolvedSettingMap* userLocationValues) const
+	const ResolvedSettingMap* userLocationValues,
+	std::span<const SettingAddress> addressFilter) const
 {
 	const auto& userTimeOfDayValues = BuildTimeOfDayValueGroups(EntrySource::User);
 	const auto& overwriteTimeOfDayValues = BuildTimeOfDayValueGroups(EntrySource::Overwrite);
@@ -3905,35 +3928,41 @@ void SceneSettingsManager::ResolveExteriorSettings(ResolvedSettingMap& resolved,
 	}
 
 	std::vector<const SettingAddress*> addresses;
-	const auto addressCount = userTimeOfDayValues.size() + overwriteTimeOfDayValues.size() +
-	                          (currentUserWeather ? currentUserWeather->size() : 0) +
-	                          (previousUserWeather ? previousUserWeather->size() : 0) +
-	                          (currentOverwriteWeather ? currentOverwriteWeather->size() : 0) +
-	                          (previousOverwriteWeather ? previousOverwriteWeather->size() : 0) +
-	                          (userLocationValues ? userLocationValues->size() : 0);
-	addresses.reserve(addressCount);
-	const auto collectAddresses = [&](const PeriodSettingMap* values) {
-		if (!values)
-			return;
-		for (const auto& [address, _] : *values)
+	if (!addressFilter.empty()) {
+		addresses.reserve(addressFilter.size());
+		for (const auto& address : addressFilter)
 			addresses.push_back(&address);
-	};
-	collectAddresses(&userTimeOfDayValues);
-	collectAddresses(&overwriteTimeOfDayValues);
-	collectAddresses(currentUserWeather);
-	collectAddresses(previousUserWeather);
-	collectAddresses(currentOverwriteWeather);
-	collectAddresses(previousOverwriteWeather);
-	if (userLocationValues)
-		for (const auto& [address, _] : *userLocationValues)
-			addresses.push_back(&address);
-	std::ranges::sort(addresses, [](const auto* lhs, const auto* rhs) { return *lhs < *rhs; });
-	addresses.erase(std::unique(addresses.begin(), addresses.end(),
-		[](const auto* lhs, const auto* rhs) { return *lhs == *rhs; }),
-		addresses.end());
+	} else {
+		const auto addressCount = userTimeOfDayValues.size() + overwriteTimeOfDayValues.size() +
+		                          (currentUserWeather ? currentUserWeather->size() : 0) +
+		                          (previousUserWeather ? previousUserWeather->size() : 0) +
+		                          (currentOverwriteWeather ? currentOverwriteWeather->size() : 0) +
+		                          (previousOverwriteWeather ? previousOverwriteWeather->size() : 0) +
+		                          (userLocationValues ? userLocationValues->size() : 0);
+		addresses.reserve(addressCount);
+		const auto collectAddresses = [&](const PeriodSettingMap* values) {
+			if (!values)
+				return;
+			for (const auto& [address, _] : *values)
+				addresses.push_back(&address);
+		};
+		collectAddresses(&userTimeOfDayValues);
+		collectAddresses(&overwriteTimeOfDayValues);
+		collectAddresses(currentUserWeather);
+		collectAddresses(previousUserWeather);
+		collectAddresses(currentOverwriteWeather);
+		collectAddresses(previousOverwriteWeather);
+		if (userLocationValues)
+			for (const auto& [address, _] : *userLocationValues)
+				addresses.push_back(&address);
+		std::ranges::sort(addresses, [](const auto* lhs, const auto* rhs) { return *lhs < *rhs; });
+		addresses.erase(std::unique(addresses.begin(), addresses.end(),
+							[](const auto* lhs, const auto* rhs) { return *lhs == *rhs; }),
+			addresses.end());
+	}
 
 	const auto getPeriodValue = [](const PeriodSettingMap* values, const SettingAddress& address,
-		int periodIndex) -> std::optional<float> {
+									int periodIndex) -> std::optional<float> {
 		if (!values)
 			return std::nullopt;
 		auto addressIt = values->find(address);
@@ -4012,7 +4041,15 @@ void SceneSettingsManager::ResolveWeatherSettings(ResolvedSettingMap& resolved,
 	const auto currentWeatherId = sky->currentWeather->GetFormID();
 	const auto& currentValues = BuildWeatherValueGroups(currentWeatherId, valueSource);
 	const auto& previousValues = BuildWeatherValueGroups(previousWeatherId, valueSource);
+	ResolveWeatherValueGroups(
+		resolved, timeOfDayValues, factors, currentValues, previousValues, weatherLerp);
+}
 
+void SceneSettingsManager::ResolveWeatherValueGroups(ResolvedSettingMap& resolved,
+	const PeriodSettingMap& timeOfDayValues, const std::array<float, kPeriodCount>& factors,
+	const PeriodSettingMap& currentValues, const PeriodSettingMap& previousValues,
+	float weatherLerp) const
+{
 	const auto resolveWeather = [&](const SettingAddress& address,
 									const PeriodSettingMap& weatherValues) -> std::optional<float> {
 		auto weatherIt = weatherValues.find(address);
@@ -5750,6 +5787,431 @@ bool SceneSettingsManager::IsValidSceneContext(const SceneContextId& context)
 	}
 }
 
+bool SceneSettingsManager::IsFeatureSceneEditContextValid(
+	std::string_view featureShortName, const SceneContextId& context)
+{
+	if (!IsValidSceneContext(context) || context.allPeriods)
+		return false;
+	if (!IsFeatureAllowedForType(GetCopyContextSceneType(context.type), std::string(featureShortName)))
+		return false;
+	if (context.type == SceneContextType::Weather) {
+		const bool showTimeOfDay = IsWeatherShowTimeOfDay(context.weatherId);
+		if (showTimeOfDay != (context.period != TimeOfDayPeriod::Count))
+			return false;
+	}
+	if (context.type != SceneContextType::Location)
+		return true;
+
+	const auto normalizedFormKey = NormalizeLocationFormKey(context.locationFormKey);
+	return std::ranges::any_of(GetCurrentLocationTargets(), [&](const auto& target) {
+		return target.type == context.locationType &&
+		       NormalizeLocationFormKey(target.formKey) == normalizedFormKey;
+	});
+}
+
+bool SceneSettingsManager::SnapshotFeatureSceneEdit(Feature& feature, json& snapshot) const
+{
+	try {
+		feature.SaveSettings(snapshot);
+	} catch (const std::exception& e) {
+		logger::warn("[SceneSettings] Could not snapshot feature-page edits for {}: {}",
+			feature.GetShortName(), e.what());
+		return false;
+	} catch (...) {
+		logger::warn("[SceneSettings] Could not snapshot feature-page edits for {}",
+			feature.GetShortName());
+		return false;
+	}
+	return snapshot.is_object();
+}
+
+bool SceneSettingsManager::BeginFeatureSceneEdit(Feature* feature, const SceneContextId& context)
+{
+	if (!feature || !IsFeatureSceneEditContextValid(feature->GetShortName(), context))
+		return false;
+	if (featureSceneEdit && featureSceneEdit->featureShortName == feature->GetShortName() &&
+		featureSceneEdit->context == context)
+		return true;
+	if (featureSceneEdit) {
+		if (!StoreFeatureSceneEdit())
+			return false;
+		EndFeatureSceneEdit(false);
+	}
+
+	const auto featureShortName = feature->GetShortName();
+	if (!GetFeatureBaseSnapshot(featureShortName))
+		return false;
+	const auto sceneType = GetCopyContextSceneType(context.type);
+	std::vector<SettingAddress> editableAddresses;
+	for (const auto& setting : GetCatalogFeatureSettings(featureShortName)) {
+		auto settingPath = SplitCatalogPath(setting.settingPath);
+		if (!IsSettingAllowedForType(
+				sceneType, featureShortName, settingPath, std::string(setting.settingKey)))
+			continue;
+		editableAddresses.push_back({ featureShortName, std::move(settingPath), std::string(setting.settingKey) });
+	}
+	std::ranges::sort(editableAddresses);
+	const auto uniqueEnd = std::ranges::unique(editableAddresses).begin();
+	editableAddresses.erase(uniqueEnd, editableAddresses.end());
+	EnsureBaselines(editableAddresses);
+
+	featureSceneEdit.emplace();
+	featureSceneEditAutoCloseAttempted = false;
+	++featureSceneEditRevision;
+	featureSceneEdit->featureShortName = featureShortName;
+	featureSceneEdit->context = context;
+	featureSceneEdit->editableAddresses = std::move(editableAddresses);
+	pendingApplyVerifications.erase(featureSceneEdit->featureShortName);
+	featureApplyDocuments.erase(featureSceneEdit->featureShortName);
+	resolverDirty = true;
+	ResolveAndApply(true);
+
+	json snapshot;
+	if (!SnapshotFeatureSceneEdit(*feature, snapshot)) {
+		featureSceneEdit.reset();
+		resolverDirty = true;
+		ResolveAndApply(true);
+		return false;
+	}
+	featureSceneEdit->originalSettings = snapshot;
+	featureSceneEdit->workingSettings = std::move(snapshot);
+	featureApplyDocuments[featureSceneEdit->featureShortName] = featureSceneEdit->workingSettings;
+	return true;
+}
+
+bool SceneSettingsManager::IsFeatureSceneEditing(std::string_view featureShortName) const
+{
+	return featureSceneEdit && featureSceneEdit->featureShortName == featureShortName;
+}
+
+bool SceneSettingsManager::CanCaptureFeatureSceneEdit(std::string_view featureShortName) const
+{
+	return IsFeatureSceneEditing(featureShortName) && IsFeatureSceneEditPreviewActive();
+}
+
+bool SceneSettingsManager::IsFeatureSceneEditSetting(std::string_view featureShortName,
+	std::string_view settingPath, std::string_view settingKey) const
+{
+	return featureSceneEdit && featureSceneEdit->featureShortName == featureShortName &&
+	       std::ranges::binary_search(featureSceneEdit->editableAddresses,
+			   SettingAddress{ std::string(featureShortName), SplitCatalogPath(settingPath),
+				   std::string(settingKey) });
+}
+
+bool SceneSettingsManager::HasPendingFeatureSceneEdits() const
+{
+	return featureSceneEdit && featureSceneEdit->dirty;
+}
+
+void SceneSettingsManager::RefreshFeatureSceneEditOverrides()
+{
+	if (!featureSceneEdit)
+		return;
+
+	struct EditGroup
+	{
+		bool changed = false;
+		std::vector<std::pair<SettingAddress, json>> values;
+	};
+	std::map<CopyGroupKey, EditGroup> groups;
+	const auto sceneType = GetCopyContextSceneType(featureSceneEdit->context.type);
+	for (const auto& setting : GetCatalogFeatureSettings(featureSceneEdit->featureShortName)) {
+		auto settingPath = SplitCatalogPath(setting.settingPath);
+		if (!IsSettingAllowedForType(
+				sceneType, featureSceneEdit->featureShortName, settingPath, std::string(setting.settingKey)))
+			continue;
+		const auto* original = GetCatalogSerializedValue(featureSceneEdit->originalSettings, setting);
+		const auto* working = GetCatalogSerializedValue(featureSceneEdit->workingSettings, setting);
+		if (!original || !working || !IsSceneSettingPrimitive(*original) ||
+			!IsSceneSettingPrimitive(*working) || !IsCompatibleSceneSettingValue(*original, *working))
+			continue;
+
+		SettingIdentity identity{
+			featureSceneEdit->featureShortName, std::move(settingPath), std::string(setting.settingKey)
+		};
+		auto& group = groups[GetCopyGroupKey(identity)];
+		group.changed |= *original != *working;
+		group.values.emplace_back(SettingAddress{
+									  identity.featureShortName, identity.settingPath, identity.settingKey },
+			*working);
+	}
+
+	auto previousOverrides = std::move(featureSceneEdit->workingOverrides);
+	featureSceneEdit->workingOverrides.clear();
+	for (auto& [_, group] : groups)
+		if (group.changed)
+			for (auto& [address, value] : group.values)
+				featureSceneEdit->workingOverrides.insert_or_assign(std::move(address), std::move(value));
+	featureSceneEdit->dirty = !featureSceneEdit->workingOverrides.empty();
+	if (std::ranges::any_of(previousOverrides, [&](const auto& item) {
+			return !featureSceneEdit->workingOverrides.contains(item.first);
+		}))
+		resolverDirty = true;
+
+	std::vector<SettingAddress> changedAddresses;
+	changedAddresses.reserve(previousOverrides.size() + featureSceneEdit->workingOverrides.size());
+	for (const auto& [address, _] : previousOverrides)
+		changedAddresses.push_back(address);
+	for (const auto& [address, _] : featureSceneEdit->workingOverrides)
+		changedAddresses.push_back(address);
+	std::sort(changedAddresses.begin(), changedAddresses.end());
+	changedAddresses.erase(std::unique(changedAddresses.begin(), changedAddresses.end()), changedAddresses.end());
+	EnsureBaselines(changedAddresses);
+	for (const auto& address : changedAddresses) {
+		auto* setting = FindAllowedCatalogSetting(
+			address.featureShortName, address.settingPath, address.settingKey);
+		const auto* value = setting ?
+		                        GetCatalogSerializedValue(featureSceneEdit->workingSettings, *setting) :
+		                        nullptr;
+		if (value && IsSceneSettingPrimitive(*value))
+			appliedSettings[address] = *value;
+	}
+	if (!changedAddresses.empty())
+		appliedFeatureNames.insert(featureSceneEdit->featureShortName);
+	pendingApplyVerifications.erase(featureSceneEdit->featureShortName);
+	featureApplyDocuments[featureSceneEdit->featureShortName] = featureSceneEdit->workingSettings;
+}
+
+void SceneSettingsManager::RebaseFeatureSceneEditPreview()
+{
+	if (!featureSceneEdit)
+		return;
+	const auto document = featureApplyDocuments.find(featureSceneEdit->featureShortName);
+	if (document == featureApplyDocuments.end())
+		return;
+
+	const auto sceneType = GetCopyContextSceneType(featureSceneEdit->context.type);
+	for (const auto& setting : GetCatalogFeatureSettings(featureSceneEdit->featureShortName)) {
+		auto settingPath = SplitCatalogPath(setting.settingPath);
+		if (!IsSettingAllowedForType(sceneType, featureSceneEdit->featureShortName,
+				settingPath, std::string(setting.settingKey)))
+			continue;
+		const SettingAddress address{
+			featureSceneEdit->featureShortName, std::move(settingPath), std::string(setting.settingKey)
+		};
+		if (featureSceneEdit->workingOverrides.contains(address))
+			continue;
+		const auto* presented = GetCatalogSerializedValue(document->second, setting);
+		auto* original = GetCatalogSerializedValue(featureSceneEdit->originalSettings, setting);
+		auto* working = GetCatalogSerializedValue(featureSceneEdit->workingSettings, setting);
+		if (!presented || !original || !working || !IsSceneSettingPrimitive(*presented) ||
+			!IsCompatibleSceneSettingValue(*original, *presented) ||
+			!IsCompatibleSceneSettingValue(*working, *presented))
+			continue;
+		*original = *presented;
+		*working = *presented;
+	}
+}
+
+bool SceneSettingsManager::CaptureFeatureSceneEditChanges(Feature* feature)
+{
+	if (!featureSceneEdit || !feature ||
+		!CanCaptureFeatureSceneEdit(feature->GetShortName()))
+		return false;
+	json snapshot;
+	if (!SnapshotFeatureSceneEdit(*feature, snapshot))
+		return false;
+
+	auto document = featureApplyDocuments.find(featureSceneEdit->featureShortName);
+	auto sanitized = document != featureApplyDocuments.end() ?
+	                     document->second :
+	                     featureSceneEdit->workingSettings;
+	const auto sceneType = GetCopyContextSceneType(featureSceneEdit->context.type);
+	for (const auto& setting : GetCatalogFeatureSettings(featureSceneEdit->featureShortName)) {
+		auto settingPath = SplitCatalogPath(setting.settingPath);
+		if (!IsSettingAllowedForType(sceneType, featureSceneEdit->featureShortName,
+				settingPath, std::string(setting.settingKey)))
+			continue;
+		const auto* source = GetCatalogSerializedValue(snapshot, setting);
+		auto* destination = GetCatalogSerializedValue(sanitized, setting);
+		if (source && destination && IsSceneSettingPrimitive(*source) &&
+			IsCompatibleSceneSettingValue(*destination, *source))
+			*destination = *source;
+	}
+	if (sanitized != snapshot) {
+		try {
+			feature->LoadSettings(sanitized);
+		} catch (const std::exception& e) {
+			logger::warn("[SceneSettings] Could not restore non-scene settings for {}: {}",
+				feature->GetShortName(), e.what());
+			return false;
+		} catch (...) {
+			logger::warn("[SceneSettings] Could not restore non-scene settings for {}",
+				feature->GetShortName());
+			return false;
+		}
+	}
+	featureSceneEdit->workingSettings = std::move(sanitized);
+	RefreshFeatureSceneEditOverrides();
+	return true;
+}
+
+bool SceneSettingsManager::StoreFeatureSceneEdit()
+{
+	if (!featureSceneEdit)
+		return false;
+	auto* feature = Feature::FindFeatureByShortName(featureSceneEdit->featureShortName);
+	if (!feature)
+		return false;
+	if (IsFeatureSceneEditPreviewActive() && !CaptureFeatureSceneEditChanges(feature))
+		return false;
+	if (!featureSceneEdit->dirty)
+		return true;
+
+	const auto context = featureSceneEdit->context;
+	const auto sceneType = GetCopyContextSceneType(context.type);
+	const bool requireNumeric = CopyContextRequiresNumeric(context.type);
+	std::vector<TimeOfDayPeriod> destinationPeriods;
+	if (context.type == SceneContextType::Weather && context.period == TimeOfDayPeriod::Count) {
+		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
+			destinationPeriods.push_back(static_cast<TimeOfDayPeriod>(periodIndex));
+	} else {
+		destinationPeriods.push_back(
+			requireNumeric ? context.period : TimeOfDayPeriod::Count);
+	}
+
+	struct PendingEdit
+	{
+		SettingAddress address;
+		json value;
+		TimeOfDayPeriod period = TimeOfDayPeriod::Count;
+		json originalValue;
+	};
+	std::vector<PendingEdit> pending;
+	for (const auto& [address, value] : featureSceneEdit->workingOverrides) {
+		for (const auto period : destinationPeriods) {
+			if (!ValidateSceneSettingEntry(GetSceneTypeName(sceneType), sceneType,
+					address.featureShortName, address.settingPath, address.settingKey, value, requireNumeric))
+				return false;
+
+			json originalValue;
+			if (context.type == SceneContextType::Weather) {
+				auto lower = ResolveWeatherLowerValue(
+					context.weatherId, address, period, EntrySource::User);
+				if (lower)
+					originalValue = *lower;
+			} else if (context.type == SceneContextType::Location) {
+				if (auto* setting = FindAllowedCatalogSetting(
+						address.featureShortName, address.settingPath, address.settingKey)) {
+					if (const auto* original = GetCatalogSerializedValue(
+							featureSceneEdit->originalSettings, *setting))
+						originalValue = *original;
+				}
+			} else {
+				originalValue = GetBaselineValue(address);
+			}
+			if (!IsSceneSettingPrimitive(originalValue))
+				return false;
+			pending.push_back({ address, value, period, std::move(originalValue) });
+		}
+	}
+	if (pending.empty())
+		return true;
+
+	std::vector<SettingEntry>* destinationEntries = nullptr;
+	std::optional<LocationTarget> locationTarget;
+	if (context.type == SceneContextType::Interior) {
+		destinationEntries = &GetEntriesMut(SceneType::InteriorOnly);
+	} else if (context.type == SceneContextType::TimeOfDay) {
+		destinationEntries = &GetEntriesMut(SceneType::TimeOfDay);
+	} else if (context.type == SceneContextType::Weather) {
+		destinationEntries = &GetWeatherConfigMut(context.weatherId).entries;
+	} else {
+		const auto normalizedFormKey = NormalizeLocationFormKey(context.locationFormKey);
+		const auto& managementTargets = GetLocationManagementTargets();
+		auto target = std::ranges::find_if(managementTargets, [&](const auto& candidate) {
+			return candidate.type == context.locationType &&
+			       NormalizeLocationFormKey(candidate.formKey) == normalizedFormKey;
+		});
+		if (target == managementTargets.end())
+			return false;
+		locationTarget = *target;
+		auto& config = GetLocationConfigMut(
+			context.locationType, context.locationFormKey, locationTarget->name);
+		if (!locationTarget->cocCode.empty())
+			config.cocCode = locationTarget->cocCode;
+		destinationEntries = &config.entries;
+	}
+
+	for (auto& edit : pending) {
+		auto existing = std::ranges::find_if(*destinationEntries, [&](const auto& entry) {
+			return entry.source == EntrySource::User && entry.period == edit.period &&
+			       IsSameSetting(entry, edit.address.featureShortName,
+					   edit.address.settingPath, edit.address.settingKey);
+		});
+		if (existing != destinationEntries->end()) {
+			existing->value = edit.value;
+			existing->paused = false;
+			continue;
+		}
+		destinationEntries->push_back({
+			.featureShortName = edit.address.featureShortName,
+			.settingPath = edit.address.settingPath,
+			.settingKey = edit.address.settingKey,
+			.displayName = GetSceneSettingDisplayName(edit.address.featureShortName,
+				edit.address.settingPath, edit.address.settingKey),
+			.value = edit.value,
+			.originalValue = std::move(edit.originalValue),
+			.paused = false,
+			.source = EntrySource::User,
+			.period = edit.period,
+		});
+	}
+
+	if (requireNumeric)
+		++sceneValueRevision;
+	BumpEntryPresentationRevision();
+	switch (context.type) {
+	case SceneContextType::Interior:
+		MarkEntryListUserSettingsModified(SceneType::InteriorOnly);
+		break;
+	case SceneContextType::TimeOfDay:
+		MarkEntryListUserSettingsModified(SceneType::TimeOfDay);
+		break;
+	case SceneContextType::Weather:
+		PrepareWeatherUserSettingsMutation(context.weatherId, true);
+		break;
+	case SceneContextType::Location:
+		PrepareLocationUserSettingsMutation(
+			context.locationType, context.locationFormKey, true);
+		break;
+	}
+
+	featureSceneEdit->workingOverrides.clear();
+	featureSceneEdit->dirty = false;
+	CommitSceneSettingChanges();
+	json snapshot;
+	if (SnapshotFeatureSceneEdit(*feature, snapshot)) {
+		featureSceneEdit->originalSettings = snapshot;
+		featureSceneEdit->workingSettings = std::move(snapshot);
+		featureApplyDocuments[featureSceneEdit->featureShortName] = featureSceneEdit->workingSettings;
+	}
+	pendingApplyVerifications.erase(featureSceneEdit->featureShortName);
+	return true;
+}
+
+void SceneSettingsManager::EndFeatureSceneEdit(bool storeChanges)
+{
+	if (!featureSceneEdit)
+		return;
+	if (storeChanges && !StoreFeatureSceneEdit()) {
+		logger::warn("[SceneSettings] Could not store pending feature-page scene edits for {}",
+			featureSceneEdit->featureShortName);
+		return;
+	}
+	const auto featureShortName = featureSceneEdit->featureShortName;
+	featureSceneEdit.reset();
+	featureSceneEditAutoCloseAttempted = false;
+	pendingApplyVerifications.erase(featureShortName);
+	featureApplyDocuments.erase(featureShortName);
+	for (auto applied = appliedSettings.lower_bound({ featureShortName, {}, {} });
+		applied != appliedSettings.end() && applied->first.featureShortName == featureShortName;)
+		applied = appliedSettings.erase(applied);
+	appliedFeatureNames.erase(featureShortName);
+	resolverDirty = true;
+	ResolveAndApply(true);
+}
+
 const std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::GetCopyContextEntries(
 	const SceneContextId& context) const
 {
@@ -6378,6 +6840,74 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 	return result;
 }
 
+bool SceneSettingsManager::DeleteFeatureSceneSettings(
+	std::string_view featureShortName, const SceneContextId& context)
+{
+	if (!IsValidSceneContext(context) || featureShortName.empty())
+		return false;
+	if (context.type == SceneContextType::Weather && !TryEnsureWeatherDataLoaded())
+		return false;
+	if (context.type == SceneContextType::Location && !TryEnsureLocationDataLoaded())
+		return false;
+
+	std::vector<SettingEntry>* contextEntries = nullptr;
+	switch (context.type) {
+	case SceneContextType::Interior:
+		contextEntries = &GetEntriesMut(SceneType::InteriorOnly);
+		break;
+	case SceneContextType::TimeOfDay:
+		contextEntries = &GetEntriesMut(SceneType::TimeOfDay);
+		break;
+	case SceneContextType::Weather:
+		if (auto config = weatherSceneConfigs.find(context.weatherId);
+			config != weatherSceneConfigs.end())
+			contextEntries = &config->second.entries;
+		break;
+	case SceneContextType::Location:
+		if (auto config = locationSceneConfigs.find(
+				GetLocationConfigKey(context.locationType, context.locationFormKey));
+			config != locationSceneConfigs.end())
+			contextEntries = &config->second.entries;
+		break;
+	}
+	if (!contextEntries)
+		return false;
+
+	const auto removed = std::erase_if(*contextEntries, [&](const SettingEntry& entry) {
+		return entry.source == EntrySource::User &&
+		       entry.featureShortName == featureShortName && EntryBelongsToContext(entry, context);
+	});
+	if (removed == 0)
+		return false;
+
+	if (CopyContextRequiresNumeric(context.type))
+		++sceneValueRevision;
+	BumpEntryPresentationRevision();
+	switch (context.type) {
+	case SceneContextType::Interior:
+		MarkEntryListUserSettingsModified(SceneType::InteriorOnly);
+		break;
+	case SceneContextType::TimeOfDay:
+		MarkEntryListUserSettingsModified(SceneType::TimeOfDay);
+		break;
+	case SceneContextType::Weather:
+		PrepareWeatherUserSettingsMutation(context.weatherId, false);
+		break;
+	case SceneContextType::Location:
+		PrepareLocationUserSettingsMutation(
+			context.locationType, context.locationFormKey, false);
+		break;
+	}
+
+	if (featureSceneEdit && featureSceneEdit->featureShortName == featureShortName &&
+		featureSceneEdit->context == context) {
+		featureSceneEdit->workingOverrides.clear();
+		featureSceneEdit->dirty = false;
+	}
+	CommitSceneSettingChanges();
+	return true;
+}
+
 // --- Per-Location Scene Settings ---
 
 const SceneSettingsManager::LocationSceneConfig SceneSettingsManager::kEmptyLocationConfig{};
@@ -6671,6 +7201,138 @@ void SceneSettingsManager::SetLocationEntryTransitionSeconds(LocationTargetType 
 		SaveAllUserSettings();
 		ReapplyIfActive(false);
 	}
+}
+
+void SceneSettingsManager::ApplyFeatureSceneEditPreview(ResolvedSettingMap& resolved)
+{
+	if (!IsFeatureSceneEditPreviewActive())
+		return;
+
+	const auto& edit = *featureSceneEdit;
+	const auto isEditable = [&](const SettingAddress& address) {
+		return std::ranges::binary_search(edit.editableAddresses, address);
+	};
+	const auto selectedPeriod = edit.context.type == SceneContextType::Weather &&
+	                                    edit.context.period == TimeOfDayPeriod::Count ?
+	                                GetCurrentPeriod() :
+	                                edit.context.period;
+	const auto anyEntry = [](const SettingEntry&) { return true; };
+	const auto selectedPeriodEntry = [&](const SettingEntry& entry) {
+		return entry.period == selectedPeriod;
+	};
+	EnsureBaselines(edit.editableAddresses);
+
+	std::erase_if(resolved, [&](const auto& item) {
+		return isEditable(item.first);
+	});
+	ResolvedSettingMap preview;
+	for (const auto& address : edit.editableAddresses)
+		if (auto baseline = baselineSettings.find(address); baseline != baselineSettings.end())
+			preview[address] = baseline->second;
+	const auto overlayEntries = [&](const std::vector<SettingEntry>& sourceEntries,
+									SceneType type, EntrySource source, const auto& belongs,
+									ResolvedSettingMap& destination) {
+		for (const auto& entry : sourceEntries) {
+			if (entry.source != source || entry.paused ||
+				entry.featureShortName != edit.featureShortName || !belongs(entry) ||
+				!IsSettingAllowedForType(
+					type, entry.featureShortName, entry.settingPath, entry.settingKey))
+				continue;
+			SettingAddress address{ entry.featureShortName, entry.settingPath, entry.settingKey };
+			if (isEditable(address) && baselineSettings.contains(address))
+				destination[address] = entry.value;
+		}
+	};
+	const auto applyWorkingOverrides = [&](ResolvedSettingMap& destination) {
+		for (const auto& [address, value] : edit.workingOverrides)
+			if (isEditable(address))
+				destination[address] = value;
+	};
+	const auto overlayLocationEntries = [&](EntrySource source, ResolvedSettingMap& destination) {
+		for (const auto& target : GetCurrentLocationTargets()) {
+			if (auto configIt = locationSceneConfigs.find(
+					GetLocationConfigKey(target.type, target.formKey));
+				configIt != locationSceneConfigs.end())
+				overlayEntries(
+					configIt->second.entries, SceneType::Location, source, anyEntry, destination);
+			if (target.type == edit.context.locationType &&
+				NormalizeLocationFormKey(target.formKey) ==
+					NormalizeLocationFormKey(edit.context.locationFormKey))
+				break;
+		}
+	};
+
+	switch (edit.context.type) {
+	case SceneContextType::Interior:
+		overlayEntries(GetEntries(SceneType::InteriorOnly), SceneType::InteriorOnly,
+			EntrySource::User, anyEntry, preview);
+		applyWorkingOverrides(preview);
+		overlayEntries(GetEntries(SceneType::InteriorOnly), SceneType::InteriorOnly,
+			EntrySource::Overwrite, anyEntry, preview);
+		break;
+	case SceneContextType::TimeOfDay:
+		overlayEntries(GetEntries(SceneType::TimeOfDay), SceneType::TimeOfDay,
+			EntrySource::User, selectedPeriodEntry, preview);
+		applyWorkingOverrides(preview);
+		overlayEntries(GetEntries(SceneType::TimeOfDay), SceneType::TimeOfDay,
+			EntrySource::Overwrite, selectedPeriodEntry, preview);
+		break;
+	case SceneContextType::Weather:
+		overlayEntries(GetEntries(SceneType::TimeOfDay), SceneType::TimeOfDay,
+			EntrySource::User, selectedPeriodEntry, preview);
+		if (auto configIt = weatherSceneConfigs.find(edit.context.weatherId);
+			configIt != weatherSceneConfigs.end())
+			overlayEntries(configIt->second.entries, SceneType::TimeOfDay,
+				EntrySource::User, selectedPeriodEntry, preview);
+		applyWorkingOverrides(preview);
+		overlayEntries(GetEntries(SceneType::TimeOfDay), SceneType::TimeOfDay,
+			EntrySource::Overwrite, selectedPeriodEntry, preview);
+		if (auto configIt = weatherSceneConfigs.find(edit.context.weatherId);
+			configIt != weatherSceneConfigs.end())
+			overlayEntries(configIt->second.entries, SceneType::TimeOfDay,
+				EntrySource::Overwrite, selectedPeriodEntry, preview);
+		break;
+	case SceneContextType::Location:
+		{
+			ResolvedSettingMap userLocationValues;
+			overlayLocationEntries(EntrySource::User, userLocationValues);
+			applyWorkingOverrides(userLocationValues);
+			if (Util::IsInterior()) {
+				overlayEntries(GetEntries(SceneType::InteriorOnly), SceneType::InteriorOnly,
+					EntrySource::User, anyEntry, preview);
+				for (const auto& [address, value] : userLocationValues)
+					preview[address] = value;
+				overlayEntries(GetEntries(SceneType::InteriorOnly), SceneType::InteriorOnly,
+					EntrySource::Overwrite, anyEntry, preview);
+			} else {
+				std::array<float, kPeriodCount> factors{};
+				GetTimeOfDayFactors(factors.data());
+				ResolveExteriorSettings(
+					preview, factors, &userLocationValues, edit.editableAddresses);
+			}
+			overlayLocationEntries(EntrySource::Overwrite, preview);
+			break;
+		}
+	}
+
+	for (const auto& [address, value] : preview)
+		if (isEditable(address))
+			resolved[address] = value;
+}
+
+bool SceneSettingsManager::IsFeatureSceneEditPreviewActive() const
+{
+	if (!featureSceneEdit)
+		return false;
+	if (featureSceneEdit->context.type != SceneContextType::Location)
+		return true;
+
+	const auto normalizedFormKey = NormalizeLocationFormKey(
+		featureSceneEdit->context.locationFormKey);
+	return std::ranges::any_of(GetCurrentLocationTargets(), [&](const auto& target) {
+		return target.type == featureSceneEdit->context.locationType &&
+		       NormalizeLocationFormKey(target.formKey) == normalizedFormKey;
+	});
 }
 
 std::optional<json> SceneSettingsManager::ResolveLocationLowerValue(LocationTargetType type,

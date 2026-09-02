@@ -8,8 +8,13 @@
 
 #include <imgui_internal.h>
 
+#include <limits>
+#include <map>
+#include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -103,6 +108,19 @@ namespace
 
 	thread_local Feature* g_currentFeature = nullptr;
 	thread_local bool g_sceneSettingsActive = false;
+	thread_local bool g_featureSceneEditing = false;
+	using BlockedFeatureSceneEditSettings =
+		std::unordered_set<const SceneSettingsCatalog::SettingMetadata*>;
+	using LogicalControlKey = std::tuple<std::string_view, std::string_view, std::string_view,
+		SceneSettingsCatalog::AggregateSemantic, std::int8_t, std::uint8_t>;
+	thread_local const BlockedFeatureSceneEditSettings* g_blockedFeatureSceneEditSettings = nullptr;
+	thread_local BlockedFeatureSceneEditSettings g_cachedBlockedFeatureSceneEditSettings;
+	thread_local std::map<LogicalControlKey, const SceneSettingsCatalog::SettingMetadata*>
+		g_cachedBlockedFeatureSceneEditAggregates;
+	thread_local std::string g_cachedFeatureSceneEditFeature;
+	thread_local std::uint64_t g_cachedFeatureSceneEditRevision =
+		std::numeric_limits<std::uint64_t>::max();
+	thread_local bool g_cachedFeatureSceneEditCaptureAllowed = false;
 	thread_local bool g_allowSceneSettingTooltip = false;
 	thread_local unsigned int g_controlDetourDepth = 0;
 	thread_local bool g_featureSettingMutation = false;
@@ -124,6 +142,7 @@ namespace
 	{
 		ControlledItem item;
 		std::vector<bool> groups;
+		const BlockedFeatureSceneEditSettings* blockedEditSettings = nullptr;
 		bool featureSettingMutation = false;
 	};
 	thread_local std::vector<SceneControlFrame> g_sceneControlFrames;
@@ -155,9 +174,20 @@ namespace
 	bool IsActiveSceneSetting(const SceneSettingsCatalog::SettingMetadata& setting)
 	{
 		return SceneSettingsManager::IsSceneSettingAllowed(
-			       setting.featureShortName, setting.settingPath, setting.settingKey) &&
+				   setting.featureShortName, setting.settingPath, setting.settingKey) &&
 		       SceneSettingsManager::GetSingleton()->IsActiveSceneSetting(
-			       setting.featureShortName, setting.settingPath, setting.settingKey);
+				   setting.featureShortName, setting.settingPath, setting.settingKey);
+	}
+
+	bool IsFeatureSceneEditSetting(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		return !g_blockedFeatureSceneEditSettings ||
+		       !g_blockedFeatureSceneEditSettings->contains(&setting);
+	}
+
+	bool IsSceneControlGuardActive()
+	{
+		return g_sceneSettingsActive || g_featureSceneEditing;
 	}
 
 	std::string_view GetVisibleLabel(std::string_view label)
@@ -186,6 +216,50 @@ namespace
 		       lhs.aggregateCount == rhs.aggregateCount;
 	}
 
+	template <class Aggregate>
+	LogicalControlKey GetLogicalControlKey(const Aggregate& setting)
+	{
+		return { setting.featureShortName, setting.serializedPath, setting.serializedKey,
+			setting.aggregateSemantic, setting.aggregateStart, setting.aggregateCount };
+	}
+
+	void RefreshBlockedFeatureSceneEditSettings(Feature& feature)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto revision = manager->GetFeatureSceneEditRevision();
+		const auto featureShortName = feature.GetShortName();
+		const bool captureAllowed = manager->CanCaptureFeatureSceneEdit(featureShortName);
+		if (revision == g_cachedFeatureSceneEditRevision &&
+			featureShortName == g_cachedFeatureSceneEditFeature &&
+			captureAllowed == g_cachedFeatureSceneEditCaptureAllowed)
+			return;
+
+		g_cachedBlockedFeatureSceneEditSettings.clear();
+		g_cachedBlockedFeatureSceneEditAggregates.clear();
+		g_cachedFeatureSceneEditFeature = featureShortName;
+		g_cachedFeatureSceneEditRevision = revision;
+		g_cachedFeatureSceneEditCaptureAllowed = captureAllowed;
+		std::set<LogicalControlKey> blockedAggregates;
+		for (const auto& setting : SceneSettingsCatalog::GetSettings()) {
+			if (setting.featureShortName != featureShortName ||
+				(captureAllowed && manager->IsFeatureSceneEditSetting(
+									   setting.featureShortName, setting.settingPath, setting.settingKey)))
+				continue;
+			g_cachedBlockedFeatureSceneEditSettings.insert(&setting);
+			if (setting.aggregateSemantic != SceneSettingsCatalog::AggregateSemantic::None) {
+				blockedAggregates.insert(GetLogicalControlKey(setting));
+				g_cachedBlockedFeatureSceneEditAggregates.try_emplace(
+					GetLogicalControlKey(setting), &setting);
+			}
+		}
+		if (blockedAggregates.empty())
+			return;
+		for (const auto& setting : SceneSettingsCatalog::GetSettings())
+			if (setting.featureShortName == featureShortName &&
+				blockedAggregates.contains(GetLogicalControlKey(setting)))
+				g_cachedBlockedFeatureSceneEditSettings.insert(&setting);
+	}
+
 	bool MatchesSettingLabel(const SceneSettingsCatalog::SettingMetadata& setting,
 		std::string_view label, bool choiceLabelsOnly)
 	{
@@ -202,7 +276,14 @@ namespace
 		return false;
 	}
 
-	const SceneSettingsCatalog::SettingMetadata* FindUniqueActiveSettingForLabel(
+	bool ShouldBlockSetting(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		if (!g_featureSceneEditing)
+			return IsActiveSceneSetting(setting);
+		return !IsFeatureSceneEditSetting(setting);
+	}
+
+	const SceneSettingsCatalog::SettingMetadata* FindUniqueBlockedSettingForLabel(
 		const char* label, bool choiceLabelsOnly)
 	{
 		if (!label || GetVisibleLabel(label).empty())
@@ -214,7 +295,7 @@ namespace
 			if (candidate.featureShortName != featureShortName ||
 				!SceneSettingsCatalog::IsSceneControllable(candidate) ||
 				!MatchesSettingLabel(candidate, label, choiceLabelsOnly) ||
-				!IsActiveSceneSetting(candidate))
+				!ShouldBlockSetting(candidate))
 				continue;
 			if (match && !IsSameLogicalControl(*match, candidate))
 				return nullptr;
@@ -224,15 +305,22 @@ namespace
 	}
 
 	template <class Aggregate>
-	const SceneSettingsCatalog::SettingMetadata* FindActiveAggregateSetting(const Aggregate& aggregate)
+	const SceneSettingsCatalog::SettingMetadata* FindBlockedAggregateSetting(const Aggregate& aggregate)
 	{
+		if (g_featureSceneEditing) {
+			const auto match = g_cachedBlockedFeatureSceneEditAggregates.find(
+				GetLogicalControlKey(aggregate));
+			return match != g_cachedBlockedFeatureSceneEditAggregates.end() ?
+			           match->second :
+			           nullptr;
+		}
 		for (const auto& candidate : SceneSettingsCatalog::GetSettings()) {
 			if (candidate.featureShortName == aggregate.featureShortName &&
 				candidate.serializedPath == aggregate.serializedPath &&
 				candidate.serializedKey == aggregate.serializedKey &&
 				candidate.aggregateSemantic == aggregate.aggregateSemantic &&
 				candidate.aggregateStart == aggregate.aggregateStart &&
-				candidate.aggregateCount == aggregate.aggregateCount && IsActiveSceneSetting(candidate))
+				candidate.aggregateCount == aggregate.aggregateCount && ShouldBlockSetting(candidate))
 				return &candidate;
 		}
 		return nullptr;
@@ -266,7 +354,7 @@ namespace
 				return { nullptr, true };
 			match = &control;
 		}
-		return { match ? FindActiveAggregateSetting(*match) : nullptr, match != nullptr };
+		return { match ? FindBlockedAggregateSetting(*match) : nullptr, match != nullptr };
 	}
 
 	const SceneSettingsCatalog::SettingMetadata* FindVirtualControlSetting(
@@ -275,13 +363,13 @@ namespace
 		const auto registered = FindRegisteredVirtualControlSetting(label);
 		if (registered.metadataMatched)
 			return registered.setting;
-		return FindUniqueActiveSettingForLabel(label, choiceLabelsOnly);
+		return FindUniqueBlockedSettingForLabel(label, choiceLabelsOnly);
 	}
 
 	const SceneSettingsCatalog::SettingMetadata* FindControlSetting(
 		const char* label, const void* valueAddress, bool choiceLabelsOnly = false)
 	{
-		if (!g_sceneSettingsActive || !g_currentFeature)
+		if (!IsSceneControlGuardActive() || !g_currentFeature)
 			return nullptr;
 
 		const void* settingAddress = Util::GetActiveControlStorageAddress();
@@ -292,10 +380,10 @@ namespace
 			return FindVirtualControlSetting(label, choiceLabelsOnly);
 		if (!SceneSettingsManager::IsSceneSettingAllowed(
 				setting->featureShortName, setting->settingPath, setting->settingKey))
-			return nullptr;
+			return g_featureSceneEditing ? setting : nullptr;
 		if (setting->aggregateSemantic == SceneSettingsCatalog::AggregateSemantic::None)
-			return IsActiveSceneSetting(*setting) ? setting : nullptr;
-		return FindActiveAggregateSetting(*setting);
+			return ShouldBlockSetting(*setting) ? setting : nullptr;
+		return FindBlockedAggregateSetting(*setting);
 	}
 
 	void DrawSceneSettingTooltip()
@@ -307,8 +395,11 @@ namespace
 			if (auto tooltip = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"%s",
-					T("feature.scene_manager.controlled_tooltip",
-						"Disable scene-specific settings to edit this setting."));
+					g_featureSceneEditing ?
+						T("feature.scene_manager.edit.unavailable_tooltip",
+							"This setting is not available for the selected scene.") :
+						T("feature.scene_manager.controlled_tooltip",
+							"Disable scene-specific settings to edit this setting."));
 			}
 		}
 		g_allowSceneSettingTooltip = previousAllow;
@@ -354,14 +445,14 @@ namespace
 	void BeginGroupDetour()
 	{
 		g_beginGroup();
-		if (g_sceneSettingsActive)
+		if (IsSceneControlGuardActive())
 			g_sceneControlledGroupStack.push_back(false);
 	}
 
 	void EndGroupDetour()
 	{
 		g_endGroup();
-		if (!g_sceneSettingsActive || g_sceneControlledGroupStack.empty())
+		if (!IsSceneControlGuardActive() || g_sceneControlledGroupStack.empty())
 			return;
 		const bool controlled = g_sceneControlledGroupStack.back();
 		g_sceneControlledGroupStack.pop_back();
@@ -374,7 +465,7 @@ namespace
 
 	bool IsItemHoveredDetour(ImGuiHoveredFlags flags)
 	{
-		if (!g_allowSceneSettingTooltip && g_sceneSettingsActive && IsControlledItem())
+		if (!g_allowSceneSettingTooltip && IsSceneControlGuardActive() && IsControlledItem())
 			return false;
 		return g_isItemHovered(flags);
 	}
@@ -660,38 +751,51 @@ namespace
 
 namespace SceneSettingsUIHooks
 {
-	FeatureDrawGuard::FeatureDrawGuard(Feature* feature, bool sceneControlled) :
+	FeatureDrawGuard::FeatureDrawGuard(Feature* feature, bool sceneControlled, bool sceneEditing) :
 		previousFeature(g_currentFeature),
-		previousSceneControlled(g_sceneSettingsActive)
+		previousSceneControlled(g_sceneSettingsActive),
+		previousSceneEditing(g_featureSceneEditing)
 	{
-		g_sceneControlFrames.push_back({
-			g_sceneControlledItem,
+		g_sceneControlFrames.push_back({ g_sceneControlledItem,
 			std::move(g_sceneControlledGroupStack),
-			g_featureSettingMutation
-		});
+			g_blockedFeatureSceneEditSettings,
+			g_featureSettingMutation });
 		g_sceneControlledGroupStack.clear();
+		g_blockedFeatureSceneEditSettings = nullptr;
 		g_featureSettingMutation = false;
 		g_currentFeature = feature;
-		g_sceneSettingsActive = sceneControlled && feature != nullptr;
+		g_featureSceneEditing = sceneEditing && feature != nullptr;
+		g_sceneSettingsActive = sceneControlled && !g_featureSceneEditing && feature != nullptr;
+		if (g_featureSceneEditing) {
+			RefreshBlockedFeatureSceneEditSettings(*feature);
+			g_blockedFeatureSceneEditSettings = &g_cachedBlockedFeatureSceneEditSettings;
+		}
 		ClearControlledItem();
 	}
 
 	FeatureDrawGuard::~FeatureDrawGuard()
 	{
-		if (g_currentFeature && g_featureSettingMutation)
-			SceneSettingsManager::GetSingleton()->CaptureExternalFeatureChanges(g_currentFeature);
+		if (g_currentFeature && g_featureSettingMutation) {
+			if (g_featureSceneEditing)
+				SceneSettingsManager::GetSingleton()->CaptureFeatureSceneEditChanges(g_currentFeature);
+			else
+				SceneSettingsManager::GetSingleton()->CaptureExternalFeatureChanges(g_currentFeature);
+		}
 		if (!g_sceneControlFrames.empty()) {
 			g_sceneControlledItem = g_sceneControlFrames.back().item;
 			g_sceneControlledGroupStack = std::move(g_sceneControlFrames.back().groups);
+			g_blockedFeatureSceneEditSettings = g_sceneControlFrames.back().blockedEditSettings;
 			g_featureSettingMutation = g_sceneControlFrames.back().featureSettingMutation;
 			g_sceneControlFrames.pop_back();
 		} else {
 			ClearControlledItem();
 			g_sceneControlledGroupStack.clear();
+			g_blockedFeatureSceneEditSettings = nullptr;
 			g_featureSettingMutation = false;
 		}
 		g_currentFeature = previousFeature;
 		g_sceneSettingsActive = previousSceneControlled;
+		g_featureSceneEditing = previousSceneEditing;
 	}
 
 	void Install()

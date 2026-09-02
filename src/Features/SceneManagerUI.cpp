@@ -5,6 +5,31 @@
 
 namespace SceneManagerUI
 {
+	bool CanEditFeaturePage(Feature* feature)
+	{
+		return SceneSettingsUI::CanEditFeaturePage(feature);
+	}
+
+	bool BeginFeaturePageEditing(Feature* feature)
+	{
+		return SceneSettingsUI::BeginFeaturePageEditing(feature);
+	}
+
+	bool IsFeaturePageEditing(Feature* feature)
+	{
+		return SceneSettingsUI::IsFeaturePageEditing(feature);
+	}
+
+	bool DrawFeaturePageControls(Feature* feature, bool enabled)
+	{
+		return SceneSettingsUI::DrawFeaturePageControls(feature, enabled);
+	}
+
+	void EndFeaturePageEditing(bool storeChanges)
+	{
+		SceneSettingsUI::EndFeaturePageEditing(storeChanges);
+	}
+
 	void Draw()
 	{
 		SceneSettingsUI::DrawGlobalActions();

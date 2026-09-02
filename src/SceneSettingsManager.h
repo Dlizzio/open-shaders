@@ -611,6 +611,30 @@ public:
 	CopyResult CopySettings(const SceneContextId& source, const SceneContextId& destination,
 		EntrySource sourceLayer, CopyConflictPolicy conflictPolicy,
 		std::span<const SettingIdentity> settings);
+	/** @brief Delete every User setting owned by one feature in exactly one scene context.
+	 * @return True when at least one entry was removed. */
+	bool DeleteFeatureSceneSettings(
+		std::string_view featureShortName, const SceneContextId& context);
+
+	/** @brief Begin editing one feature against an isolated scene-context preview. */
+	bool BeginFeatureSceneEdit(Feature* feature, const SceneContextId& context);
+	/** @brief Capture live feature controls into the current edit preview without persisting them. */
+	bool CaptureFeatureSceneEditChanges(Feature* feature);
+	/** @brief Persist pending feature-page edits as User Settings in the selected scene. */
+	bool StoreFeatureSceneEdit();
+	/** @brief Finish feature-page editing, optionally storing pending changes first. */
+	void EndFeatureSceneEdit(bool storeChanges = true);
+	/** @brief Return whether the named feature owns the active feature-page edit session. */
+	bool IsFeatureSceneEditing(std::string_view featureShortName) const;
+	/** @brief Return whether the feature's native controls currently show its edit preview. */
+	bool CanCaptureFeatureSceneEdit(std::string_view featureShortName) const;
+	/** @brief Return whether one catalog setting belongs to the active feature-page edit context. */
+	bool IsFeatureSceneEditSetting(std::string_view featureShortName,
+		std::string_view settingPath, std::string_view settingKey) const;
+	/** @brief Return whether the active feature-page edit session has unstored changes. */
+	bool HasPendingFeatureSceneEdits() const;
+	/** @brief Return the generation of the active feature-page edit context. */
+	std::uint64_t GetFeatureSceneEditRevision() const { return featureSceneEditRevision; }
 
 	/// Enables location discovery once Skyrim form data is guaranteed to be available.
 	void OnDataLoaded();
@@ -688,6 +712,16 @@ private:
 	};
 
 	using ResolvedSettingMap = std::map<SettingAddress, json>;
+	struct FeatureSceneEditState
+	{
+		std::string featureShortName;
+		SceneContextId context;
+		std::vector<SettingAddress> editableAddresses;
+		json originalSettings = json::object();
+		json workingSettings = json::object();
+		ResolvedSettingMap workingOverrides;
+		bool dirty = false;
+	};
 	ResolvedSettingMap baselineSettings;
 	ResolvedSettingMap appliedSettings;
 	ResolvedSettingMap resolvedSettingsScratch;
@@ -777,6 +811,9 @@ private:
 	ResolvedSettingMap cachedLocationOverwriteSettings;
 	bool cachedLocationOverridesValid = false;
 	bool locationOverridesDirty = true;
+	std::optional<FeatureSceneEditState> featureSceneEdit;
+	bool featureSceneEditAutoCloseAttempted = false;
+	std::uint64_t featureSceneEditRevision = 0;
 
 	// --- Per-Weather helpers ---
 	/// Load weather overwrites/user settings once game data is available for SPID resolution.
@@ -819,12 +856,18 @@ private:
 	void ResolveInteriorSettings(ResolvedSettingMap& resolved, EntrySource source) const;
 	void ResolveExteriorSettings(ResolvedSettingMap& resolved,
 		const std::array<float, kPeriodCount>& factors,
-		const ResolvedSettingMap* userLocationValues) const;
+		const ResolvedSettingMap* userLocationValues,
+		std::span<const SettingAddress> addressFilter = {}) const;
 	void ResolveTimeOfDaySettings(ResolvedSettingMap& resolved, const PeriodSettingMap& values,
 		const std::array<float, kPeriodCount>& factors) const;
 	void ResolveWeatherSettings(ResolvedSettingMap& resolved, const PeriodSettingMap& timeOfDayValues,
 		const std::array<float, kPeriodCount>& factors,
 		std::optional<EntrySource> valueSource = std::nullopt) const;
+	void ResolveWeatherValueGroups(ResolvedSettingMap& resolved,
+		const PeriodSettingMap& timeOfDayValues,
+		const std::array<float, kPeriodCount>& factors,
+		const PeriodSettingMap& currentValues, const PeriodSettingMap& previousValues,
+		float weatherLerp) const;
 	void ResolveLocationSettings(ResolvedSettingMap& resolved,
 		const std::vector<LocationTarget>& locationTargets, EntrySource source,
 		bool collectTransitionDurations);
@@ -849,6 +892,13 @@ private:
 		const std::vector<CatalogSceneSettingUpdate>& updates, size_t signature, bool transition,
 		std::span<const SettingAddress> restorationAddresses = {});
 	void VerifyPendingApplies(bool overdueOnly = false);
+	bool SnapshotFeatureSceneEdit(Feature& feature, json& snapshot) const;
+	void RefreshFeatureSceneEditOverrides();
+	void RebaseFeatureSceneEditPreview();
+	void ApplyFeatureSceneEditPreview(ResolvedSettingMap& resolved);
+	bool IsFeatureSceneEditPreviewActive() const;
+	bool IsFeatureSceneEditContextValid(
+		std::string_view featureShortName, const SceneContextId& context);
 
 	// --- Per-Location helpers ---
 	static std::string GetLocationConfigKey(LocationTargetType type, std::string_view formKey);

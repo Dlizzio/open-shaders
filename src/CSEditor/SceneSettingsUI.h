@@ -10,6 +10,8 @@
 #include "SceneSettingsManager.h"
 #include "Utils/UI.h"
 
+struct Feature;
+
 /// Shared UI utilities for scene-settings panels.
 namespace SceneSettingsUI
 {
@@ -312,4 +314,19 @@ namespace SceneSettingsUI
 
 	/// Draw the standalone scene-context copy workflow.
 	void DrawCopyPanel();
+
+	/// Return whether a feature exposes at least one setting supported by Scene Manager.
+	bool CanEditFeaturePage(Feature* feature);
+
+	/// Start editing scene settings through a feature's native controls.
+	bool BeginFeaturePageEditing(Feature* feature);
+
+	/// Return whether the feature-page Scene Manager toolbar is open for this feature.
+	bool IsFeaturePageEditing(Feature* feature);
+
+	/// Draw the active feature-page scene toolbar and return whether the page is editing.
+	bool DrawFeaturePageControls(Feature* feature, bool enabled);
+
+	/// Finish the active feature-page scene edit session.
+	void EndFeaturePageEditing(bool storeChanges = true);
 }
