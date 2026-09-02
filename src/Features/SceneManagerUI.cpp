@@ -7,6 +7,7 @@ namespace SceneManagerUI
 {
 	void Draw()
 	{
+		SceneSettingsUI::DrawGlobalActions();
 		if (!ImGui::BeginTabBar("##SceneManagerTabs"))
 			return;
 
@@ -24,6 +25,10 @@ namespace SceneManagerUI
 		}
 		if (ImGui::BeginTabItem(T("feature.scene_manager.tab.weather", "Weather"))) {
 			SceneSettingsUI::DrawWeatherPanel();
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem(T("feature.scene_manager.copy.title", "Copy Scene Settings"))) {
+			SceneSettingsUI::DrawCopyPanel();
 			ImGui::EndTabItem();
 		}
 

@@ -367,6 +367,7 @@ private:
 	json j;
 	std::string settingsFilename = "EditorSettings";
 	bool showSettingsWindow = false;
+	bool viewportWindowVisible = true;
 	std::string settingsSelectedCategory = "Flags";
 
 	// Widget focus tracking for Ctrl+W

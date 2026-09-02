@@ -110,7 +110,7 @@ public:
 
 	~WeatherWidget();
 
-	/** @brief Renders the full weather editor UI, including the Scene Settings tab. */
+	/** @brief Renders the full weather editor UI. */
 	void DrawWidget() override;
 
 	/** @brief Returns the human-readable widget type name for window sizing. */

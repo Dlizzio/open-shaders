@@ -1610,9 +1610,11 @@ namespace Util
 			return 8;
 		}
 
-		float GetSearchableComboPopupHeight(ImGuiComboFlags flags)
+		float GetSearchableComboPopupHeight(ImGuiComboFlags flags, int maxVisibleItems)
 		{
-			const int itemCount = GetSearchableComboMaxItemCount(flags);
+			const int itemCount = maxVisibleItems > 0 ?
+			                          maxVisibleItems :
+			                          GetSearchableComboMaxItemCount(flags);
 			if (itemCount < 0)
 				return FLT_MAX;
 
@@ -1622,7 +1624,8 @@ namespace Util
 			return searchHeight + listHeight + style.WindowPadding.y * 2.0f;
 		}
 
-		void SetSearchableComboPopupConstraints(const char* previewValue, ImGuiComboFlags flags)
+		void SetSearchableComboPopupConstraints(
+			const char* previewValue, ImGuiComboFlags flags, int maxVisibleItems)
 		{
 			if ((GImGui->NextWindowData.HasFlags & ImGuiNextWindowDataFlags_HasSizeConstraint) != 0)
 				return;
@@ -1643,7 +1646,8 @@ namespace Util
 			                          style.FramePadding.x * 4.0f;
 			popupWidth = std::max(popupWidth, searchWidth);
 			ImGui::SetNextWindowSizeConstraints(
-				ImVec2(popupWidth, 0.0f), ImVec2(popupWidth, GetSearchableComboPopupHeight(flags)));
+				ImVec2(popupWidth, 0.0f),
+				ImVec2(popupWidth, GetSearchableComboPopupHeight(flags, maxVisibleItems)));
 		}
 
 		struct ComboSearchState
@@ -1660,11 +1664,12 @@ namespace Util
 	}
 
 	bool BeginSearchableCombo(
-		const char* label, const char* previewValue, ImGuiComboFlags flags, const void* storageAddress)
+		const char* label, const char* previewValue, ImGuiComboFlags flags,
+		const void* storageAddress, int maxVisibleItems)
 	{
 		const ImGuiID id = ImGui::GetID(label);
 		auto& state = detail::GetSearchableComboState(id);
-		detail::SetSearchableComboPopupConstraints(previewValue, flags);
+		detail::SetSearchableComboPopupConstraints(previewValue, flags, maxVisibleItems);
 
 		bool open = false;
 		if (storageAddress) {
@@ -2895,11 +2900,10 @@ namespace Util
 
 	namespace
 	{
-		constexpr float kFlyoutCloseDelay = 0.25f;
+		constexpr float kFlyoutCloseDelay = 0.10f;
 		constexpr float kFlyoutSlideOpenSpeed = 10.0f;
 		constexpr float kFlyoutSlideCloseSpeed = 14.0f;
 		constexpr float kFlyoutSlideDistance = 6.0f;
-		constexpr float kFlyoutGap = 2.0f;
 		constexpr float kFlyoutAlphaScale = 4.0f;
 		constexpr std::string_view kFlyoutWindowPrefix = "##flyout_";
 
@@ -2944,7 +2948,7 @@ namespace Util
 		ImVec2 GetFlyoutPos(FlyoutState& state, const ImVec2& sourceMin, const ImVec2& sourceMax,
 			float slideOffset, float scale, const ImRect& visible, const FlyoutStyle& style, bool& canOpen)
 		{
-			const float gap = kFlyoutGap * scale;
+			const float gap = style.verticalGap * scale;
 			const float horizontalPivot = style.centerOnSource ? 0.5f : 1.0f;
 			ImVec2 pos(
 				style.centerOnSource ? (sourceMin.x + sourceMax.x) * 0.5f : sourceMax.x,
@@ -3182,5 +3186,20 @@ namespace Util
 	{
 		const float progress = std::clamp(state.openProgress, 0.0f, 1.0f);
 		return 1.0f - (1.0f - progress) * (1.0f - progress);
+	}
+
+	ImU32 GetColorChannelMarker(ColorChannel channel)
+	{
+		constexpr std::array markers{
+			IM_COL32(240, 20, 20, 255),
+			IM_COL32(20, 240, 20, 255),
+			IM_COL32(20, 20, 240, 255),
+		};
+		return markers[static_cast<size_t>(channel)];
+	}
+
+	void SetNextItemColorMarker(ColorChannel channel)
+	{
+		ImGui::SetNextItemColorMarker(GetColorChannelMarker(channel));
 	}
 }  // namespace Util

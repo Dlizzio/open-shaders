@@ -739,7 +739,7 @@ def collect_settings_components(
         seen_classes = set()
         for container_name, child_type in re.findall(
                 r"\b([A-Za-z_]\w*)\s*\[[^\]]+\]\s*=\s*"
-                r"std::make_unique\s*<\s*([A-Za-z_]\w*(?:::\w+)*)\s*>", text):
+                r"std::make_(?:unique|shared)\s*<\s*([A-Za-z_]\w*(?:::\w+)*)\s*>", text):
             child_name = child_type.split("::")[-1]
             if child_name in seen_classes:
                 continue
@@ -951,6 +951,7 @@ def collect_tab_selector_roots(
     method_pattern = re.compile(
         r"\b(?:bool|void)\s+([A-Za-z_]\w*)::Draw[A-Za-z_]\w*\s*\([^;{]*\)\s*(?:const\s*)?\{")
     tab_pattern = re.compile(r"\b(?:ImGui|Util)::BeginTabItem\s*\(")
+    end_tab_pattern = re.compile(r"\b(?:ImGui|Util)::EndTabItem\s*\(\s*\)\s*;")
     setting_pattern = re.compile(
         r"\b(?:settings|debugSettings|[A-Za-z_]\w*Settings)\."
         r"([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)")
@@ -971,13 +972,43 @@ def collect_tab_selector_roots(
                 close = find_matching_paren(body, tab.end() - 1)
                 if close < 0:
                     continue
+                translated = extract_i18n_call(body[tab.start():close + 1], prefix)
+                if not translated:
+                    continue
+                guard_prefix = re.search(r"\bif\s*\(\s*!\s*$", masked_body[:tab.start()])
+                if guard_prefix:
+                    cursor = close + 1
+                    while cursor < len(masked_body) and masked_body[cursor].isspace():
+                        cursor += 1
+                    if cursor >= len(masked_body) or masked_body[cursor] != ")":
+                        continue
+                    cursor += 1
+                    while cursor < len(masked_body) and masked_body[cursor].isspace():
+                        cursor += 1
+
+                    if cursor < len(masked_body) and masked_body[cursor] == "{":
+                        guard_end = find_matching_brace(body, cursor)
+                        if guard_end < 0 or not re.fullmatch(
+                                r"\s*return\s*;\s*", masked_body[cursor + 1:guard_end]):
+                            continue
+                        guard_end += 1
+                    else:
+                        return_statement = re.match(r"return\s*;", masked_body[cursor:])
+                        if not return_statement:
+                            continue
+                        guard_end = cursor + return_statement.end()
+
+                    end_tab = end_tab_pattern.search(masked_body, guard_end)
+                    if end_tab:
+                        tabs.append((guard_end, end_tab.start(), translated[1], translated[0]))
+                    continue
+
                 block_start = masked_body.find("{", close + 1)
                 statement_end = masked_body.find(";", close + 1)
                 if block_start < 0 or (statement_end >= 0 and statement_end < block_start):
                     continue
                 block_end = find_matching_brace(body, block_start)
-                translated = extract_i18n_call(body[tab.start():close + 1], prefix)
-                if block_end >= 0 and translated:
+                if block_end >= 0:
                     tabs.append((block_start, block_end, translated[1], translated[0]))
 
             for setting in setting_pattern.finditer(masked_body):
@@ -1323,8 +1354,13 @@ def extract_control_setting_path(
         return normalize_setting_path(setting_match.group(1))
 
     for alias, setting_path in aliases.items():
-        if re.search(rf"(?:&|\b){re.escape(alias)}\b", storage_argument):
-            return setting_path
+        alias_storage = re.search(
+            rf"(?:&|\b){re.escape(alias)}\b"
+            r"((?:(?:\[[^\]]+\])|(?:\.[A-Za-z_]\w*(?:\(\))?))*)",
+            storage_argument)
+        if alias_storage:
+            suffix = normalize_setting_path(alias_storage.group(1))
+            return (*setting_path, *suffix)
 
     return None
 
@@ -3392,7 +3428,7 @@ def _project_standard_controls(
 
     projected_helpers = collect_projected_numeric_helpers(paths)
     for function in functions:
-        if function.name != "DrawSettings" or not function.owner:
+        if function not in draw_control_functions or not function.owner:
             continue
         aliases = collect_local_setting_aliases(function.body)
         source_text = text_by_path[function.source] + (
@@ -3450,7 +3486,7 @@ def _project_standard_controls(
 
     mapped_helpers = collect_mapped_combo_helpers(paths)
     for function in functions:
-        if function.name != "DrawSettings" or not function.owner:
+        if function not in draw_control_functions or not function.owner:
             continue
         aliases = collect_local_setting_aliases(function.body)
         for helper_name, summary in mapped_helpers.items():
@@ -3537,7 +3573,7 @@ def _project_standard_controls(
                 storage = call_args[summary.storage_parameter]
                 owner = ""
                 path = None
-                if caller.name == "DrawSettings" and caller.owner:
+                if caller in draw_control_functions and caller.owner:
                     pseudo = [""] * (control_storage_argument_index(summary.control_kind) + 1)
                     pseudo[-1] = storage
                     path = extract_control_setting_path(

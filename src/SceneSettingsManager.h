@@ -139,6 +139,25 @@ public:
 		json value;
 	};
 
+	/// Summary for one ownership layer across every Scene Manager context.
+	struct EntryLayerSummary
+	{
+		size_t count = 0;
+		size_t paused = 0;
+
+		bool Empty() const { return count == 0; }
+		bool AllPaused() const { return count != 0 && paused == count; }
+	};
+
+	/// Result of exporting user settings into overwrite files.
+	struct OverwriteExportResult
+	{
+		size_t writtenFiles = 0;
+		size_t failedFiles = 0;
+
+		bool Succeeded() const { return writtenFiles != 0 && failedFiles == 0; }
+	};
+
 	// --- Generic Entry Management (scene-type agnostic) ---
 
 	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
@@ -174,9 +193,20 @@ public:
 	void DeleteAllUserSettings(SceneType type);
 
 	/// Export selected user entries to grouped per-feature overwrite JSON files.
-	void ExportUserSettingsToOverwrites(SceneType type, const std::vector<size_t>& indices, const std::string& modName);
-	void ExportWeatherUserSettingsToOverwrites(RE::FormID weatherId, const std::vector<size_t>& indices, const std::string& modName);
+	OverwriteExportResult ExportUserSettingsToOverwrites(
+		SceneType type, const std::vector<size_t>& indices, const std::string& modName);
+	OverwriteExportResult ExportWeatherUserSettingsToOverwrites(
+		RE::FormID weatherId, const std::vector<size_t>& indices, const std::string& modName);
 	void DeleteAllWeatherUserSettings(RE::FormID weatherId);
+
+	/// Return counts for one ownership layer across all scene contexts.
+	EntryLayerSummary GetEntryLayerSummary(EntrySource source);
+	/// Pause or unpause one ownership layer as one save and resolver transaction.
+	void SetEntryLayerPaused(EntrySource source, bool paused);
+	/// Delete every user entry or every loaded overwrite as one resolver transaction.
+	void DeleteEntryLayer(EntrySource source);
+	/// Export every loaded user setting and refresh the overwrite layer once.
+	OverwriteExportResult ExportAllUserSettingsToOverwrites(const std::string& modName);
 
 	// --- Scene Application ---
 
@@ -194,6 +224,8 @@ public:
 	bool IsActiveSceneSetting(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
 	void CaptureExternalFeatureChanges(Feature* feature);
+	/// Replace active scene values in a serialized global settings document with their baselines.
+	void RestoreBaselinesInSerializedSettings(json& settings) const;
 
 	/// Per-feature pause: temporarily disable all scene-specific settings for a feature
 	bool IsFeaturePaused(const std::string& featureShortName) const;
@@ -325,8 +357,10 @@ public:
 		std::string displayName;
 		std::string componentDisplayName;
 		std::vector<std::string> displayPath;
+		std::vector<std::string> tableDisplayPath;
 		SettingControlType controlType = SettingControlType::Scalar;
 		std::int8_t componentIndex = -1;
+		std::int8_t colorChannelIndex = -1;
 		std::int8_t componentStart = -1;
 		std::uint8_t componentCount = 0;
 		bool aggregateAll = false;
@@ -371,8 +405,8 @@ public:
 
 	// --- Per-Weather Scene Settings ---
 
-	/// Per-weather configuration: all entries are per-period (TOD).
-	/// The UI flat/TOD toggle is a view-only preference, not a data mode.
+	/// Per-weather configuration: all entries remain stored per-period (TOD).
+	/// The flat/TOD preference controls presentation and whole-weather copy behavior.
 	struct WeatherSceneConfig
 	{
 		std::vector<SettingEntry> entries;
@@ -398,7 +432,7 @@ public:
 		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
 		std::optional<EntrySource> source = std::nullopt);
 
-	/// Weather UI preference: show TOD table vs flat view (view-only, data is always per-period).
+	/// Weather preference: show and copy one period at a time versus the whole weather.
 	bool IsWeatherShowTimeOfDay(RE::FormID weatherId);
 	void SetWeatherShowTimeOfDay(RE::FormID weatherId, bool show);
 
@@ -409,6 +443,7 @@ public:
 	enum class LocationTargetType
 	{
 		Region,
+		LocationType,
 		Location,
 		Cell
 	};
@@ -419,6 +454,7 @@ public:
 		std::string formKey;
 		std::string name;
 		std::string cocCode;
+		std::vector<std::string> locationTypes;
 		RE::FormID formId = 0;
 	};
 
@@ -431,9 +467,9 @@ public:
 		std::vector<SettingEntry> entries;
 	};
 
-	/// Return cached current targets in region, parent-location, and cell priority order.
+	/// Return cached current targets in location-type, region, parent-location, and cell priority order.
 	const std::vector<LocationTarget>& GetCurrentLocationTargets() const;
-	/// Return all region, location, and named cell targets available for persistent management.
+	/// Return all location-type, region, location, and named cell targets available for persistent management.
 	const std::vector<LocationTarget>& GetLocationManagementTargets() const;
 	const LocationSceneConfig& GetLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	bool HasLocationConfig(LocationTargetType type, std::string_view formKey) const;
@@ -455,7 +491,7 @@ public:
 	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
 		const std::string& settingKey, std::optional<EntrySource> source = std::nullopt) const;
-	void ExportLocationUserSettingsToOverwrites(LocationTargetType type, const std::string& formKey,
+	OverwriteExportResult ExportLocationUserSettingsToOverwrites(LocationTargetType type, const std::string& formKey,
 		const std::vector<size_t>& indices, const std::string& modName);
 	void DeleteAllLocationUserSettings(LocationTargetType type, const std::string& formKey);
 	static std::filesystem::path GetLocationOverwritesDir(LocationTargetType type);
@@ -491,28 +527,23 @@ public:
 	/// Kind of scene context participating in a copy operation.
 	enum class SceneContextType : std::uint8_t
 	{
+		Interior,
 		TimeOfDay,
 		Weather,
 		Location,
 	};
 
-	/// Stable identity for a time period, weather period, or location target.
+	/// Stable identity for an interior, time period, weather period, or location target.
 	struct SceneContextId
 	{
 		SceneContextType type = SceneContextType::TimeOfDay;
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count;
+		bool allPeriods = false;
 		RE::FormID weatherId = 0;
 		LocationTargetType locationType = LocationTargetType::Location;
 		std::string locationFormKey;
 
 		auto operator<=>(const SceneContextId&) const = default;
-	};
-
-	/// Amount copied from a source context.
-	enum class CopyScope : std::uint8_t
-	{
-		EntireContext,
-		Setting,
 	};
 
 	/// How an existing destination user setting is handled.
@@ -523,7 +554,7 @@ public:
 		Cancel,
 	};
 
-	/// One source context with settings compatible with a destination.
+	/// One source context with active scene settings.
 	struct CopySource
 	{
 		SceneContextId context;
@@ -531,14 +562,26 @@ public:
 		size_t settingCount = 0;
 	};
 
-	/// One physical setting available to copy.
+	/// One logical setting exposed by a source context.
+	struct CopySourceSetting
+	{
+		/// Representative physical identity; aggregate members resolve to the same logical control.
+		SettingIdentity setting;
+		std::string displayName;
+	};
+
+	/// One logical setting available to copy.
 	struct CopyCandidate
 	{
+		/// Representative physical identity; aggregate members resolve to the same logical control.
 		SettingIdentity setting;
 		std::string displayName;
 		json value;
 		bool compatible = false;
 		bool conflicts = false;
+		bool maskedByOverwrite = false;
+		TimeOfDayPeriod sourcePeriod = TimeOfDayPeriod::Count;
+		TimeOfDayPeriod destinationPeriod = TimeOfDayPeriod::Count;
 	};
 
 	/// Aggregate result of one transactional copy.
@@ -555,18 +598,19 @@ public:
 		bool Changed() const { return copied != 0 || overwritten != 0; }
 	};
 
-	/// Return non-empty contexts that contain compatible data for a destination.
-	std::vector<CopySource> GetCopySources(const SceneContextId& destination,
-		CopyScope scope = CopyScope::EntireContext,
-		const std::optional<SettingIdentity>& setting = std::nullopt) const;
+	/// Return non-empty contexts that can participate as copy sources.
+	std::vector<CopySource> GetCopySources(EntrySource sourceLayer) const;
+	/// Return the logical settings in one source context without applying destination policy.
+	std::vector<CopySourceSetting> GetCopySourceSettings(
+		const SceneContextId& source, EntrySource sourceLayer) const;
 	/// Inspect the settings and conflicts in a proposed copy without mutating state.
 	std::vector<CopyCandidate> GetCopyCandidates(const SceneContextId& source,
-		const SceneContextId& destination, CopyScope scope = CopyScope::EntireContext,
-		const std::optional<SettingIdentity>& setting = std::nullopt) const;
+		const SceneContextId& destination, EntrySource sourceLayer,
+		std::span<const SettingIdentity> settings) const;
 	/// Copy settings as one validated mutation and one save/reapply operation.
 	CopyResult CopySettings(const SceneContextId& source, const SceneContextId& destination,
-		CopyConflictPolicy conflictPolicy, CopyScope scope = CopyScope::EntireContext,
-		const std::optional<SettingIdentity>& setting = std::nullopt);
+		EntrySource sourceLayer, CopyConflictPolicy conflictPolicy,
+		std::span<const SettingIdentity> settings);
 
 	/// Enables location discovery once Skyrim form data is guaranteed to be available.
 	void OnDataLoaded();
@@ -647,6 +691,7 @@ private:
 	ResolvedSettingMap baselineSettings;
 	ResolvedSettingMap appliedSettings;
 	ResolvedSettingMap resolvedSettingsScratch;
+	ResolvedSettingMap locationTransitionLowerSettingsScratch;
 	std::set<std::string> restoreFailureWarnings;
 	std::map<std::string, std::chrono::steady_clock::time_point> restoreRetryAfter;
 	struct ApplyFailureState
@@ -660,12 +705,15 @@ private:
 	struct PendingApplyVerification
 	{
 		std::uint32_t appliedFrame = 0;
+		std::chrono::steady_clock::time_point deadline;
 		std::vector<CatalogSceneSettingUpdate> updates;
+		std::vector<SettingAddress> restorationAddresses;
 		size_t signature = 0;
 		bool transition = false;
 	};
 	std::map<std::string, PendingApplyVerification> pendingApplyVerifications;
 	std::map<std::string, json> featureApplyDocuments;
+	static constexpr auto kApplyVerificationMaxDeferral = std::chrono::seconds(1);
 	static constexpr auto kApplyRetryDelay = std::chrono::seconds(2);
 	bool resolverDirty = true;
 	bool resolverSuspended = false;
@@ -675,11 +723,13 @@ private:
 	bool lastResolvedInterior = false;
 	RE::FormID lastResolvedLocationId = 0;
 	RE::FormID lastResolvedCellId = 0;
+	RE::FormID lastResolvedRegionId = 0;
 	RE::FormID lastResolvedWorldspaceId = 0;
 	float lastResolvedHour = -1.0f;
 	RE::FormID lastResolvedCurrentWeatherId = 0;
 	RE::FormID lastResolvedPreviousWeatherId = 0;
 	float lastResolvedWeatherLerp = -1.0f;
+	bool suppressLocationTransitionUntilContextResolved = false;
 	mutable RE::FormID cachedPreviousWeatherId = 0;
 	mutable RE::FormID cachedTargetLocationId = 0;
 	mutable RE::FormID cachedTargetCellId = 0;
@@ -696,6 +746,17 @@ private:
 		float startTime = 0.0f;
 		float duration = 0.0f;
 		bool restoreAtEnd = false;
+		bool exitsLocationLayer = false;
+		bool liveStart = false;
+		bool liveTarget = true;
+		float startNoLocationWeight = 0.0f;
+		float startUserLocationWeight = 0.0f;
+		float startUserLocationWeightedValue = 0.0f;
+		float startOverwriteLocationWeight = 0.0f;
+		float startOverwriteLocationWeightedValue = 0.0f;
+		bool hasTargetLocationValue = false;
+		float targetLocationValue = 0.0f;
+		EntrySource targetLocationSource = EntrySource::User;
 	};
 	struct LocationTransitionBatch
 	{
@@ -707,10 +768,13 @@ private:
 	std::map<SettingAddress, LocationTransition> activeLocationTransitions;
 	std::map<std::string, LocationTransitionBatch> locationTransitionBatches;
 	bool locationTransitionBatchesDirty = true;
+	std::optional<float> lastLocationTransitionApplyTime;
 	ResolvedSettingMap lastLocationOverrideValues;
+	std::map<SettingAddress, EntrySource> lastLocationOverrideSources;
 	std::map<SettingAddress, float> lastLocationTransitionDurations;
 	std::map<SettingAddress, float> pendingLocationTransitionDurations;
-	ResolvedSettingMap cachedLocationOverrides;
+	ResolvedSettingMap cachedLocationUserSettings;
+	ResolvedSettingMap cachedLocationOverwriteSettings;
 	bool cachedLocationOverridesValid = false;
 	bool locationOverridesDirty = true;
 
@@ -728,11 +792,18 @@ private:
 		std::uint64_t revision = std::numeric_limits<std::uint64_t>::max();
 		PeriodSettingMap values;
 	};
+	static constexpr size_t kEntrySourceCount = static_cast<size_t>(EntrySource::Overwrite) + 1;
+	static constexpr size_t kCombinedPeriodValueCacheIndex = kEntrySourceCount;
+	static constexpr size_t GetPeriodValueCacheIndex(std::optional<EntrySource> source)
+	{
+		return source ? static_cast<size_t>(*source) : kCombinedPeriodValueCacheIndex;
+	}
 	std::uint64_t sceneValueRevision = 0;
-	mutable CachedPeriodSettingMap timeOfDayValueGroups;
-	mutable std::map<RE::FormID, CachedPeriodSettingMap> weatherValueGroups;
-	const PeriodSettingMap& BuildTimeOfDayValueGroups() const;
-	const PeriodSettingMap& BuildWeatherValueGroups(RE::FormID weatherId) const;
+	mutable std::array<CachedPeriodSettingMap, kEntrySourceCount + 1> timeOfDayValueGroups;
+	mutable std::map<RE::FormID, std::array<CachedPeriodSettingMap, kEntrySourceCount + 1>> weatherValueGroups;
+	const PeriodSettingMap& BuildTimeOfDayValueGroups(std::optional<EntrySource> source = std::nullopt) const;
+	const PeriodSettingMap& BuildWeatherValueGroups(
+		RE::FormID weatherId, std::optional<EntrySource> source = std::nullopt) const;
 
 	// --- Central runtime resolver ---
 	void ResolveAndApply(bool force = false, bool allowLocationTransitions = true);
@@ -740,17 +811,23 @@ private:
 	ResolvedSettingMap& BuildResolvedSettings(bool collectLocationTransitionDurations);
 	void ApplyResolvedSettings(const ResolvedSettingMap& resolved, bool forceRetry);
 	void StartLocationTransitions(const ResolvedSettingMap& resolved, float now, bool animateChanges);
+	void RefreshLocationTransitionEndpoints(const ResolvedSettingMap& resolved);
 	bool AdvanceLocationTransitions(float now);
 	void RebuildLocationTransitionBatches();
 	void ClearLocationTransitions();
 	void RestoreAppliedSettings();
-	void ResolveInteriorSettings(ResolvedSettingMap& resolved) const;
+	void ResolveInteriorSettings(ResolvedSettingMap& resolved, EntrySource source) const;
+	void ResolveExteriorSettings(ResolvedSettingMap& resolved,
+		const std::array<float, kPeriodCount>& factors,
+		const ResolvedSettingMap* userLocationValues) const;
 	void ResolveTimeOfDaySettings(ResolvedSettingMap& resolved, const PeriodSettingMap& values,
 		const std::array<float, kPeriodCount>& factors) const;
 	void ResolveWeatherSettings(ResolvedSettingMap& resolved, const PeriodSettingMap& timeOfDayValues,
-		const std::array<float, kPeriodCount>& factors) const;
+		const std::array<float, kPeriodCount>& factors,
+		std::optional<EntrySource> valueSource = std::nullopt) const;
 	void ResolveLocationSettings(ResolvedSettingMap& resolved,
-		const std::vector<LocationTarget>& locationTargets, bool collectTransitionDurations);
+		const std::vector<LocationTarget>& locationTargets, EntrySource source,
+		bool collectTransitionDurations);
 	void OverlayEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
 		SceneType type, std::optional<EntrySource> source = std::nullopt,
 		std::map<SettingAddress, float>* transitionDurations = nullptr) const;
@@ -769,8 +846,9 @@ private:
 	bool ApplyCatalogSceneSettings(
 		Feature& feature, const std::vector<CatalogSceneSettingUpdate>& updates);
 	void ScheduleApplyVerification(std::string_view featureShortName,
-		const std::vector<CatalogSceneSettingUpdate>& updates, size_t signature, bool transition);
-	void VerifyPendingApplies();
+		const std::vector<CatalogSceneSettingUpdate>& updates, size_t signature, bool transition,
+		std::span<const SettingAddress> restorationAddresses = {});
+	void VerifyPendingApplies(bool overdueOnly = false);
 
 	// --- Per-Location helpers ---
 	static std::string GetLocationConfigKey(LocationTargetType type, std::string_view formKey);
@@ -818,9 +896,10 @@ private:
 
 	const std::vector<SettingEntry>* GetCopyContextEntries(const SceneContextId& context) const;
 	std::vector<CopyCandidate> BuildCopyCandidates(const SceneContextId& source,
-		const SceneContextId& destination, CopyScope scope,
-		const std::optional<SettingIdentity>& setting) const;
+		const SceneContextId& destination, EntrySource sourceLayer,
+		std::span<const SettingIdentity> settings) const;
 	static bool IsValidSceneContext(const SceneContextId& context);
+	void ReloadOverwriteEntries();
 
 	// --- Overwrite discovery helper ---
 	void DiscoverOverwritesInDir(SceneType type, const std::filesystem::path& dir,

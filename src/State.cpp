@@ -638,7 +638,6 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 void State::SaveToJson(nlohmann::json& settings)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
-	SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 	const auto shaderCache = globals::shaderCache;
 
 	globals::menu->Save(settings["Menu"]);
@@ -690,11 +689,13 @@ void State::SaveToJson(nlohmann::json& settings)
 			feature->Save(settings);
 		}
 	}
+	SceneSettingsManager::GetSingleton()->RestoreBaselinesInSerializedSettings(settings);
 }
 
 void State::LoadFromJson(nlohmann::json& settings)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard(*SceneSettingsManager::GetSingleton());
 	const auto shaderCache = globals::shaderCache;
 
 	// Load Menu settings

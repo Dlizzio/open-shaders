@@ -15,9 +15,17 @@ SPEC.loader.exec_module(GENERATOR)
 SYNTHETIC_HEADER = r'''
 struct SyntheticFeature : Feature
 {
+    struct WaterSettings
+    {
+        float amount = 0.0f;
+    };
+
     struct Settings
     {
         float regular = 0.0f;
+        WaterSettings water{};
+        float guardSentinel = 0.0f;
+        float2 unboundedRange{};
         float constrained = 0.0f;
         int iterations = 0;
         float3 standardColor3{};
@@ -42,8 +50,15 @@ struct SyntheticFeature : Feature
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+    SyntheticFeature::WaterSettings,
+    amount)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     SyntheticFeature::Settings,
     regular,
+    water,
+    guardSentinel,
+    unboundedRange,
     constrained,
     iterations,
     standardColor3,
@@ -122,12 +137,20 @@ bool ColorEdit4(const char* label, Feature* feature, const char* settingName, fl
 }
 }
 
+void DrawGuardedSlider(const char* label, float& value, float minimum, float maximum)
+{
+    ImGui::SliderFloat(label, &value, minimum, maximum);
+}
+
 void SyntheticFeature::DrawSettings()
 {
     if (ImGui::BeginTabItem(T(TKEY("advanced"), "Advanced"))) {
         ImGui::SeparatorText(T(TKEY("shape"), "Shape"));
         ImGui::SliderFloat(
             T(TKEY("regular"), "Regular"), &settings.regular, -1.0f, 1.0f);
+        ImGui::InputFloat2(
+            T(TKEY("unbounded_range"), "Unbounded Range"),
+            &settings.unboundedRange.x, "%.3f");
 
         const ImGuiSliderFlags constrainedFlags = ImGuiSliderFlags_AlwaysClamp;
         ImGui::SliderFloat(
@@ -202,6 +225,21 @@ void SyntheticFeature::DrawSettings()
         }
         ImGui::EndTabItem();
     }
+
+    DrawWaterSettings();
+}
+
+void SyntheticFeature::DrawWaterSettings()
+{
+    if (!ImGui::BeginTabItem(T(TKEY("water"), "Water")))
+        return;
+
+    auto& water = settings.water;
+    DrawGuardedSlider(
+        T(TKEY("water_amount"), "Water Amount"), water.amount, 0.0f, 2.0f);
+    ImGui::EndTabItem();
+
+    settings.guardSentinel = settings.guardSentinel;
 }
 
 void SyntheticFeature::SaveSettings(json& output)
@@ -253,6 +291,69 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(integer["sourceWidget"], "SliderInt")
         self.assertEqual(integer["type"], "Integer")
         self.assertEqual((integer["minimum"], integer["maximum"]), (1.0, 8.0))
+
+    def test_unbounded_aggregate_uses_default_component_labels_without_bounds(self):
+        entries = [
+            self.entries_by_id[("unboundedRange", component)]
+            for component in ("x", "y")
+        ]
+
+        self.assertEqual(
+            [entry["componentDisplayName"] for entry in entries],
+            ["", ""])
+        self.assertTrue(all(entry["componentDisplayNameKey"] == "" for entry in entries))
+        self.assertTrue(all(entry["sourceWidget"] == "InputFloat2" for entry in entries))
+        self.assertTrue(all(not entry["hasNumericBounds"] for entry in entries))
+
+    def test_early_return_tab_and_nested_draw_helper_are_discovered(self):
+        guarded = self.entries_by_id[("water", "amount")]
+        sentinel = self.entries_by_id[("", "guardSentinel")]
+
+        self.assertEqual(guarded["selectorPath"], "Water")
+        self.assertEqual(guarded["displayName"], "Water Amount")
+        self.assertEqual(guarded["sourceWidget"], "SliderFloat")
+        self.assertEqual((guarded["minimum"], guarded["maximum"]), (0.0, 2.0))
+        self.assertEqual(sentinel["selectorPath"], "")
+
+    def test_component_discovery_accepts_unique_and_shared_factories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            header = root / "FactoryFeature.h"
+            source = root / "FactoryFeature.cpp"
+            header.write_text(r'''
+struct UniqueComponent
+{
+    std::string GetType() { return "Unique"; }
+    std::string GetDisplayName() { return "Unique Component"; }
+};
+
+struct SharedComponent
+{
+    std::string GetType() { return "Shared"; }
+    std::string GetDisplayName() { return "Shared Component"; }
+};
+
+struct FactoryFeature : Feature
+{
+    std::string GetShortName() { return "Factory"; }
+    std::string GetName() { return "Factory Feature"; }
+};
+''', encoding="utf-8")
+            source.write_text(r'''
+void FactoryFeature::Setup()
+{
+    pipeline[0] = std::make_unique<UniqueComponent>();
+    pipeline[1] = std::make_shared<SharedComponent>();
+}
+''', encoding="utf-8")
+
+            paths = [header, source]
+            features = GENERATOR.collect_features([header])
+            components = GENERATOR.collect_settings_components(features, paths)
+
+            self.assertEqual(
+                {component[0] for component in components["FactoryFeature"]},
+                {"UniqueComponent", "SharedComponent"})
 
     def test_standard_colors_are_bounded_and_hdr_colors_are_unbounded(self):
         for field, component_count in (("standardColor3", 3), ("standardColor4", 4)):

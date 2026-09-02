@@ -23,14 +23,20 @@ namespace SceneSettingsPolicy
 		{ "ExponentialHeightFog", "volumetricHistoryMissSampleCount" },
 		{ "ExponentialHeightFog", "volumetricSampleJitterMultiplier" },
 		{ "ExponentialHeightFog", "volumetricUpsampleJitterMultiplier" },
+		{ "ImageBasedLighting", "DisableInInteriors" },
+		{ "ImageBasedLighting", "DisableInWorldMap" },
+		{ "ImageBasedLighting", "DisableInLoadingScreen" },
 		{ "LightLimitFix", "ShowShadowOverlay" },
 		{ "PostProcessing", "Border" },
+		{ "PostProcessing", "Depth of Field", "HighlightShape" },
 		{ "PostProcessing", "LUT" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "enableTonemap" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "useOpenDrt" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "currentTonemapper" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "tonemapParams" },
+		{ "PostProcessing", "Motion Blur", "VelocityScale" },
 		{ "ScreenSpaceGI", "DebugUseUnjitteredCameraReconstruction" },
+		{ "ScreenSpaceGI", "ResourceProfile" },
 	};
 
 	inline const std::vector<SettingPolicyPath> kLocationFeatureWhitelist = {

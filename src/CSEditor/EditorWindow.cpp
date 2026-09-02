@@ -215,7 +215,10 @@ std::string EditorWindow::ResolveEditorId(RE::TESForm* form, const WidgetVec& wi
 
 void EditorWindow::ShowObjectsWindow()
 {
-	Util::BeginWithRoundedClose(T(TKEY("weather_lighting_browser"), "OS Editor Browser"), nullptr);
+	if (!Util::BeginWithRoundedClose(T(TKEY("weather_lighting_browser"), "OS Editor Browser"), nullptr)) {
+		ImGui::End();
+		return;
+	}
 
 	// Reset filter state when the user switches categories so stale column
 	// selections (e.g. Status) don't hide all items in the new category.
@@ -901,7 +904,12 @@ void EditorWindow::ShowObjectsWindow()
 
 void EditorWindow::ShowViewportWindow()
 {
-	Util::BeginWithRoundedClose(T(TKEY("viewport"), "Viewport"), nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+	viewportWindowVisible = Util::BeginWithRoundedClose(
+		T(TKEY("viewport"), "Viewport"), nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+	if (!viewportWindowVisible) {
+		ImGui::End();
+		return;
+	}
 
 	// The size of the image in ImGui																														   // Get the available space in the current window
 	ImVec2 availableSpace = ImGui::GetContentRegionAvail();
@@ -1484,7 +1492,7 @@ void EditorWindow::Draw()
 	if (!IsViewportActive()) {
 		delete tempTexture;
 		tempTexture = nullptr;
-	} else {
+	} else if (viewportWindowVisible) {
 		auto renderer = globals::game::renderer;
 		if (renderer) {
 			auto& framebuffer = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
@@ -1569,7 +1577,10 @@ void EditorWindow::LoadSettings()
 
 void EditorWindow::ShowSettingsWindow()
 {
-	Util::BeginWithRoundedClose(T(TKEY("settings"), "Settings"), &showSettingsWindow);
+	if (!Util::BeginWithRoundedClose(T(TKEY("settings"), "Settings"), &showSettingsWindow)) {
+		ImGui::End();
+		return;
+	}
 
 	if (ImGui::BeginTable("SettingsTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInner | ImGuiTableFlags_NoHostExtendX)) {
 		ImGui::TableSetupColumn(T(TKEY("options"), "Options"), ImGuiTableColumnFlags_WidthStretch, 0.3f);

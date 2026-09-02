@@ -904,7 +904,8 @@ namespace Util
 
 	/** @brief Begins a constrained combo with a focused search field. Call EndSearchableCombo when true. */
 	bool BeginSearchableCombo(const char* label, const char* previewValue,
-		ImGuiComboFlags flags = ImGuiComboFlags_None, const void* storageAddress = nullptr);
+		ImGuiComboFlags flags = ImGuiComboFlags_None, const void* storageAddress = nullptr,
+		int maxVisibleItems = 0);
 
 	/** @brief Ends a combo opened by BeginSearchableCombo. */
 	void EndSearchableCombo();
@@ -1788,9 +1789,23 @@ namespace Util
 		float windowRounding;
 		float windowBackgroundAlpha;
 		float contentAlpha;
+		float verticalGap = 2.0f;
 		bool centerOnSource = false;
 		bool keepOpenOnSourcePress = false;
 	};
+
+	enum class ColorChannel : std::uint8_t
+	{
+		Red,
+		Green,
+		Blue
+	};
+
+	/// Returns the standard marker color for an RGB channel.
+	ImU32 GetColorChannelMarker(ColorChannel channel);
+
+	/// Applies the standard colored marker to the next RGB channel slider.
+	void SetNextItemColorMarker(ColorChannel channel);
 
 	class FlyoutScope
 	{

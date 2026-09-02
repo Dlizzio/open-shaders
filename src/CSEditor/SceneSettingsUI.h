@@ -64,6 +64,7 @@ namespace SceneSettingsUI
 		std::array<float, kPeriodCount> valueColumnWidths{};
 		float auxiliaryColumnWidth = 0.0f;
 		float sectionWidth = 0.0f;
+		bool checkboxOnlyValueColumn = false;
 	};
 
 	/// Build a SourceGroup from entries, optionally filtered to a single source.
@@ -85,29 +86,63 @@ namespace SceneSettingsUI
 		std::vector<size_t> settings;
 	};
 
-	/// Cached copy-picker data owned by one add-setting dialog.
+	/// Cached data for the standalone copy panel.
 	struct CopySettingState
 	{
+		EntrySource sourceLayer = EntrySource::User;
 		std::uint64_t revision = 0;
-		std::optional<SceneSettingsManager::SceneContextId> destination;
+		std::string locale;
+		std::vector<SceneSettingsManager::CopySource> availableSources;
 		std::vector<SceneSettingsManager::CopySource> sources;
 		std::vector<std::string> sourceLabels;
+		std::optional<SceneSettingsManager::SceneContextType> sourceTypeFilter;
+		std::optional<SceneSettingsManager::SceneContextId> sourceContextFilter;
+		std::string sourceSearch;
+		std::optional<SceneSettingsManager::SceneContextId> selectedSourceContext;
 		int selectedSource = -1;
-		std::vector<SceneSettingsManager::CopyCandidate> candidates;
-		std::vector<std::string> candidateLabels;
-		int selectedCandidate = 0;
+		std::vector<SceneSettingsManager::CopySourceSetting> sourceSettings;
+		std::string settingSearch;
+		std::vector<size_t> visibleSettingIndices;
+		std::optional<SceneSettingsManager::SceneContextId> selectionSourceContext;
+		std::set<SceneSettingsManager::SettingIdentity> selectedSettings;
+		std::optional<SceneSettingsManager::SceneContextId> preflightSourceContext;
+		std::optional<SceneSettingsManager::SceneContextId> preflightDestination;
+		std::optional<EntrySource> preflightSourceLayer;
+		std::vector<SceneSettingsManager::SettingIdentity> preflightSettings;
+		std::vector<SceneSettingsManager::CopyCandidate> preflightCandidates;
+		std::optional<SceneSettingsManager::SceneContextId> conflictSource;
+		std::optional<SceneSettingsManager::SceneContextId> conflictDestination;
+		EntrySource conflictSourceLayer = EntrySource::User;
+		std::vector<SceneSettingsManager::SettingIdentity> conflictSettings;
 		bool conflictPromptOpen = false;
 
 		void Reset()
 		{
+			sourceLayer = EntrySource::User;
 			revision = 0;
-			destination.reset();
+			locale.clear();
+			availableSources.clear();
 			sources.clear();
 			sourceLabels.clear();
+			sourceTypeFilter.reset();
+			sourceContextFilter.reset();
+			sourceSearch.clear();
+			selectedSourceContext.reset();
 			selectedSource = -1;
-			candidates.clear();
-			candidateLabels.clear();
-			selectedCandidate = 0;
+			sourceSettings.clear();
+			settingSearch.clear();
+			visibleSettingIndices.clear();
+			selectionSourceContext.reset();
+			selectedSettings.clear();
+			preflightSourceContext.reset();
+			preflightDestination.reset();
+			preflightSourceLayer.reset();
+			preflightSettings.clear();
+			preflightCandidates.clear();
+			conflictSource.reset();
+			conflictDestination.reset();
+			conflictSourceLayer = EntrySource::User;
+			conflictSettings.clear();
 			conflictPromptOpen = false;
 		}
 	};
@@ -128,8 +163,7 @@ namespace SceneSettingsUI
 		std::uint64_t cachedAddedRevision = 0;
 		bool shiftWasDown = false;
 		bool measureInitialLayout = false;
-		CopySettingState copy;
-
+		int lastDrawFrame = -1;
 		void Reset()
 		{
 			dialogOpen = false;
@@ -145,7 +179,7 @@ namespace SceneSettingsUI
 			cachedAddedRevision = 0;
 			shiftWasDown = false;
 			measureInitialLayout = false;
-			copy.Reset();
+			lastDrawFrame = -1;
 		}
 	};
 
@@ -227,6 +261,7 @@ namespace SceneSettingsUI
 		std::vector<std::vector<size_t>> flatGroups;
 		bool flatGroupsCached = false;
 		char modName[kModNameBufferSize] = "";
+		std::optional<SceneSettingsManager::OverwriteExportResult> exportResult;
 
 		void Open(const std::vector<size_t>& indices)
 		{
@@ -235,6 +270,7 @@ namespace SceneSettingsUI
 			selected.assign(indices.size(), 1);
 			flatGroups.clear();
 			flatGroupsCached = false;
+			exportResult.reset();
 		}
 	};
 
@@ -256,6 +292,9 @@ namespace SceneSettingsUI
 
 	// --- Consolidated Panel Functions ---
 
+	/// Draw page-wide Scene Manager actions before the tab bar.
+	void DrawGlobalActions();
+
 	/// Draw the full interior settings panel.
 	void DrawInteriorPanel();
 
@@ -270,4 +309,7 @@ namespace SceneSettingsUI
 
 	/// Draw settings for the current location hierarchy or cell.
 	void DrawLocationPanel();
+
+	/// Draw the standalone scene-context copy workflow.
+	void DrawCopyPanel();
 }
