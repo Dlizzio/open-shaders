@@ -118,6 +118,59 @@
 	}
 }
 
+/// @tags color, colorspace, acescg
+[numthreads(1, 1, 1)] void TestAP1WhitePointAdaptation()
+{
+	const float neutralValues[4] = { 0.18f, 1.0f, 4.0f, 10.0f };
+
+	for (int i = 0; i < 4; i++) {
+		const float3 neutral = neutralValues[i].xxx;
+		const float3 AP1 = sRGBToAP1(neutral);
+		const float3 roundtrip = AP1TosRGB(AP1);
+
+		ASSERT(IsTrue, all(abs(AP1 - neutral) < 0.0001f));
+		ASSERT(IsTrue, all(abs(roundtrip - neutral) < 0.0001f));
+	}
+}
+
+/// @tags color, colorspace, acescg
+[numthreads(1, 1, 1)] void TestAP1Roundtrip()
+{
+	const float3 testColors[4] = {
+		float3(0.2f, 0.7f, 0.3f),
+		float3(4.0f, 1.5f, 0.25f),
+		float3(-0.1f, 0.4f, 1.2f),
+		float3(10.0f, 10.0f, 10.0f)
+	};
+
+	for (int i = 0; i < 4; i++) {
+		const float3 roundtrip = AP1TosRGB(sRGBToAP1(testColors[i]));
+		ASSERT(IsTrue, all(abs(roundtrip - testColors[i]) < 0.0001f));
+	}
+}
+
+/// @tags color, colorspace, acescg, gamma
+[numthreads(1, 1, 1)] void TestAP1AuthoredTransferRoundtrip()
+{
+	const float authoredGamma = 1.8f;
+	const float3 testColors[4] = {
+		float3(1.0f, 0.0f, 0.0f),
+		float3(0.0f, 1.0f, 0.0f),
+		float3(0.0f, 0.0f, 1.0f),
+		float3(4.0f, 0.2f, 1.5f)
+	};
+
+	for (int i = 0; i < 4; i++) {
+		const float3 linearSrgb = AP1TosRGB(testColors[i]);
+		const float3 authored = Color::SignedPow(linearSrgb, rcp(authoredGamma));
+		const float3 decoded = Color::SignedPow(authored, authoredGamma);
+		const float3 roundtrip = sRGBToAP1(decoded);
+
+		ASSERT(IsTrue, all(abs(roundtrip - testColors[i]) < 0.0001f));
+		ASSERT(IsTrue, all(authored * linearSrgb >= 0.0f));
+	}
+}
+
 /// @tags color, luminance
 [numthreads(1, 1, 1)] void TestRGBToLuminanceVariants() {
 	float3 testColor = float3(0.6, 0.4, 0.3);

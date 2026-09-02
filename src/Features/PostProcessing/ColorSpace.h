@@ -1,7 +1,18 @@
 #pragma once
 
+#include <array>
+#include <format>
+#include <mutex>
+#include <string>
+#include <string_view>
+
+#include <DirectXMath.h>
+#include <SimpleMath.h>
+#include <ankerl/unordered_dense.h>
+
 // via https://www.colour-science.org/
 
+/** Returns the color spaces supported by post-processing. */
 inline const auto& getAvailableColorSpaces()
 {
 	static auto spaces = std::array{
@@ -15,7 +26,7 @@ inline const auto& getAvailableColorSpaces()
 	return spaces;
 }
 
-// Native white point chromaticity (CIE xy) for each color space
+/** Returns the native CIE xy white point for a color space. */
 inline DirectX::XMFLOAT2 getWhitePoint(std::string_view space)
 {
 	if (space == "ACEScg")
@@ -26,6 +37,51 @@ inline DirectX::XMFLOAT2 getWhitePoint(std::string_view space)
 	return { 0.31270f, 0.32900f };
 }
 
+/** Builds a Bradford chromatic adaptation matrix between two CIE xy white points. */
+inline DirectX::SimpleMath::Matrix getChromaticAdaptationMatrix(
+	const DirectX::XMFLOAT2& sourceWhitePoint,
+	const DirectX::XMFLOAT2& destinationWhitePoint)
+{
+	using DirectX::SimpleMath::Matrix;
+
+	if (sourceWhitePoint.x == destinationWhitePoint.x && sourceWhitePoint.y == destinationWhitePoint.y)
+		return Matrix::Identity;
+
+	static const Matrix bradford{ DirectX::XMFLOAT3X3{
+		0.8951f, 0.2664f, -0.1614f,
+		-0.7502f, 1.7135f, 0.0367f,
+		0.0389f, -0.0685f, 1.0296f } };
+	static const Matrix inverseBradford{ DirectX::XMFLOAT3X3{
+		0.9869929f, -0.1470543f, 0.1599627f,
+		0.4323053f, 0.5183603f, 0.0492912f,
+		-0.0085287f, 0.0400428f, 0.9684867f } };
+
+	auto xyToXYZ = [](const DirectX::XMFLOAT2& whitePoint) {
+		return DirectX::XMFLOAT3{
+			whitePoint.x / whitePoint.y,
+			1.0f,
+			(1.0f - whitePoint.x - whitePoint.y) / whitePoint.y
+		};
+	};
+	auto transform = [](const Matrix& matrix, const DirectX::XMFLOAT3& vector) {
+		return DirectX::XMFLOAT3{
+			matrix(0, 0) * vector.x + matrix(0, 1) * vector.y + matrix(0, 2) * vector.z,
+			matrix(1, 0) * vector.x + matrix(1, 1) * vector.y + matrix(1, 2) * vector.z,
+			matrix(2, 0) * vector.x + matrix(2, 1) * vector.y + matrix(2, 2) * vector.z
+		};
+	};
+
+	const auto sourceConeResponse = transform(bradford, xyToXYZ(sourceWhitePoint));
+	const auto destinationConeResponse = transform(bradford, xyToXYZ(destinationWhitePoint));
+	const Matrix coneResponseScale{ DirectX::XMFLOAT3X3{
+		destinationConeResponse.x / sourceConeResponse.x, 0.0f, 0.0f,
+		0.0f, destinationConeResponse.y / sourceConeResponse.y, 0.0f,
+		0.0f, 0.0f, destinationConeResponse.z / sourceConeResponse.z } };
+
+	return inverseBradford * coneResponseScale * bradford;
+}
+
+/** Builds a linear RGB conversion matrix between two supported color spaces. */
 inline DirectX::SimpleMath::Matrix getRGBMatrix(std::string_view in_space, std::string_view out_space)
 {
 	static ankerl::unordered_dense::map<std::string, DirectX::XMFLOAT3X3> maps = {
@@ -79,7 +135,8 @@ inline DirectX::SimpleMath::Matrix getRGBMatrix(std::string_view in_space, std::
 	else {
 		DirectX::SimpleMath::Matrix a = maps[std::format("{}-XYZ", in_space)];
 		DirectX::SimpleMath::Matrix b = maps[std::format("XYZ-{}", out_space)];
-		auto c = DirectX::XMMatrixMultiply(b, a);
+		const auto adaptation = getChromaticAdaptationMatrix(getWhitePoint(in_space), getWhitePoint(out_space));
+		auto c = DirectX::XMMatrixMultiply(b, DirectX::XMMatrixMultiply(adaptation, a));
 		return c;
 	}
 }

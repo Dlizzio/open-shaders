@@ -37,6 +37,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 # SphericalHarmonics uses the float2/3/4 = DirectX::SimpleMath::* aliases.
 find_package(directxtk CONFIG REQUIRED)
+find_package(unordered_dense CONFIG REQUIRED)
 # Input.h uses magic_enum for device enum handling.
 find_package(magic_enum CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
@@ -60,6 +61,7 @@ add_executable(cpp_tests
     test_hdr_png_metadata.cpp
     test_cacheinvalidation.cpp
     test_contenthash.cpp
+    test_colorspace.cpp
     test_shadercachemanifest.cpp
     test_shadercacheclear.cpp
     test_generationclaim.cpp
@@ -100,6 +102,7 @@ target_link_libraries(cpp_tests PRIVATE
     nlohmann_json::nlohmann_json
     imgui::imgui
     Microsoft::DirectXTK
+    unordered_dense::unordered_dense
     magic_enum::magic_enum
     xxHash::xxhash
     Threads::Threads

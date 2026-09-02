@@ -1147,18 +1147,6 @@ namespace Hooks
 		globals::features::skySync.OnSkyUpdateColors(sky);
 	}
 
-	void BSShaderAccumulator_RenderEffects::thunk(void* accumulator, uint32_t renderFlags)
-	{
-		const bool frameAnnotations = globals::state->frameAnnotations;
-		if (frameAnnotations)
-			globals::state->BeginPerfEvent("Effects");
-
-		func(accumulator, renderFlags);
-
-		if (frameAnnotations)
-			globals::state->EndPerfEvent();
-	}
-
 	/**
 	 * @brief Installs hooks, detours, and memory patches for graphics, input, and rendering subsystems.
 	 *
@@ -1186,9 +1174,6 @@ namespace Hooks
 
 		logger::info("Hooking BSGraphics::SetDirtyStates");
 		stl::detour_thunk<BSGraphics_SetDirtyStates>(REL::RelocationID(75580, 77386));
-
-		logger::info("Hooking BSShaderAccumulator::RenderEffects");
-		stl::detour_thunk<BSShaderAccumulator_RenderEffects>(REL::RelocationID(99940, 106585));
 
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");
 		stl::write_thunk_call<BSGraphics_Renderer_Init_InitD3D>(REL::RelocationID(75595, 77226).address() + REL::Relocate(0x50, 0x2BC));

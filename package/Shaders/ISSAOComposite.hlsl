@@ -249,7 +249,7 @@ PS_OUTPUT main(PS_INPUT input)
 		sparklesInput *= sparklesAttenuation;
 	}
 	sparklesInput *= snowMask;
-	float4 sparklesColor = float4(SparklesParameters4.yzw * sparklesInput, sparklesInput);
+	float4 sparklesColor = float4(Color::AuthoredColor(SparklesParameters4.yzw) * sparklesInput, sparklesInput);
 
 	composedColor *= 1 - SparklesParameters2.w;
 	composedColor += sparklesColor;

@@ -16,8 +16,8 @@
 /**
  * @brief GPU and CPU profiler using D3D11 timestamp queries.
  *
- * Maintains a ring buffer of frames with paired begin/end timestamp queries
- * and rolling statistics (average, p95, p99) per named pass. Capture is
+ * Maintains a GPU query ring and frame-scoped CPU samples
+ * with rolling statistics (average, p95, p99) per named pass. Capture is
  * request-driven: no queries or QPC reads are issued unless a capture is
  * active for the current frame.
  */
@@ -90,8 +90,8 @@ public:
 		/// mode never having applied to it (a CPU-only scope has no GPU side).
 		bool hasGpu = false;
 		bool hasCpu = false;
-		/// Whether the LAST collected frame specifically had a fresh sample
-		/// for this side (vs. the stats reflecting an older, stale sample).
+		/// Whether the latest collected frame for this side had a fresh sample
+		/// (vs. the stats reflecting an older, stale sample).
 		bool activeGpu = false;
 		bool activeCpu = false;
 		bool valid = false;
@@ -177,9 +177,8 @@ public:
 	/**
 	 * @brief Ends the current profiling frame.
 	 * @param a_frameCount The engine's own frame counter for this tick,
-	 *        stamped onto the ring slot so a later GetCapturedFrameCount()
-	 *        tells a caller exactly which frame the current results describe
-	 *        (results lag live by up to kFrameLatency frames).
+	 *        stamped onto each active capture. CPU results publish at this
+	 *        boundary; GPU results may lag by up to kFrameLatency frames.
 	 */
 	void EndFrame(uint32_t a_frameCount);
 
@@ -201,7 +200,7 @@ public:
 	float GetCpuTotalTimeMs() const { return cpuTotalTimeMs; }
 
 	/**
-	 * @brief Gets the total GPU time as of the results GetCapturedFrameCount() describes.
+	 * @brief Gets the GPU total for GetCapturedGpuFrameCount().
 	 *
 	 * Unlike GetTotalTimeMs(), this is never zeroed while idle, so it stays
 	 * resolve-consistent with GetResults()'s timers for exact checks like
@@ -210,11 +209,15 @@ public:
 	 */
 	float GetResolvedTotalTimeMs() const { return resolvedTotalMs; }
 
-	/** @brief Gets the resolve-consistent CPU total; see GetResolvedTotalTimeMs(). */
+	/** @brief Gets the CPU total for GetCapturedCpuFrameCount(). */
 	float GetResolvedCpuTotalTimeMs() const { return resolvedCpuTotalMs; }
 
-	/** @brief Gets the engine frame count the current results were captured on. */
+	/** @brief Gets the newest frame published by either timing source. */
 	uint32_t GetCapturedFrameCount() const { return capturedFrameCount; }
+	/** @brief Gets the engine frame count of the latest resolved GPU capture. */
+	uint32_t GetCapturedGpuFrameCount() const { return capturedGpuFrameCount; }
+	/** @brief Gets the engine frame count of the latest resolved CPU capture. */
+	uint32_t GetCapturedCpuFrameCount() const { return capturedCpuFrameCount; }
 
 	/** @brief Gets the GPU timer slots acquired in the most recently completed frame. */
 	uint32_t GetAcquiredSlots() const { return acquiredSlots; }
@@ -231,9 +234,14 @@ public:
 		results.clear();
 		knownTimers.clear();
 		knownTimerIndex.clear();
-		collectedFrames = 0;
+		captureCycleCount = 0;
 		totalTimeMs = 0.0f;
 		cpuTotalTimeMs = 0.0f;
+		resolvedTotalMs = 0.0f;
+		resolvedCpuTotalMs = 0.0f;
+		capturedFrameCount = 0;
+		capturedGpuFrameCount = 0;
+		capturedCpuFrameCount = 0;
 		activeCpuTimers.clear();
 		completedCpuTimers.clear();
 		// A cleared timer must not resurrect from a still-in-flight ring slot.
@@ -257,11 +265,9 @@ public:
 		std::erase_if(completedCpuTimers, [&prefix](const CompletedCpuTimer& ct) {
 			return ct.name.starts_with(prefix);
 		});
-		// The removed feature's name may still be pending in a non-live ring
-		// slot; purge those rather than filter by name. The currently-open
-		// slot (if any) is left alone, so a pending sample for this feature
-		// there can still repopulate knownTimers once it resolves.
+		// Discard queued GPU results so removed timers cannot be republished.
 		ResetPendingFrames();
+		RebuildResults();
 	}
 
 private:
@@ -281,8 +287,7 @@ private:
 	{
 		std::string name;
 		float cpuMs = 0.0f;
-		/// Nesting depth at acquisition (0 = top-level); gates the frame
-		/// CPU total so a parent scope's time isn't double-counted.
+		/// Nesting depth at acquisition (0 = top-level).
 		uint32_t depth = 0;
 	};
 
@@ -293,23 +298,16 @@ private:
 		{
 			std::string name;
 			LARGE_INTEGER cpuBegin{};
-			float cpuMs = 0.0f;
-			/// Nesting depth at acquisition (0 = top-level); gates the
-			/// frame totals so a parent's time isn't double-counted.
 			uint32_t depth = 0;
+			uint32_t cpuDepth = 0;
 		};
 		std::vector<TimerMeta> timers;
-		/// LIFO stack of acquired-but-not-yet-closed slot indices, so EndPass
-		/// closes the innermost open pass regardless of nesting depth/order.
 		std::vector<int> activeStack;
+		/// Includes filtered capture cycles with no matching pass.
+		bool captureCycle = false;
 		bool inFlight = false;
-		/// CPU-only timers completed during this ring slot's cycle, held
-		/// until CollectResults drains them (mirrors the GPU query payload).
-		std::vector<CompletedCpuTimer> cpuTimers;
-		/// Engine frame count this slot's queries were stamped on; surfaced
-		/// via GetCapturedFrameCount() once this slot resolves.
 		uint32_t capturedFrame = 0;
-		CaptureMode captureMode = CaptureMode::None;
+		uint64_t capturedCycle = 0;
 		std::string namePrefix;
 	};
 
@@ -345,43 +343,37 @@ private:
 		std::string name;
 		RollingHistory gpu;
 		RollingHistory cpu;
-		/// Whether this pass has ever recorded a sample of that kind; a
-		/// CPU-only scope never has a GPU sample and vice versa.
 		bool hasGpu = false;
 		bool hasCpu = false;
-		uint64_t lastSampleFrame = 0;
+		bool activeGpu = false;
+		bool activeCpu = false;
+		float topLevelMs = 0.0f;
+		uint64_t lastSampleCycle = 0;
 	};
 	std::vector<KnownTimer> knownTimers;
 	std::unordered_map<std::string, size_t> knownTimerIndex;
-	uint64_t collectedFrames = 0;
+	uint64_t captureCycleCount = 0;
 	float totalTimeMs = 0.0f;
 	float cpuTotalTimeMs = 0.0f;
-	/// Set only in CollectResults; see GetResolvedTotalTimeMs().
 	float resolvedTotalMs = 0.0f;
 	float resolvedCpuTotalMs = 0.0f;
 	uint32_t capturedFrameCount = 0;
-	/// GPU slots acquired so far in the ring slot currently being written;
-	/// copied to acquiredSlots once that frame ends (a gauge, not a resolve-
-	/// latency-bound value -- acquisition count is known immediately).
+	uint32_t capturedGpuFrameCount = 0;
+	uint32_t capturedCpuFrameCount = 0;
 	uint32_t acquiredSlotsThisFrame = 0;
 	uint32_t acquiredSlots = 0;
-	/// Session high-water mark of acquiredSlots, since a sparse poll would
-	/// otherwise likely miss the peak of a heavy-scene spike entirely.
 	uint32_t peakAcquiredSlots = 0;
-	/// Cumulative since Initialize(): a capacity refusal is exceptional, so
-	/// this is a lifetime counter, not a per-frame gauge like acquiredSlots.
 	uint32_t slotRefusals = 0;
 
-	/// CPU-only scopes currently open (LIFO), so EndCpuPass closes the
-	/// innermost one regardless of nesting.
 	std::vector<CpuTimer> activeCpuTimers;
-	/// CPU-only scopes completed this cycle, not yet stored into a frame slot.
 	std::vector<CompletedCpuTimer> completedCpuTimers;
 
 	/// Drains the oldest in-flight frame's results if resolved; returns false
 	/// only when GPU data is still pending (retry next frame), never when
 	/// there's simply nothing to collect.
 	bool CollectResults();
+	void PublishCpuResults(std::string_view a_namePrefix, uint32_t a_frameCount, uint64_t a_captureCycle);
+	void RebuildResults();
 
 	static bool HasCaptureMode(CaptureMode a_value, CaptureMode a_mode)
 	{
@@ -403,21 +395,20 @@ private:
 
 	KnownTimer& GetOrCreateTimer(const std::string& name);
 
-	/// Clears a ring slot's transient GPU/CPU state so a later ClearTimers
+	/// Clears a ring slot's transient GPU state so a later ClearTimers
 	/// call can't have it resurrect a stale sample once it resolves.
 	static void ResetFrameState(FrameQueries& frame)
 	{
 		frame.batch.Reset();
 		frame.activeStack.clear();
+		frame.captureCycle = false;
 		frame.inFlight = false;
-		frame.cpuTimers.clear();
-		frame.captureMode = CaptureMode::None;
+		frame.capturedCycle = 0;
 		frame.namePrefix.clear();
 	}
 
 	/// Resets every ring slot except one with an open scope: frames[writeFrame]
-	/// while frameActive, whose batch/activeStack a still-open BeginPass/
-	/// BeginCpuPass call is relying on.
+	/// while frameActive, whose batch/activeStack a still-open BeginPass uses.
 	void ResetPendingFrames()
 	{
 		for (uint32_t i = 0; i < kFrameLatency; i++) {
@@ -436,9 +427,7 @@ class ScopedCpuPass
 public:
 	ScopedCpuPass(Profiler* a_profiler, std::string_view a_name)
 	{
-		// Only remember the profiler if BeginCpuPass actually opened a slot;
-		// a no-op Begin paired with an unconditional End would pop and
-		// mistime whatever scope is innermost when this one is disabled.
+		// End only scopes that opened successfully.
 		if (a_profiler && a_profiler->BeginCpuPass(a_name))
 			profiler = a_profiler;
 	}

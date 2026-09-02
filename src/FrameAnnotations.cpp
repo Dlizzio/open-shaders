@@ -341,6 +341,16 @@ namespace FrameAnnotations
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct BSShaderAccumulator_RenderEffects
+	{
+		static void thunk(void* accumulator, uint32_t renderFlags)
+		{
+			CS_GPU_PASS("Effects");
+			func(accumulator, renderFlags);
+		};
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct BSShaderAccumulator_RenderBatches
 	{
 		static void thunk(void* shaderAccumulator, uint32_t firstPass, uint32_t lastPass, uint32_t renderFlags, int groupIndex)
@@ -393,6 +403,8 @@ namespace FrameAnnotations
 
 	void OnPostPostLoad()
 	{
+		stl::detour_thunk<BSShaderAccumulator_RenderEffects>(REL::RelocationID(99940, 106585));
+
 		if (!globals::state->frameAnnotations)
 			return;
 

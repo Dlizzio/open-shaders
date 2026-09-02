@@ -46,7 +46,6 @@ StructuredBuffer<DirectionalShadowLightData> DirectionalShadowLights : register(
 namespace ShadowSampling
 {
 	static const float MinDirectionalLightMultiplier = 1e-5;
-	static const float MinLightingLuminance = 1e-5;
 	static const float3 LightingSampleNormal = float3(0, 0, 1);
 	static const float3 ImageBasedLightingNormal = float3(0, 0, -1);
 
@@ -195,22 +194,16 @@ namespace ShadowSampling
 #endif
 		float3 dirLightColorDir = GetDirectionalLighting();
 
+		float inputLuma = Color::RGBToLuminance(inputColor);
 		float ambientLuma = Color::RGBToLuminance(ambientColorAmb);
 		float dirLightLuma = Color::RGBToLuminance(dirLightColorDir);
 		float totalLuma = ambientLuma + dirLightLuma;
 
-		if (ENABLE_LL) {
-			float ambientShare = totalLuma > MinLightingLuminance ? saturate(ambientLuma / totalLuma) : 1.0;
-			ambientColor = inputColor * ambientShare;
-			dirColor = inputColor - ambientColor;
-		} else {
-			float inputLuma = Color::RGBToLuminance(inputColor);
-			if (totalLuma > 0.0 && ambientLuma > 0.0)
-				ambientColorAmb *= inputLuma / totalLuma;
+		if (totalLuma > 0.0 && ambientLuma > 0.0)
+			ambientColorAmb *= inputLuma / totalLuma;
 
-			ambientColor = ambientColorAmb;
-			dirColor = max(0.0, inputColor - ambientColor);
-		}
+		ambientColor = ambientColorAmb;
+		dirColor = max(0.0, inputColor - ambientColor);
 	}
 }
 

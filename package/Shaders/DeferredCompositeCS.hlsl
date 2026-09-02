@@ -309,7 +309,8 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 #endif
 
-	color = ENABLE_LL ? Color::SceneLinearToGamma(color) : Color::IrradianceToGamma(color);
+	if (!ENABLE_LL)
+		color = Color::IrradianceToGamma(color);
 
 #if defined(DEBUG)
 
@@ -328,6 +329,9 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	}
 
 #endif
+
+	if (ENABLE_LL)
+		color = Color::SceneLinearToGamma(color);
 
 	MainRW[dispatchID.xy] = float4(color, 1.0);
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = float4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);

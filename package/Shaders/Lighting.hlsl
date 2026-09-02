@@ -1733,7 +1733,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // SNOW
 	} else {
 		if (projWeight > 0) {
+#			if defined(TRUE_PBR)
+			baseColor.xyz = Color::AuthoredColor(ProjectedUVParams2.xyz);
+#			else
 			baseColor.xyz = Color::Diffuse(ProjectedUVParams2.xyz);
+#			endif
 #			if defined(SNOW)
 			useSnowDecalSpecular = true;
 #			endif  // SNOW
@@ -3240,9 +3244,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
 
-	if (SharedData::linearLightingSettings.enableLinearLighting &&
-		(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget)) {
-		psout.Diffuse.xyz = Color::EffectLightToGamma(psout.Diffuse.xyz);
+#	if !defined(DEFERRED)
+	const float4 auxiliaryDiffuse = psout.Diffuse;
+#	endif
+
+	const bool gammaRenderTarget = ENABLE_LL && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget);
+	if (gammaRenderTarget) {
+		psout.Diffuse.xyz = Color::SceneLinearToGamma(psout.Diffuse.xyz);
 	}
 
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
@@ -3262,7 +3270,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	normalAndSSR.w = SSRParams.w * smoothstep(SSRParams.x - 1e-5, SSRParams.y, normal.w);
 
 	const bool outputColorToAuxiliaryTarget = SSRParams.z > 1e-5;
-	psout.NormalGlossiness = outputColorToAuxiliaryTarget ? psout.Diffuse : normalAndSSR;
+	psout.NormalGlossiness = outputColorToAuxiliaryTarget ? (gammaRenderTarget ? auxiliaryDiffuse : psout.Diffuse) : normalAndSSR;
 	psout.MotionVectors = outputColorToAuxiliaryTarget ? float4(1, 0, 0, 1) : float4(screenMotionVector, 0, 1);
 #	endif
 

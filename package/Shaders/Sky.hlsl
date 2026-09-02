@@ -231,17 +231,11 @@ float ComputeProceduralSun(float2 uv)
 }
 #	endif
 
-float3 GetSkyRenderColor(float3 color, bool linearSkyOutput)
-{
-	return linearSkyOutput ? Color::Sky(color) : color;
-}
-
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 	const bool gammaRenderTarget = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget) != 0;
-	const bool linearSkyOutput = ENABLE_LL && !gammaRenderTarget;
-	float3 skyScale = GetSkyRenderColor(PParams.yyy, linearSkyOutput);
+	float3 skyScale = Color::Sky(PParams.yyy);
 #	if !defined(VR)
 	uint eyeIndex = 0;
 #	else
@@ -251,15 +245,15 @@ PS_OUTPUT main(PS_INPUT input)
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	baseColor.xyz = GetSkyRenderColor(baseColor.xyz, linearSkyOutput);
+	baseColor.xyz = Color::Sky(baseColor.xyz);
 #			ifdef TEXFADE
 	baseColor.w *= PParams.x;
 #			endif
 #		else
 	float4 blendColor = TexBlendSampler.Sample(SampBlendSampler, input.TexCoord1.xy);
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	blendColor.xyz = GetSkyRenderColor(blendColor.xyz, linearSkyOutput);
-	baseColor.xyz = GetSkyRenderColor(baseColor.xyz, linearSkyOutput);
+	blendColor.xyz = Color::Sky(blendColor.xyz);
+	baseColor.xyz = Color::Sky(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 #		if defined(CR_CLOUDS)
@@ -270,10 +264,9 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 #		if defined(HDR_OUTPUT)
-	const bool hdrSunActive = HDRSun::IsHdrSunActive();
 	float hdrSunGain = HDRSun::GetHdrSunGain(input.TexCoord0.xy, baseColor);
 	baseColor.xyz *= hdrSunGain;
-	if (hdrSunActive) {
+	if (HDRSun::IsHdrSunActive()) {
 		// Dither bright output to reduce banding in high-boost sun path.
 		// Same baseColor/skyScale treatment for DITHER and non-DITHER; DITHER adds noiseGrad later.
 		baseColor.xyz += (Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.Position.xy, SharedData::BufferDim.xy)) - 0.5f) *
@@ -299,10 +292,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float noiseGrad = (TexNoiseGradSampler.Sample(SampNoiseGradSampler, noiseGradUv).x - noiseGradCenter) * 0.03125;
 
 #			ifdef TEX
-	float3 skyVertColor = linearSkyOutput ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
-	float3 sunGlareColor = GetSkyRenderColor(skyVertColor, linearSkyOutput) * baseColor.xyz;
+	float3 skyVertColor = ENABLE_LL ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
+	float3 sunGlareColor = Color::Sky(skyVertColor) * baseColor.xyz;
 	// Dither/noise term is the legacy sky path contribution for gradient smoothing.
-	psout.Color.xyz = ((sunGlareColor + skyScale) * skyBrightnessMultiplier) + (linearSkyOutput ? 0.0 : noiseGrad);
+	psout.Color.xyz = ((sunGlareColor + skyScale) * skyBrightnessMultiplier) + (ENABLE_LL ? 0.0 : noiseGrad);
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
 	float3 skyGradientColor = input.Color.xyz;
@@ -314,7 +307,7 @@ PS_OUTPUT main(PS_INPUT input)
 		skyGradientColor = lerp(input.SkyBlendColor2.xyz, input.SkyBlendColor0.xyz, gradientPosition);
 	}
 #				endif
-	psout.Color.xyz = (skyScale + GetSkyRenderColor(skyGradientColor + noiseGrad, linearSkyOutput)) * skyBrightnessMultiplier;
+	psout.Color.xyz = (skyScale + Color::Sky(skyGradientColor + noiseGrad)) * skyBrightnessMultiplier;
 	psout.Color.w = input.Color.w;
 #			endif  // TEX
 
@@ -326,7 +319,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		elif defined(HORIZFADE)
-	psout.Color.xyz = float3(1.5, 1.5, 1.5) * ((GetSkyRenderColor(input.Color.xyz, linearSkyOutput) * baseColor.xyz + skyScale) * skyBrightnessMultiplier);
+	psout.Color.xyz = float3(1.5, 1.5, 1.5) * ((Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale) * skyBrightnessMultiplier);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else
 
@@ -336,7 +329,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 	psout.Color.w = input.Color.w * baseColor.w;
-	psout.Color.xyz = (GetSkyRenderColor(input.Color.xyz, linearSkyOutput) * baseColor.xyz + skyScale) * skyBrightnessMultiplier;
+	psout.Color.xyz = (Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale) * skyBrightnessMultiplier;
 
 #			if defined(CLOUDS) && defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {
@@ -381,6 +374,9 @@ PS_OUTPUT main(PS_INPUT input)
 		psout.Color.xyz = lerp(psout.Color.xyz, exponentialHeightFog.xyz, exponentialHeightFog.w);
 	}
 #	endif
+
+	if (ENABLE_LL && gammaRenderTarget)
+		psout.Color.xyz = Color::SceneLinearToGamma(psout.Color.xyz);
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 

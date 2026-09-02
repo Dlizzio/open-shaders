@@ -45,8 +45,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float refractedMask = Src1Tex.Sample(Src0Sampler, texCoordRefracted).w;
 	float4 colorRefracted = Src0Tex.Sample(Src0Sampler, texCoordRefracted);
 	float4 colorResulting = lerp(colorOriginal, colorRefracted, refractedMask);
-	if (SharedData::linearLightingSettings.enableLinearLighting)
-		colorResulting.xyz = Color::SceneGammaToLinear(colorResulting.xyz);
 
 	psout.Color.xyz = colorResulting.xyz;
 	psout.Color.w = colorResulting.w;

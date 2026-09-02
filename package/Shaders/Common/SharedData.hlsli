@@ -270,8 +270,7 @@ namespace SharedData
 		float dirLightMult;
 		float authoredColorGamma;
 		float vanillaDiffuseColorMult;
-		float emitColorMult;
-		float glowmapMult;
+		float2 pad0;
 		float3 effectLightingColor;
 		float ambientMult;
 		float3 skyStaticsColor;

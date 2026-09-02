@@ -588,8 +588,8 @@ static DisplayTimingStats ComputeDisplayTimingStats(std::array<float, kDisplayed
 }
 
 // Accumulates several passes' per-frame samples (aligned to the same ring
-// position -- relies on Profiler::CollectResults pushing exactly one sample
-// per timer per cycle) so a feature's Total row can compute avg/P95/P99 from
+// position -- relies on each Profiler source pushing exactly one sample per
+// timer per cycle) so a feature's Total row can compute avg/P95/P99 from
 // the actual summed-per-frame series, not from summing each pass's own stats.
 struct DisplayTimingSampleAccumulator
 {
@@ -762,6 +762,8 @@ bool ProfilingRenderer::RenderFeatureOverview()
 	}
 	if (activeFeatures.empty())
 		return false;
+
+	globals::profiler->RequestCapture(Profiler::CaptureMode::Both);
 
 	std::sort(activeFeatures.begin(), activeFeatures.end());
 

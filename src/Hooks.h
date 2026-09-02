@@ -35,13 +35,6 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	/** @brief Hook for the engine effect-mesh pass and its gamma-domain compatibility boundary. */
-	struct BSShaderAccumulator_RenderEffects
-	{
-		static void thunk(void* accumulator, uint32_t renderFlags);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	/** @brief Hook for Sky::UpdateColors that forwards sky color updates to SkySync after the engine computes them. */
 	struct Sky_UpdateColors
 	{

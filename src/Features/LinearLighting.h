@@ -32,8 +32,6 @@ struct LinearLighting : Feature
 		// Lighting multipliers
 		float ambientMult = 0.32f;
 		float vanillaDiffuseColorMult = 1.5f;
-		float emitColorMult = 1.0f;
-		float glowmapMult = 1.0f;
 	} settings;
 
 	struct alignas(16) PerFrameData
@@ -44,8 +42,7 @@ struct LinearLighting : Feature
 		float dirLightMult;
 		float authoredColorGamma;
 		float vanillaDiffuseColorMult;
-		float emitColorMult;
-		float glowmapMult;
+		float pad0[2];
 		RE::NiColor effectLightingColor;
 		float ambientMult;
 		RE::NiColor skyStaticsColor;
@@ -63,15 +60,16 @@ struct LinearLighting : Feature
 	ConstantBuffer* PerGeometryCB = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> sceneGammaDecodeCS;
 	bool sceneGammaActive = false;
-	bool sceneGammaDecodedByRefraction = false;
 
 	uint isDirLightLinear = false;
 	float dirLightMult = 1.0f;
 	RE::NiColor effectLightingColor{ 1.0f, 1.0f, 1.0f };
 	RE::NiColor skyStaticsColor{ 1.0f, 1.0f, 1.0f };
+	RE::NiColor weatherEffectLightingSource{};
+	RE::NiColor weatherSkyStaticsSource{};
 	bool weatherLightingColorsInitialized = false;
 
-	/** @brief Draws the ImGui settings UI for gamma correction and lighting multiplier configuration. */
+	/** @brief Draws the Linear Lighting controls and lighting multipliers. */
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
@@ -81,20 +79,24 @@ struct LinearLighting : Feature
 
 	/** @brief Reads the directional light multiplier from ImageSpaceManager during the prepass. */
 	virtual void Prepass() override;
-	/** @brief Installs the BSLightingShader geometry setup hook. */
+	/** @brief Installs the lighting geometry hook. */
 	virtual void PostPostLoad() override;
 
-	/** @brief Creates the per-geometry constant buffer for emissive multiplier data. */
+	/** @brief Creates the emissive data buffer and compiles the scene gamma decode shader. */
 	virtual void SetupResources() override;
+	/** @brief Recompiles the scene gamma decode shader after a shader-cache clear. */
+	virtual void ClearShaderCache() override;
 	/** @brief Marks kMAIN as gamma-domain storage for the main world-rendering interval. */
 	void BeginSceneGamma();
-	/** @brief Decodes the completed gamma-domain scene before post-processing consumes it. */
+	/** @brief Decodes the completed gamma-domain world scene in place. */
 	void EndSceneGamma(RE::RENDER_TARGET a_renderTarget);
 
 	/** @brief Populates and returns the per-frame constant buffer data with gamma and multiplier settings. */
 	PerFrameData GetCommonBufferData();
 	/** @brief Returns whether the engine and shaders should currently use linear lighting data. */
 	bool IsLinearLightingActive() const;
+	/** @brief Compiles the scene gamma decode shader when the target format supports typed UAV loads. */
+	void CompileSceneGammaDecodeShader();
 
 	/** @brief Caches linear copies of the interpolated weather colors used by effect meshes. */
 	void UpdateWeatherLightingColors(RE::Sky* a_sky);
@@ -112,7 +114,6 @@ struct LinearLighting : Feature
 	 */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 
-	/** @brief Contains the BSLightingShader geometry setup hook implementation. */
+	/** @brief Contains the lighting shader hook implementation. */
 	struct Hooks;
-
 };

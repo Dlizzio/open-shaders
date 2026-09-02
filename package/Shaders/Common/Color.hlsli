@@ -157,14 +157,19 @@ namespace Color
 		return pow(abs(color), 1.0 / 2.2);
 	}
 
+	float3 SignedPow(float3 color, float exponent)
+	{
+		return sign(color) * pow(abs(color), exponent);
+	}
+
 	float3 GammaToLinearSafe(float3 color)
 	{
-		return sign(color) * pow(abs(color), 2.2);
+		return SignedPow(color, 2.2);
 	}
 
 	float3 LinearToGammaSafe(float3 color)
 	{
-		return sign(color) * pow(abs(color), 1.0 / 2.2);
+		return SignedPow(color, 1.0 / 2.2);
 	}
 
 	static const float3x3 BT709_2_BT2020 = {
@@ -231,12 +236,12 @@ namespace Color
 
 	float3 AuthoredGammaToLinear(float3 color)
 	{
-		return pow(abs(color), SharedData::linearLightingSettings.authoredColorGamma);
+		return SignedPow(color, SharedData::linearLightingSettings.authoredColorGamma);
 	}
 
 	float3 LinearToAuthoredGamma(float3 color)
 	{
-		return pow(abs(color), 1.0 / SharedData::linearLightingSettings.authoredColorGamma);
+		return SignedPow(color, 1.0 / SharedData::linearLightingSettings.authoredColorGamma);
 	}
 
 	float3 DecodeAuthoredColor(float3 color)
@@ -252,16 +257,6 @@ namespace Color
 	float3 AuthoredColor(float3 color)
 	{
 		return ENABLE_LL ? DecodeAuthoredColor(color) : color;
-	}
-
-	float3 LLGammaToLinear(float3 color)
-	{
-		return ENABLE_LL ? SkyrimGammaToLinear(color) : color;
-	}
-
-	float3 LLLinearToGamma(float3 color)
-	{
-		return ENABLE_LL ? LinearToSkyrimGamma(color) : color;
 	}
 
 	float3 Diffuse(float3 color)
@@ -367,16 +362,16 @@ namespace Color
 #	if defined(LIGHTING)
 	float3 EmitColor(float3 color)
 	{
-		return ENABLE_LL ? DecodeAuthoredColor(color / max(emissiveMult, 1e-5)) * emissiveMult * SharedData::linearLightingSettings.emitColorMult : color;
+		return ENABLE_LL ? DecodeAuthoredColor(color / max(emissiveMult, 1e-5)) * emissiveMult : color;
 	}
 #	endif
 
 	float3 Glowmap(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL ? GamutTransform(color) * SharedData::linearLightingSettings.glowmapMult : LinearToSrgb(color);
+		return ENABLE_LL ? GamutTransform(color) : LinearToSrgb(color);
 #	else
-		return AuthoredColor(color) * (ENABLE_LL ? SharedData::linearLightingSettings.glowmapMult : 1.0);
+		return AuthoredColor(color);
 #	endif
 	}
 
@@ -407,11 +402,6 @@ namespace Color
 	float3 BlendFog(float3 color, float3 fogColor, float fogFactor)
 	{
 		return BlendFog(color, fogColor, fogFactor, 1.0, 1.0);
-	}
-
-	float3 Effect(float3 color)
-	{
-		return color;
 	}
 
 	float3 Sky(float3 color)
