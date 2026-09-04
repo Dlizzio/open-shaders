@@ -84,7 +84,6 @@ namespace SceneSettingsUI
 			ImGui::SameLine();
 	}
 
-	// --- Shared helpers ---
 	static ImVec2 GetCompactFeatureToggleSize()
 	{
 		const float frameHeight = ImGui::GetFrameHeight();
@@ -593,8 +592,6 @@ namespace SceneSettingsUI
 		}
 	}
 
-	// --- Feature name resolution by scene type ---
-
 	static std::vector<std::string> GetFeatureNamesForType(SceneType type)
 	{
 		switch (type) {
@@ -802,16 +799,12 @@ namespace SceneSettingsUI
 			callback(idx);
 	}
 
-	// --- Duplicate checking by scene type ---
-
 	static bool IsAlreadyAdded(SceneType type, const std::string& feature,
 		const std::vector<std::string>& path, const std::string& key, Period period)
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		return (type == SceneType::TimeOfDay) ? manager->HasEntryForPeriod(feature, path, key, period, EntrySource::User) : manager->HasEntryFromSource(type, feature, path, key, EntrySource::User);
 	}
-
-	// --- Shared Drawing ---
 
 	static void OpenAddDialogWithFeatures(AddSettingState& state, std::vector<std::string> features)
 	{
@@ -4647,12 +4640,6 @@ namespace SceneSettingsUI
 		}
 	}
 
-	// =========================================================================
-	// Consolidated Panel Implementations
-	// =========================================================================
-
-	// --- Interior Panel ---
-
 	static AddSettingState s_interiorAddState;
 	static PopupState s_interiorPopups;
 	static TableFlyoutState s_interiorTableFlyout;
@@ -4722,8 +4709,6 @@ namespace SceneSettingsUI
 		}
 		DrawExportAllPopup(SceneType::InteriorOnly, entries, s_interiorExportState);
 	}
-
-	// --- Time of Day Panel ---
 
 	static AddSettingState s_todPeriodAddState[kPeriodCount];
 	static AddSettingState s_todAllPeriodsAddState;
@@ -4824,8 +4809,6 @@ namespace SceneSettingsUI
 		}
 		DrawExportAllPopup(SceneType::TimeOfDay, entries, s_todExportState);
 	}
-
-	// --- Location Panel ---
 
 	using LocationTarget = SceneSettingsManager::LocationTarget;
 	using LocationTargetType = SceneSettingsManager::LocationTargetType;
@@ -5349,8 +5332,6 @@ namespace SceneSettingsUI
 
 		DrawLocationExportPopup(selectedTarget, entries, s_locationState.exportState);
 	}
-
-	// --- Weather Scene Panel ---
 
 	struct WeatherPanelState
 	{

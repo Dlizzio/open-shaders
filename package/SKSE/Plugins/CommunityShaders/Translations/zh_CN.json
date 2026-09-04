@@ -374,7 +374,6 @@
     "cs_editor.volumetric_lighting_label": "体积光照：",
     "cs_editor.weather_lighting_browser": "OS 编辑器浏览器",
     "cs_editor.weather_lock_hooks_unavailable": "天气锁定钩安装失败；锁定功能仍可正常工作，但天气可能会在修正前短暂闪烁",
-    "cs_editor.weather_references_unloaded_feature": "天气配置'{}'包含该功能的相关设置，但此功能尚未加载。在安装并加载该功能前，所有天气专属参数将被忽略。",
     "cs_editor.weathers_count": "天气：%d",
     "cs_editor.widget_type_cell_lighting": "单元光照",
     "cs_editor.widget_type_imagespace": "图像空间",
@@ -3764,7 +3763,6 @@
     "ui.clear_cache_desc": "这将清除内存和磁盘缓存（如果启用）中的所有已编译着色器。着色器将在游戏下次遇到它们时重新编译。",
     "ui.clear_shader_cache": "清除着色器缓存？",
     "ui.clear_shader_cache_tooltip_smart": "",
-    "ui.click_to_open_cs_editor": "点击打开着色器编辑",
     "ui.constraint.consider_disable": "为获得最佳兼容性，建议在启动时禁用此功能。",
     "ui.constraint.constrained_by": "",
     "ui.constraint.forced_value": "",
@@ -3835,8 +3833,10 @@
     "cs_editor.user_settings": "用户设置",
     "cs_editor.using_global_settings": "使用全局设置",
     "cs_editor.using_weather_specific_settings": "使用天气特定设置",
+    "cs_editor.weather_references_unloaded_feature": "天气配置'{}'包含该功能的相关设置，但此功能尚未加载。在安装并加载该功能前，所有天气专属参数将被忽略。",
     "menu.features.pause_weather_overrides": "暂停天气覆盖",
     "menu.features.pause_weather_tooltip": "临时禁用此功能的基于天气的设置调整。\n此状态不会被保存。",
+    "ui.click_to_open_cs_editor": "点击打开着色器编辑",
     "ui.weather_override_active": "激活天气覆盖",
     "ui.weather_setting_controlled": "此设置由当前天气（%s）控制。"
 }

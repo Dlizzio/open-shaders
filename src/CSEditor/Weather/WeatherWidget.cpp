@@ -1107,10 +1107,14 @@ void WeatherWidget::DrawCloudSettings()
 			ImGui::Spacing();
 
 			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.3f);
-			if (WeatherUtils::DrawSliderInt8(std::vformat(T(TKEY("cloud_layer_speed_y"), "Cloud Layer Speed Y##{}"), std::make_format_args(layer)), settings.clouds[i].cloudLayerSpeedY))
+			if (WeatherUtils::DrawSliderInt8(
+					std::format("{}##{}", T(TKEY("cloud_layer_speed_y"), "Cloud Layer Speed Y"), layer),
+					settings.clouds[i].cloudLayerSpeedY))
 				changed = true;
 			ImGui::Spacing();
-			if (WeatherUtils::DrawSliderInt8(std::vformat(T(TKEY("cloud_layer_speed_x"), "Cloud Layer Speed X##{}"), std::make_format_args(layer)), settings.clouds[i].cloudLayerSpeedX))
+			if (WeatherUtils::DrawSliderInt8(
+					std::format("{}##{}", T(TKEY("cloud_layer_speed_x"), "Cloud Layer Speed X"), layer),
+					settings.clouds[i].cloudLayerSpeedX))
 				changed = true;
 			ImGui::PopItemWidth();
 
