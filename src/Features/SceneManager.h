@@ -12,7 +12,6 @@ struct SceneManager : Feature, SceneSettingsManager
 	bool SupportsVR() override { return true; }
 	bool IsCore() const override { return true; }
 	bool IsAlwaysEnabled() const override { return true; }
-	bool IsDisabledByDefault() const override { return false; }
 	bool UsesMainSettings() const override { return false; }
 	bool HasRestoreDefaults() const override { return false; }
 
