@@ -207,18 +207,18 @@ public:
 		static constexpr float AUTOHIDE_PANEL_WIDTH_RATIO = 0.2f;       // Ratio of window width for panel (2/10)
 
 		// Scene settings panel constants (multipliers of ImGui::GetFontSize())
-		static constexpr float SCENE_TOD_PARAM_COL_EM = 5.0f;           // Parameter column width (TOD table)
-		static constexpr float SCENE_TOD_PERIOD_COL_EM = 2.6f;          // Per-period column width (TOD table)
-		static constexpr float SCENE_ENTRY_INDENT_EM = 0.4f;            // Indent for setting entries under feature headers
-		static constexpr float SCENE_TOD_FEATURE_TEXT_SCALE = 0.85f;    // Smaller text scale for feature names in TOD table
-		static constexpr int SCENE_SETTING_MAX_LINES = 2;               // Max visible lines for setting names in table rows
-		static constexpr float SCENE_SECTION_HEADER_TARGET_COLS = 4.3f; // Header width measured in value columns
-		static constexpr float SCENE_ADD_PERIOD_BTN_EM = 1.2f;          // Size of + button in empty period cells
-		static constexpr float SCENE_ADD_DIALOG_WIDTH_EM = 22.0f;       // Width of add-setting dialog
-		static constexpr float SCENE_ADD_LIST_HEIGHT_EM = 12.0f;        // Height of scrollable setting list in dialog
-		static constexpr float FLYOUT_BUTTON_SCALE = 0.8f;              // Button size relative to frame height
-		static constexpr float FLYOUT_TOGGLE_SCALE = 0.7f;              // Toggle icon scale within flyout
-		static constexpr float FLYOUT_REVERT_PAD_SCALE = 0.08f;         // Revert icon inner padding ratio
+		static constexpr float SCENE_TOD_PARAM_COL_EM = 5.0f;            // Parameter column width (TOD table)
+		static constexpr float SCENE_TOD_PERIOD_COL_EM = 2.6f;           // Per-period column width (TOD table)
+		static constexpr float SCENE_ENTRY_INDENT_EM = 0.4f;             // Indent for setting entries under feature headers
+		static constexpr float SCENE_TOD_FEATURE_TEXT_SCALE = 0.85f;     // Smaller text scale for feature names in TOD table
+		static constexpr int SCENE_SETTING_MAX_LINES = 2;                // Max visible lines for setting names in table rows
+		static constexpr float SCENE_SECTION_HEADER_TARGET_COLS = 4.3f;  // Header width measured in value columns
+		static constexpr float SCENE_ADD_PERIOD_BTN_EM = 1.2f;           // Size of + button in empty period cells
+		static constexpr float SCENE_ADD_DIALOG_WIDTH_EM = 22.0f;        // Width of add-setting dialog
+		static constexpr float SCENE_ADD_LIST_HEIGHT_EM = 12.0f;         // Height of scrollable setting list in dialog
+		static constexpr float FLYOUT_BUTTON_SCALE = 0.8f;               // Button size relative to frame height
+		static constexpr float FLYOUT_TOGGLE_SCALE = 0.7f;               // Toggle icon scale within flyout
+		static constexpr float FLYOUT_REVERT_PAD_SCALE = 0.08f;          // Revert icon inner padding ratio
 
 		static float Em(float multiplier) { return multiplier * ImGui::GetFontSize(); }
 
