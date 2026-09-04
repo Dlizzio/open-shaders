@@ -432,9 +432,15 @@ if(NOT SCENE_SETTINGS_PYTHON_EXECUTABLE)
 endif()
 
 set(SCENE_SETTINGS_CATALOG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-set(SCENE_SETTINGS_CATALOG_HEADER "${SCENE_SETTINGS_CATALOG_DIR}/SceneSettingsCatalog.generated.h")
-set(SCENE_SETTINGS_CATALOG_SOURCE "${SCENE_SETTINGS_CATALOG_DIR}/SceneSettingsCatalog.generated.cpp")
-set(SCENE_SETTINGS_ADAPTERS_SOURCE "${SCENE_SETTINGS_CATALOG_DIR}/FeatureSceneSettingsAdapters.generated.cpp")
+set(SCENE_SETTINGS_CATALOG_HEADER
+    "${SCENE_SETTINGS_CATALOG_DIR}/SceneSettingsCatalog.generated.h"
+)
+set(SCENE_SETTINGS_CATALOG_SOURCE
+    "${SCENE_SETTINGS_CATALOG_DIR}/SceneSettingsCatalog.generated.cpp"
+)
+set(SCENE_SETTINGS_ADAPTERS_SOURCE
+    "${SCENE_SETTINGS_CATALOG_DIR}/FeatureSceneSettingsAdapters.generated.cpp"
+)
 
 file(
     GLOB_RECURSE SCENE_SETTINGS_CATALOG_INPUTS
@@ -452,15 +458,10 @@ add_custom_command(
         "${SCENE_SETTINGS_CATALOG_SOURCE}"
         "${SCENE_SETTINGS_ADAPTERS_SOURCE}"
     COMMAND
-        ${SCENE_SETTINGS_PYTHON_EXECUTABLE}
-        ${SCENE_SETTINGS_PYTHON_ARGS}
+        ${SCENE_SETTINGS_PYTHON_EXECUTABLE} ${SCENE_SETTINGS_PYTHON_ARGS}
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_scene_settings_catalog.py"
-        --source-dir
-        "${CMAKE_CURRENT_SOURCE_DIR}"
-        --out-dir
-        "${SCENE_SETTINGS_CATALOG_DIR}"
-        --min-entries
-        250
+        --source-dir "${CMAKE_CURRENT_SOURCE_DIR}" --out-dir
+        "${SCENE_SETTINGS_CATALOG_DIR}" --min-entries 250
     DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_scene_settings_catalog.py"
         ${SCENE_SETTINGS_CATALOG_INPUTS}

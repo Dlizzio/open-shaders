@@ -55,19 +55,19 @@ private:
 // Tracy's own ZoneNamedN follows) -- fall back to the dynamic-name constructor
 // when disabled, since no allocation-avoidance is needed with Tracy compiled out.
 #ifdef TRACY_ENABLE
-#	define CS_GPU_PASS(name)                                                                                                                                    \
-		[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability_, __LINE__) = GpuPassCapabilities::Register(name);                            \
-		static constexpr tracy::SourceLocationData CS_DETAIL_CONCAT(cs_gpu_pass_srcloc_, __LINE__){ name, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 };       \
+#	define CS_GPU_PASS(name)                                                                                                                              \
+		[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability_, __LINE__) = GpuPassCapabilities::Register(name);                      \
+		static constexpr tracy::SourceLocationData CS_DETAIL_CONCAT(cs_gpu_pass_srcloc_, __LINE__){ name, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 }; \
 		ScopedGpuPass CS_DETAIL_CONCAT(cs_gpu_pass_, __LINE__) { &CS_DETAIL_CONCAT(cs_gpu_pass_srcloc_, __LINE__), name }
 
 /// Two static srclocs, not one: a shared static would latch onto whichever branch
 /// evaluated first and never reflect the other one again.
-#	define CS_GPU_PASS_SELECT(cond, name1, name2)                                                                                                                 \
-		[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability1_, __LINE__) = GpuPassCapabilities::Register(name1);                            \
-		[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability2_, __LINE__) = GpuPassCapabilities::Register(name2);                            \
-		static constexpr tracy::SourceLocationData CS_DETAIL_CONCAT(cs_gpu_pass_srcloc1_, __LINE__){ name1, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 };       \
-		static constexpr tracy::SourceLocationData CS_DETAIL_CONCAT(cs_gpu_pass_srcloc2_, __LINE__){ name2, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 };       \
-		const bool CS_DETAIL_CONCAT(cs_gpu_pass_cond_, __LINE__) = (cond);                                                                                         \
+#	define CS_GPU_PASS_SELECT(cond, name1, name2)                                                                                                           \
+		[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability1_, __LINE__) = GpuPassCapabilities::Register(name1);                      \
+		[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability2_, __LINE__) = GpuPassCapabilities::Register(name2);                      \
+		static constexpr tracy::SourceLocationData CS_DETAIL_CONCAT(cs_gpu_pass_srcloc1_, __LINE__){ name1, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 }; \
+		static constexpr tracy::SourceLocationData CS_DETAIL_CONCAT(cs_gpu_pass_srcloc2_, __LINE__){ name2, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 }; \
+		const bool CS_DETAIL_CONCAT(cs_gpu_pass_cond_, __LINE__) = (cond);                                                                                   \
 		ScopedGpuPass CS_DETAIL_CONCAT(cs_gpu_pass_, __LINE__) { CS_DETAIL_CONCAT(cs_gpu_pass_cond_, __LINE__) ? &CS_DETAIL_CONCAT(cs_gpu_pass_srcloc1_, __LINE__) : &CS_DETAIL_CONCAT(cs_gpu_pass_srcloc2_, __LINE__), CS_DETAIL_CONCAT(cs_gpu_pass_cond_, __LINE__) ? std::string_view(name1) : std::string_view(name2) }
 #else
 #	define CS_GPU_PASS(name)                                                                    \
@@ -75,15 +75,15 @@ private:
 			GpuPassCapabilities::Register(name);                                                 \
 		ScopedGpuPass CS_DETAIL_CONCAT(cs_gpu_pass_, __LINE__) { name }
 
-#	define CS_GPU_PASS_SELECT(cond, name1, name2)                                                                                   \
+#	define CS_GPU_PASS_SELECT(cond, name1, name2)                                                                                      \
 		[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability1_, __LINE__) = GpuPassCapabilities::Register(name1); \
 		[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability2_, __LINE__) = GpuPassCapabilities::Register(name2); \
-		const bool CS_DETAIL_CONCAT(cs_gpu_pass_cond_, __LINE__) = (cond);                                                           \
+		const bool CS_DETAIL_CONCAT(cs_gpu_pass_cond_, __LINE__) = (cond);                                                              \
 		ScopedGpuPass CS_DETAIL_CONCAT(cs_gpu_pass_, __LINE__) { CS_DETAIL_CONCAT(cs_gpu_pass_cond_, __LINE__) ? std::string_view(name1) : std::string_view(name2) }
 #endif
 
-#define CS_GPU_PASS_DYNAMIC(name)                                                                                     \
-	const std::string_view CS_DETAIL_CONCAT(cs_gpu_pass_name_, __LINE__) = (name);                                    \
-	[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability_, __LINE__) =                          \
-		GpuPassCapabilities::Register(CS_DETAIL_CONCAT(cs_gpu_pass_name_, __LINE__));                                \
+#define CS_GPU_PASS_DYNAMIC(name)                                                            \
+	const std::string_view CS_DETAIL_CONCAT(cs_gpu_pass_name_, __LINE__) = (name);           \
+	[[maybe_unused]] static const bool CS_DETAIL_CONCAT(cs_gpu_pass_capability_, __LINE__) = \
+		GpuPassCapabilities::Register(CS_DETAIL_CONCAT(cs_gpu_pass_name_, __LINE__));        \
 	ScopedGpuPass CS_DETAIL_CONCAT(cs_gpu_pass_, __LINE__) { CS_DETAIL_CONCAT(cs_gpu_pass_name_, __LINE__) }

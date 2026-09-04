@@ -306,7 +306,8 @@ namespace Util
 			}
 
 			result += result.empty() || result.back() == ' ' ?
-				static_cast<char>(std::toupper(static_cast<unsigned char>(character))) : character;
+			              static_cast<char>(std::toupper(static_cast<unsigned char>(character))) :
+			              character;
 		}
 
 		return result;
