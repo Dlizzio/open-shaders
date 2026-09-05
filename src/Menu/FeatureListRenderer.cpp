@@ -86,23 +86,17 @@ namespace
 		const ImVec2 triangleLeft(center.x - halfWidth, center.y - triangleHalfHeight);
 		const ImVec2 triangleRight(center.x + halfWidth, center.y - triangleHalfHeight);
 		const ImVec2 triangleBottom(center.x, center.y + triangleHalfHeight);
-		const std::array<LineTransform, 3> hamburgerLines = { {
-			{ ImVec2(center.x, center.y - lineSpacing), 0.0f },
+		const std::array<LineTransform, 3> hamburgerLines = { { { ImVec2(center.x, center.y - lineSpacing), 0.0f },
 			{ center, 0.0f },
-			{ ImVec2(center.x, center.y + lineSpacing), 0.0f }
-		} };
-		const std::array<LineTransform, 3> triangleLines = { {
-			{ ImVec2((triangleBottom.x + triangleRight.x) * 0.5f, (triangleBottom.y + triangleRight.y) * 0.5f),
-				std::atan2(triangleRight.y - triangleBottom.y, triangleRight.x - triangleBottom.x) - FEATURE_ACTION_ICON_FULL_TURN },
+			{ ImVec2(center.x, center.y + lineSpacing), 0.0f } } };
+		const std::array<LineTransform, 3> triangleLines = { { { ImVec2((triangleBottom.x + triangleRight.x) * 0.5f, (triangleBottom.y + triangleRight.y) * 0.5f),
+																   std::atan2(triangleRight.y - triangleBottom.y, triangleRight.x - triangleBottom.x) - FEATURE_ACTION_ICON_FULL_TURN },
 			{ ImVec2((triangleLeft.x + triangleBottom.x) * 0.5f, (triangleLeft.y + triangleBottom.y) * 0.5f),
 				std::atan2(triangleBottom.y - triangleLeft.y, triangleBottom.x - triangleLeft.x) + FEATURE_ACTION_ICON_FULL_TURN },
-			{ ImVec2((triangleLeft.x + triangleRight.x) * 0.5f, triangleLeft.y), FEATURE_ACTION_ICON_FULL_TURN }
-		} };
-		const std::array<ImVec2, 3> flightOffsets = { {
-			ImVec2(-iconSize * FEATURE_ACTION_ICON_FLIGHT_ARC_RATIO, lineSpacing / std::numbers::pi_v<float>),
+			{ ImVec2((triangleLeft.x + triangleRight.x) * 0.5f, triangleLeft.y), FEATURE_ACTION_ICON_FULL_TURN } } };
+		const std::array<ImVec2, 3> flightOffsets = { { ImVec2(-iconSize * FEATURE_ACTION_ICON_FLIGHT_ARC_RATIO, lineSpacing / std::numbers::pi_v<float>),
 			ImVec2(-iconSize * FEATURE_ACTION_ICON_FLIGHT_ARC_RATIO, 0.0f),
-			ImVec2(iconSize * FEATURE_ACTION_ICON_FLIGHT_ARC_RATIO, -lineSpacing / std::numbers::pi_v<float>)
-		} };
+			ImVec2(iconSize * FEATURE_ACTION_ICON_FLIGHT_ARC_RATIO, -lineSpacing / std::numbers::pi_v<float>) } };
 		const ImU32 lineColor = ImGui::GetColorU32(ImGuiCol_Text);
 		const float capRadius = strokeWidth * 0.5f;
 
