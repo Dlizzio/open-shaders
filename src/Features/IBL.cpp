@@ -84,7 +84,7 @@ void IBL::DrawSettings()
 	}
 #endif
 
-	ImGui::Checkbox(T(TKEY("enable_ibl"), "Enable IBL"), (bool*)&settings.EnableIBL);
+	Util::CheckboxFlag(T(TKEY("enable_ibl"), "Enable IBL"), settings.EnableIBL);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("enable_ibl_tooltip"), "Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system."));
 	}
@@ -171,7 +171,7 @@ void IBL::DrawSettings()
 			ImGui::EndTable();
 		}
 	}
-	ImGui::Checkbox(T(TKEY("use_static_ibl"), "Use Static IBL For Out-of-World Objects"), (bool*)&settings.UseStaticIBL);
+	Util::CheckboxFlag(T(TKEY("use_static_ibl"), "Use Static IBL For Out-of-World Objects"), settings.UseStaticIBL);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("use_static_ibl_tooltip"), "Uses pre-baked static IBL cubemap textures for objects rendered outside the game world (e.g. inventory items, loading screens)."));
 	}
@@ -179,7 +179,7 @@ void IBL::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("fog_mix_tooltip"), "Blends the fog color toward the IBL ambient color.\n0 = vanilla fog, 1 = fog fully tinted by IBL."));
 	}
-	ImGui::Checkbox(T(TKEY("preserve_fog_luminance"), "Preserve Fog Luminance"), (bool*)&settings.PreserveFogLuminance);
+	Util::CheckboxFlag(T(TKEY("preserve_fog_luminance"), "Preserve Fog Luminance"), settings.PreserveFogLuminance);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("preserve_fog_luminance_tooltip"), "When Fog Mix is active, rescales the IBL-tinted fog to keep the original fog brightness.\nPrevents fog from becoming too bright or too dark."));
 	}
