@@ -62,7 +62,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void GrassCollision::DrawSettings()
 {
 	if (ImGui::TreeNodeEx(T(TKEY("grass_collision"), "Grass Collision"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox(T(TKEY("enable"), "Enable Grass Collision"), (bool*)&settings.EnableGrassCollision);
+		Util::CheckboxFlag(T(TKEY("enable"), "Enable Grass Collision"), settings.EnableGrassCollision);
 		ImGui::SliderFloat(T(TKEY("radius_scale"), "Collision Radius Scale"), &settings.CollisionRadiusScale,
 			MIN_COLLISION_RADIUS_SCALE, MAX_COLLISION_RADIUS_SCALE, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat(T(TKEY("grass_interaction_radius"), "Grass Interaction Radius"),

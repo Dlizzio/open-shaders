@@ -168,8 +168,4 @@ struct CSUtility : Feature
 	static void SanitizeWaterSettings(WaterSettings& a_settings);
 
 	struct Hooks;
-
-private:
-	static float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default);
-	static void SanitizeSettings(Settings& a_settings);
 };
