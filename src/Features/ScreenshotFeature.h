@@ -19,8 +19,6 @@ struct ScreenshotFeature : public Feature
 	virtual std::string GetShortName() override { return "Screenshot"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 
-	virtual bool SupportsVR() override { return true; }  // fork: VR screenshots (per-eye Subrect presets)
-
 	/** @brief Returns true, indicating this feature's settings are always visible in the menu. */
 	virtual bool IsInMenu() const override;
 
@@ -33,9 +31,9 @@ struct ScreenshotFeature : public Feature
 	/** @brief Called after all features are loaded (no-op for this feature). */
 	virtual void PostPostLoad() override;
 
-	/** @brief Captures the runtime-appropriate final target and enqueues it for async encoding and save. */
+	/** @brief Captures a screenshot from the current back buffer and enqueues it for async encoding and save. */
 	void Capture();
-	/** @brief Checks for a pending capture request and executes Capture() if one is pending. */
+	/** @brief Checks for a pending capture request and executes Capture() if one is pending. Should be called before the wrapped buffers are cleared. */
 	void ProcessCaptureRequest();
 	bool applyCropToScreenshot = true;
 

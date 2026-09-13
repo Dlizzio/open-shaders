@@ -7,6 +7,8 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
+#include "NativeMenu/NativeMenu.h"
+#include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "VRAPI/CSpluginapi.h"
@@ -140,6 +142,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 				globals::state->startupMenuInitializationComplete.store(true, std::memory_order_release);
+
+				NativeMenu::Register();
 			}
 
 			break;
