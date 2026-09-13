@@ -57,8 +57,10 @@ namespace LegacyGraphicsCompatibility
 
 		// BSUtilityShader's shadow-mask pass scissors to BSShadowLight::projectedBoundingBox.
 		// 1.7.99 builds that rect from screen dimensions already multiplied by the dynamic
-		// resolution ratio, then passes extents; older runtimes pass unscaled bounds. The rect
-		// has no other consumer, so scaling here is equivalent to scaling it at the source.
+		// resolution ratio, then passes extents; older runtimes pass unscaled bounds. VR's own
+		// call site already multiplies by the same dynamic-resolution ratio at its call site
+		// (like 1.7.99), so it must not be scaled again here. The rect has no other consumer, so
+		// scaling here is equivalent to scaling it at the source.
 		struct ShadowBounds_SetViewport
 		{
 			static void thunk(
@@ -68,15 +70,17 @@ namespace LegacyGraphicsCompatibility
 				std::int32_t a_right,
 				std::int32_t a_bottom)
 			{
-				auto& runtimeData = globals::game::graphicsState->GetRuntimeData();
-				const float widthRatio = runtimeData.dynamicResolutionLock ? 1.0f : runtimeData.dynamicResolutionWidthRatio;
-				const float heightRatio = runtimeData.dynamicResolutionLock ? 1.0f : runtimeData.dynamicResolutionHeightRatio;
+				if (!globals::game::isVR) {
+					auto& runtimeData = globals::game::graphicsState->GetRuntimeData();
+					const float widthRatio = runtimeData.dynamicResolutionLock ? 1.0f : runtimeData.dynamicResolutionWidthRatio;
+					const float heightRatio = runtimeData.dynamicResolutionLock ? 1.0f : runtimeData.dynamicResolutionHeightRatio;
 
-				// Truncate each edge independently, matching the per-edge CVTTSS2SI the engine emits.
-				a_left = static_cast<std::int32_t>(static_cast<float>(a_left) * widthRatio);
-				a_right = static_cast<std::int32_t>(static_cast<float>(a_right) * widthRatio);
-				a_top = static_cast<std::int32_t>(static_cast<float>(a_top) * heightRatio);
-				a_bottom = static_cast<std::int32_t>(static_cast<float>(a_bottom) * heightRatio);
+					// Truncate each edge independently, matching the per-edge CVTTSS2SI the engine emits.
+					a_left = static_cast<std::int32_t>(static_cast<float>(a_left) * widthRatio);
+					a_right = static_cast<std::int32_t>(static_cast<float>(a_right) * widthRatio);
+					a_top = static_cast<std::int32_t>(static_cast<float>(a_top) * heightRatio);
+					a_bottom = static_cast<std::int32_t>(static_cast<float>(a_bottom) * heightRatio);
+				}
 
 				const auto width = std::bit_cast<std::int32_t>(
 					static_cast<std::uint32_t>(a_right) - static_cast<std::uint32_t>(a_left));
@@ -489,11 +493,11 @@ namespace LegacyGraphicsCompatibility
 
 		void InstallShadowBoundsExtentsAdapter()
 		{
-			const auto callSite = REL::RelocationID(100979, 107762).address() + REL::Relocate(0x3B5, 0x360);
+			const auto callSite = REL::RelocationID(100979, 107762).address() + REL::Relocate(0x3B5, 0x360, 0x49B);
 			const auto expectedTarget = REL::RelocationID(75564, 77365).address();
 			constexpr auto callPattern = REL::make_pattern<"E8 ?? ?? ?? ??">();
 			if (!REL::verify_code(callSite, callPattern) || ReadRelativeCallTarget(callSite) != expectedTarget) {
-				logger::error("Legacy shadow bounds viewport call does not match the verified 1.5.97/1.6.1170 binary; adapter not installed");
+				logger::error("Legacy shadow bounds viewport call does not match the verified 1.5.97/1.6.1170/1.4.15 binary; adapter not installed");
 				return;
 			}
 
