@@ -20,36 +20,36 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 
 		struct Setting
 		{
-			std::string                            tab;
-			Type                                    type;
-			std::string                             label;
-			std::function<float()>                  getValue;
-			std::function<void(float)>              onChange;
-			std::function<void(float)>              onCommit;
-			float                                   defaultValue = 0.0f;
-			std::vector<std::string>                options;
-			std::function<bool()>                   isEnabled;
-			std::function<void(float, char*, int)>  formatValue;
-			std::function<void(char*, int)>         getText;
-			std::function<void()>                   onPress;
-			std::string                             description;
+			std::string tab;
+			Type type;
+			std::string label;
+			std::function<float()> getValue;
+			std::function<void(float)> onChange;
+			std::function<void(float)> onCommit;
+			float defaultValue = 0.0f;
+			std::vector<std::string> options;
+			std::function<bool()> isEnabled;
+			std::function<void(float, char*, int)> formatValue;
+			std::function<void(char*, int)> getText;
+			std::function<void()> onPress;
+			std::string description;
 			// kLabel only.
 			Align align = Align::kLeft;
 			// kButton only: ticks left to keep the box checked after a press,
 			// so the click is actually seen before it springs back.
 			int flashTicks = 0;
 			// kSlider only.
-			bool                                   commitPending = false;
-			bool                                   dragging = false;
-			bool                                   wasDragging = false;
-			float                                  commitValue = 0.0f;
-			std::chrono::steady_clock::time_point  commitDeadline{};
+			bool commitPending = false;
+			bool dragging = false;
+			bool wasDragging = false;
+			float commitValue = 0.0f;
+			std::chrono::steady_clock::time_point commitDeadline{};
 		};
 		constexpr int kButtonFlashTicks = 10;
 
 		// A click on the widget itself reaches both itemPress and OptionChange.
 		// Whichever runs first takes the toggle, the other drops it.
-		int                                   g_lastToggle = -1;
+		int g_lastToggle = -1;
 		std::chrono::steady_clock::time_point g_lastToggleTime{};
 
 		bool ClaimToggle(int a_index)
@@ -129,7 +129,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 		bool IsNativeTab(const std::string& a_tab) { return NativeTabIndex(a_tab) >= 0; }
 
 		std::string g_customTab;
-		bool        g_haveCustomTab = false;
+		bool g_haveCustomTab = false;
 
 		void RegisterCustomTab(const std::string& a_tab)
 		{
@@ -157,17 +157,17 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 			return index == kNativeTabCount && g_haveCustomTab ? g_customTab : std::string{};
 		}
 
-		bool                          g_hooked = false;
-		RE::FxDelegate::CallbackDefn  g_originalOptionChange{};
-		RE::FxDelegate::CallbackDefn  g_originalRequestGameplay{};
-		RE::FxDelegate::CallbackDefn  g_originalRequestDisplay{};
-		RE::FxDelegate::CallbackDefn  g_originalRequestAudio{};
-		std::string                   g_currentTab;
-		bool                          g_haveCurrentTab = false;
-		bool                          g_settingsListInjected = false;
+		bool g_hooked = false;
+		RE::FxDelegate::CallbackDefn g_originalOptionChange{};
+		RE::FxDelegate::CallbackDefn g_originalRequestGameplay{};
+		RE::FxDelegate::CallbackDefn g_originalRequestDisplay{};
+		RE::FxDelegate::CallbackDefn g_originalRequestAudio{};
+		std::string g_currentTab;
+		bool g_haveCurrentTab = false;
+		bool g_settingsListInjected = false;
 		// g_currentTab only updates on native-tab selection, so this stops
 		// Tick() re-injecting its rows over the custom tab.
-		bool                          g_showingCustomTab = false;
+		bool g_showingCustomTab = false;
 
 		// Captured once per menu open, before anything is widened. Not
 		// re-read live: a clip's _width follows its children, so the two
@@ -198,7 +198,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 						// dispatches the default instead, 0 for a button, which
 						// must not fire the action.
 						const auto toggles = g_settings[idx].type == Type::kButton ||
-							g_settings[idx].type == Type::kCheckbox;
+						                     g_settings[idx].type == Type::kCheckbox;
 						if (toggles && !ClaimToggle(static_cast<int>(idx)))
 							return;
 
@@ -255,9 +255,9 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 				return;
 
 			const auto hook = [&](const char* a_name, RE::FxDelegate::CallbackDefn& a_original,
-								   RE::FxDelegateHandler::CallbackFn* a_replacement) {
-				RE::GString                   name(a_name);
-				RE::FxDelegate::CallbackDefn  current{};
+								  RE::FxDelegateHandler::CallbackFn* a_replacement) {
+				RE::GString name(a_name);
+				RE::FxDelegate::CallbackDefn current{};
 				a_fxDelegate->callbacks.Get(name, &current);
 				if (current.callback != a_replacement)
 					a_original = current;
@@ -354,7 +354,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 				if (bar.GetMember("_width", &barW) && barW.IsNumber() && barW.GetNumber() > 0.0) {
 					// The border frames the list at a fixed width; a row's own
 					// is its content's, so it shifts with the label.
-					double       edge = rowW.GetNumber();
+					double edge = rowW.GetNumber();
 					RE::GFxValue border, borderW;
 					if (a_list.GetMember("border", &border) && border.IsObject() &&
 						border.GetMember("_width", &borderW) && borderW.IsNumber() && borderW.GetNumber() > 0.0)
@@ -365,7 +365,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 
 					// setSize, not _height, which would stretch the arrows too.
 					RE::GFxValue sizedH;
-					const auto   height = rowH.GetNumber() * shownV.GetNumber();
+					const auto height = rowH.GetNumber() * shownV.GetNumber();
 					if (!bar.GetMember("__height", &sizedH) || !sizedH.IsNumber() ||
 						std::abs(sizedH.GetNumber() - height) > 0.5) {
 						const RE::GFxValue size[2] = { barW, RE::GFxValue(height) };
@@ -413,12 +413,12 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 		RE::GFxValue BuildEntry(RE::GFxMovie* a_view, const Setting& a_setting, std::size_t a_settingIndex)
 		{
 			const float value = a_setting.getValue ? a_setting.getValue() : 0.0f;
-			const auto  text = a_setting.type == Type::kLabel ? GetLabelText(a_setting) : FormatLabel(a_setting, value);
+			const auto text = a_setting.type == Type::kLabel ? GetLabelText(a_setting) : FormatLabel(a_setting, value);
 
 			// Vanilla has no button widget - kButton is a CheckBox that
 			// RefreshRowAppearance keeps snapping back to unchecked.
 			const auto movieType = a_setting.type == Type::kButton ? static_cast<double>(Type::kCheckbox) :
-			                                                          static_cast<double>(a_setting.type);
+			                                                         static_cast<double>(a_setting.type);
 
 			RE::GFxValue entry;
 			a_view->CreateObject(&entry);
@@ -442,8 +442,8 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 		{
 			RE::GFxValue panel, lists;
 			return a_systemPage.GetMember("OptionsListsPanel", &panel) && panel.IsObject() &&
-				panel.GetMember("OptionsLists", &lists) && lists.IsObject() &&
-				lists.GetMember("List_mc", &a_out) && a_out.IsObject();
+			       panel.GetMember("OptionsLists", &lists) && lists.IsObject() &&
+			       lists.GetMember("List_mc", &a_out) && a_out.IsObject();
 		}
 
 		bool HasOurEntries(RE::GFxValue& a_entryList)
@@ -473,7 +473,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 			// description - upstream's per-vanilla-row description table isn't
 			// carried over here.
 			std::string description;
-			const auto  index = selectedIdx.GetNumber();
+			const auto index = selectedIdx.GetNumber();
 			if (index >= 0.0 && index < static_cast<double>(entries.GetArraySize())) {
 				RE::GFxValue entry, idVal;
 				if (entries.GetElement(static_cast<std::uint32_t>(index), &entry) && entry.IsObject() &&
@@ -507,7 +507,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 
 			// Rows indent their own label, so the row's origin is not where the
 			// text starts.
-			auto         x = rowX.GetNumber();
+			auto x = rowX.GetNumber();
 			RE::GFxValue label, labelX;
 			if (entry0.GetMember("textField", &label) && label.IsObject() &&
 				label.GetMember("_x", &labelX) && labelX.IsNumber())
@@ -515,7 +515,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 
 			// The border frames the list at a fixed width; a label's own is its
 			// text, so it would wrap differently on every tab.
-			auto         width = rowW.GetNumber();
+			auto width = rowW.GetNumber();
 			RE::GFxValue border, borderW;
 			if (a_list.GetMember("border", &border) && border.IsObject() &&
 				border.GetMember("_width", &borderW) && borderW.IsNumber() && borderW.GetNumber() > 0.0)
@@ -619,8 +619,8 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 				!a_clip.GetMember("value", &value) || !value.IsNumber())
 				return;
 
-			const auto   current = static_cast<std::int64_t>(value.GetNumber());
-			const auto   count = static_cast<std::int64_t>(dataProvider.GetArraySize());
+			const auto current = static_cast<std::int64_t>(value.GetNumber());
+			const auto count = static_cast<std::int64_t>(dataProvider.GetArraySize());
 			RE::GFxValue prevBtn, nextBtn;
 			if (stepper.GetMember("prevBtn", &prevBtn) && prevBtn.IsObject())
 				SetIfChanged(prevBtn, "_visible", current > 0);
@@ -658,7 +658,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 			// row that states no alignment inherits whatever the last label
 			// left. Checked apart from the width for the same reason - a clip
 			// reused at the same width would keep the old alignment for good.
-			const auto*  wanted = isLabel ? kAlignNames[static_cast<int>(a_setting->align)] : kAlignNames[0];
+			const auto* wanted = isLabel ? kAlignNames[static_cast<int>(a_setting->align)] : kAlignNames[0];
 			RE::GFxValue format, align;
 			if (!textField.Invoke("getTextFormat", &format) || !format.IsObject())
 				return;
@@ -690,9 +690,9 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 			// SettingsOptionItem already drives _alpha for selection, so this
 			// extends that rule: full brightness only when the row is both
 			// selected and usable.
-			const char* widgetField = a_setting.type == Type::kSlider ? "ScrollBar_mc" :
+			const char* widgetField = a_setting.type == Type::kSlider   ? "ScrollBar_mc" :
 			                          a_setting.type == Type::kDropdown ? "OptionStepper_mc" :
-			                                                               "CheckBox_mc";
+			                                                              "CheckBox_mc";
 			RE::GFxValue widget, selected;
 			if (a_clip.GetMember(widgetField, &widget) && widget.IsObject() &&
 				a_clip.GetMember("selected", &selected) && selected.IsBool())
@@ -718,15 +718,16 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 				a_clip.SetMember("text", Text::MakeGFxString(GetLabelText(a_setting)));
 				break;
 
-			case Type::kButton: {
-				// Held checked for a few ticks so the click is seen; clearing
-				// it at once gives no feedback, leaving it reads as a toggle.
-				const bool holding = a_setting.flashTicks > 0;
-				if (holding)
-					--a_setting.flashTicks;
-				SetIfChanged(a_clip, "value", holding ? 1.0 : 0.0);
-				break;
-			}
+			case Type::kButton:
+				{
+					// Held checked for a few ticks so the click is seen; clearing
+					// it at once gives no feedback, leaving it reads as a toggle.
+					const bool holding = a_setting.flashTicks > 0;
+					if (holding)
+						--a_setting.flashTicks;
+					SetIfChanged(a_clip, "value", holding ? 1.0 : 0.0);
+					break;
+				}
 
 			default:
 				break;
@@ -794,7 +795,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 		{
 			RE::GFxValue scrollBar, dragging;
 			return a_clip.GetMember("ScrollBar_mc", &scrollBar) && scrollBar.IsObject() &&
-				scrollBar.GetMember("isDragging", &dragging) && dragging.IsBool() && dragging.GetBool();
+			       scrollBar.GetMember("isDragging", &dragging) && dragging.IsBool() && dragging.GetBool();
 		}
 
 		// None of this is automatic in vanilla, so it reruns every tick.
@@ -985,7 +986,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 					return;
 				}
 
-				const int  selected = static_cast<int>(idxVal.GetNumber());
+				const int selected = static_cast<int>(idxVal.GetNumber());
 				const auto tab = TabAt(selected);
 				logger::debug("VanillaSettingsEngine: tab press [{}] '{}'", selected, tab.empty() ? "?" : tab);
 				if (tab.empty())
@@ -1014,15 +1015,15 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 				return;
 
 			RE::GFxValue panel, list;
-			const bool   havePanel = a_page.GetMember("SettingsPanel", &panel) && panel.IsObject();
-			const bool   haveList = havePanel && panel.GetMember("List_mc", &list) && list.IsObject();
+			const bool havePanel = a_page.GetMember("SettingsPanel", &panel) && panel.IsObject();
+			const bool haveList = havePanel && panel.GetMember("List_mc", &list) && list.IsObject();
 			if (!haveList) {
 				logger::debug("VanillaSettingsEngine: SettingsPanel found={} List_mc found={}", havePanel, haveList);
 				return;
 			}
 
-			RE::GFxValue   entryList;
-			const bool     haveEntryList = list.GetMember("entryList", &entryList) && entryList.IsArray();
+			RE::GFxValue entryList;
+			const bool haveEntryList = list.GetMember("entryList", &entryList) && entryList.IsArray();
 			const uint32_t entryCount = haveEntryList ? entryList.GetArraySize() : 0;
 			if (!haveEntryList || entryCount < kNativeTabCount) {
 				logger::debug("VanillaSettingsEngine: SettingsList.entryList found={} size={} - not populated yet",
@@ -1055,7 +1056,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 					// The slack absorbs Flash rounding the height to twips,
 					// which otherwise puts an exact fit just over UpdateList's
 					// "iItemHeightSum <= fListHeight" and drops the last row.
-					auto       grown = rowHeight.GetNumber() * static_cast<double>(entryList.GetArraySize()) + 0.5;
+					auto grown = rowHeight.GetNumber() * static_cast<double>(entryList.GetArraySize()) + 0.5;
 					const auto available = AvailableListHeight(a_view, list);
 					if (available > rowHeight.GetNumber() && grown > available)
 						grown = available;
@@ -1117,7 +1118,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 			}
 
 			return mouseX.GetNumber() >= xMin.GetNumber() && mouseX.GetNumber() <= xMax.GetNumber() &&
-				mouseY.GetNumber() >= yMin.GetNumber() && mouseY.GetNumber() <= yMax.GetNumber();
+			       mouseY.GetNumber() >= yMin.GetNumber() && mouseY.GetNumber() <= yMax.GetNumber();
 		}
 
 		// Handed to the widget's own ToggleCheckbox, which moves the frame,
@@ -1176,9 +1177,9 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 				if (!ClaimToggle(idx))
 					return;
 
-				const auto value = setting.type == Type::kButton ? 1.0f :
-					setting.getValue && setting.getValue() != 0.0f ? 0.0f :
-					                                                  1.0f;
+				const auto value = setting.type == Type::kButton                  ? 1.0f :
+				                   setting.getValue && setting.getValue() != 0.0f ? 0.0f :
+				                                                                    1.0f;
 
 				if (setting.type == Type::kButton) {
 					if (!setting.onPress)
@@ -1204,7 +1205,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 			}
 		};
 		OptionsPressHandler g_optionsPressHandler;
-		bool                g_optionsPressHooked = false;
+		bool g_optionsPressHooked = false;
 	}
 
 	void Tick(RE::JournalMenu* a_this, RE::GFxMovieView* a_view, RE::GFxValue& a_systemPage)
@@ -1228,7 +1229,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 		}
 
 		RE::GFxValue list;
-		const bool   haveList = GetOptionsList(a_systemPage, list);
+		const bool haveList = GetOptionsList(a_systemPage, list);
 		if (!g_showingCustomTab && g_haveCurrentTab && IsNativeTab(g_currentTab) && haveList) {
 			InjectNativeTab(a_view, list, g_currentTab);
 		}
