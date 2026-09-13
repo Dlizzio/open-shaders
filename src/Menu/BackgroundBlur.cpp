@@ -6,6 +6,7 @@
 #include "../Features/HDRDisplay.h"
 #include "../Features/Upscaling.h"
 #include "../Globals.h"
+#include "../GpuPass.h"
 #include "../ShaderCache.h"
 #include "../State.h"
 #include "../Util.h"
@@ -392,6 +393,8 @@ namespace BackgroundBlur
 			return;
 		}
 
+		CS_GPU_PASS("BackgroundBlur::PerformBlur");
+
 		// Get source texture description
 		D3D11_TEXTURE2D_DESC sourceDesc;
 		sourceTexture->GetDesc(&sourceDesc);
@@ -591,7 +594,9 @@ namespace BackgroundBlur
 
 	void RenderBackgroundBlur()
 	{
-		if (!enabled) {
+		// The ImGui menu is composited into the HMD as a 3D quad by the VR helper, not drawn to the
+		// desktop back buffer this blur operates on -- blurring it here would have no visible effect.
+		if (!enabled || globals::game::isVR) {
 			return;
 		}
 
