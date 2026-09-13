@@ -4,6 +4,7 @@
 #include "Features/Upscaling.h"
 #include "GpuPass.h"
 #include "Profiler.h"
+#include "State.h"
 
 void HiZPyramid::SetupResources()
 {
@@ -113,7 +114,9 @@ bool HiZPyramid::Build(ID3D11Device* device, ID3D11DeviceContext* ctx)
 	if (!paramsCB || !globals::game::renderer)
 		return false;
 
-	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+	// globals::game::graphicsState->screenWidth/Height is the desktop preview window's resolution on
+	// VR, not the HMD's -- use the same nominal size UpdateGrass derives from the live render target.
+	float2 screenSize = globals::state->screenSize;
 	auto renderSize = Util::ConvertToDynamic(screenSize);
 
 	const uint32_t srcW = std::max(1u, (uint32_t)std::lround(renderSize.x));
