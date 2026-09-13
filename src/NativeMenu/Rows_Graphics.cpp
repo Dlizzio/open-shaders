@@ -20,10 +20,10 @@ namespace NativeMenu
 	std::vector<Row> GraphicsRows()
 	{
 		std::vector<Row> rows{
-			NATIVE_MENU_HEADING(T(TKEY("heading"), "Community Shaders")),
+			NATIVE_MENU_HEADING(T(TKEY("heading"), "Open Shaders")),
 
-			Button(T(TKEY("open_menu"), "Open Community Shaders Menu"), &OpenCommunityShadersMenu,
-				T(TKEY("open_menu_desc"), "Opens the full Community Shaders settings window.")),
+			Button(T(TKEY("open_menu"), "Open Menu"), &OpenCommunityShadersMenu,
+				T(TKEY("open_menu_desc"), "Opens the full Open Shaders settings window.")),
 		};
 
 		AppendRows(rows, HDRRows());
