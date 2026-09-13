@@ -364,6 +364,16 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		bool enabled = profiler.IsUserEnabled();
 		if (ImGui::Checkbox(T("menu.profiling.enable_profiling", "Enable Profiling"), &enabled))
 			profiler.SetUserEnabled(enabled);
+		ImGui::SameLine();
+		if (ImGui::Button(T("menu.profiling.clear_timers", "Clear Timers"))) {
+			profiler.ClearTimers();
+			cachedGroups.clear();
+			cachedTotalAvgMs = 0.0f;
+			cachedMaxAvgMs = 0.0f;
+			cachedMaxP95Ms = 0.0f;
+			cachedMaxP99Ms = 0.0f;
+			timeSinceLastUpdate = 0.0f;
+		}
 	}
 
 	if (!profiler.IsUserEnabled()) {
