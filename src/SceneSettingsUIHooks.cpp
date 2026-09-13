@@ -329,14 +329,27 @@ namespace
 		for (const auto& candidate : SceneSettingsCatalog::GetSettings()) {
 			if (candidate.featureShortName != featureShortName ||
 				!SceneSettingsCatalog::IsSceneControllable(candidate) ||
-				!MatchesSettingLabel(candidate, label, choiceLabelsOnly) ||
-				(!ShouldBlockSetting(candidate) && !ShouldOutlineSetting(candidate)))
+				!MatchesSettingLabel(candidate, label, choiceLabelsOnly))
 				continue;
+			if (!candidate.controlScope.empty()) {
+				const auto* window = ImGui::GetCurrentWindowRead();
+				bool scopeMatches = false;
+				if (window) {
+					for (int index = 1; index < window->IDStack.Size; ++index) {
+						if (ImHashStr(candidate.controlScope.data(), candidate.controlScope.size(), window->IDStack[index - 1]) == window->IDStack[index]) {
+							scopeMatches = true;
+							break;
+						}
+					}
+				}
+				if (!scopeMatches)
+					continue;
+			}
 			if (match && !IsSameLogicalControl(*match, candidate))
 				return nullptr;
 			match = &candidate;
 		}
-		return match;
+		return match && (ShouldBlockSetting(*match) || ShouldOutlineSetting(*match)) ? match : nullptr;
 	}
 
 	template <class Aggregate>

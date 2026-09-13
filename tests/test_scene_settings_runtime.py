@@ -669,6 +669,7 @@ int main() {
         ui = (ROOT / "src/CSEditor/SceneSettingsUI.cpp").read_text(encoding="utf-8")
         source = r'''
 #include <algorithm>
+#include "UTIL_MATH"
 #include <compare>
 #include <cmath>
 #include <format>
@@ -954,6 +955,7 @@ int main() {
         for token, replacement in replacements.items():
             source = source.replace("\n" + token + ";\n", "\n" + replacement + ";\n")
             source = source.replace("\n" + token + "\n", "\n" + replacement + "\n")
+        source = source.replace("UTIL_MATH", (ROOT / "src/Utils/MathUtils.h").as_posix())
         self.compile_and_run(source)
 
     def test_native_feature_draft_switch_confirmation(self):
