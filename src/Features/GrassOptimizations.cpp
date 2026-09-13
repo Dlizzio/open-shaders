@@ -848,7 +848,7 @@ void GrassOptimizations::CullBucket(GrassBucket& b, ID3D11DeviceContext* ctx)
 			continue;
 		for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 			const UINT countOffset = LODCounterOffsetForEye(eye, tier);
-			const D3D11_BOX countBox{ countOffset, 0, 0, countOffset + sizeof(uint32_t), 1, 1 };
+			const D3D11_BOX countBox{ countOffset, 0, 0, static_cast<UINT>(countOffset + sizeof(uint32_t)), 1, 1 };
 			ctx->CopySubresourceRegion(bin.argsBuf, 0, InstanceCountOffsetForEye(eye), 0, 0, b.lodCounterBuf, 0, &countBox);
 		}
 	}
