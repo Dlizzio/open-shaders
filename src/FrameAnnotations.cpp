@@ -1095,7 +1095,7 @@ namespace FrameAnnotations
 			const auto renderTargetName = magic_enum::enum_name(
 				static_cast<RE::RENDER_TARGETS::RENDER_TARGET>(renderTargetIndex));
 			if (auto texture = renderer->GetRuntimeData().renderTargets[renderTargetIndex].texture) {
-				texture->SetPrivateData(WKPDID_D3DDebugObjectName,
+				texture->SetPrivateData(*Util::AsW32(&WKPDID_D3DDebugObjectName),
 					static_cast<UINT>(renderTargetName.size()), renderTargetName.data());
 			}
 		}
@@ -1106,7 +1106,7 @@ namespace FrameAnnotations
 			const auto renderTargetName = magic_enum::enum_name(
 				static_cast<RE::RENDER_TARGETS_CUBEMAP::RENDER_TARGET_CUBEMAP>(renderTargetIndex));
 			if (auto texture = renderer->GetRendererData().cubemapRenderTargets[renderTargetIndex].texture) {
-				texture->SetPrivateData(WKPDID_D3DDebugObjectName,
+				texture->SetPrivateData(*Util::AsW32(&WKPDID_D3DDebugObjectName),
 					static_cast<UINT>(renderTargetName.size()), renderTargetName.data());
 			}
 		}
@@ -1118,7 +1118,7 @@ namespace FrameAnnotations
 				static_cast<RE::RENDER_TARGETS_DEPTHSTENCIL::RENDER_TARGET_DEPTHSTENCIL>(
 					renderTargetIndex));
 			if (auto texture = renderer->GetDepthStencilData().depthStencils[renderTargetIndex].texture) {
-				texture->SetPrivateData(WKPDID_D3DDebugObjectName,
+				texture->SetPrivateData(*Util::AsW32(&WKPDID_D3DDebugObjectName),
 					static_cast<UINT>(renderTargetName.size()), renderTargetName.data());
 			}
 		}
