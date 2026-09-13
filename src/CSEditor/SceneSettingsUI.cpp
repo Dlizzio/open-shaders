@@ -2865,7 +2865,7 @@ namespace SceneSettingsUI
 				T("feature.scene_manager.edit.discard_title", "Discard Unsaved Scene Settings?"));
 			state.replaceScene.message = T("feature.scene_manager.edit.discard_scene_message",
 				"Unsaved scene settings will be discarded. Switch to the selected scene?");
-			state.replaceScene.confirmLabel = T("feature.scene_manager.edit.discard_confirm", "Discard and Open");
+			state.replaceScene.confirmLabel = T("feature.scene_manager.edit.discard_switch_confirm", "Discard and Switch");
 			state.replaceScene.cancelLabel = T("feature.scene_manager.action.cancel", "Cancel");
 			if (state.replaceScene.Draw()) {
 				FinishActiveFeatureSceneEdit(state);

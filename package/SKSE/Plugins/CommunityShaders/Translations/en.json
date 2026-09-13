@@ -2315,6 +2315,7 @@
     "feature.scene_manager.edit.discard_confirm": "Discard and Open",
     "feature.scene_manager.edit.discard_message": "Unsaved scene settings for {feature} will be discarded. Open Scene Manager for {target}?",
     "feature.scene_manager.edit.discard_scene_message": "Unsaved scene settings will be discarded. Switch to the selected scene?",
+    "feature.scene_manager.edit.discard_switch_confirm": "Discard and Switch",
     "feature.scene_manager.edit.discard_title": "Discard Unsaved Scene Settings?",
     "feature.scene_manager.edit.overwrites_paused": "Feature overwrites are temporarily paused",
     "feature.scene_manager.edit.overwritten_warning": "Feature settings are being overwritten",
