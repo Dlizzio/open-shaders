@@ -51,11 +51,16 @@ struct LinearLighting : Feature
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 	static_assert(sizeof(PerFrameData) == 0x40);
 
+	static constexpr std::array<float, 3> kNoProjectedMaterialColorScale{ -1.0f, -1.0f, -1.0f };
+
 	struct alignas(16) PerGeometryData
 	{
 		float emissiveMult;
-		float pad0[3];
+		std::array<float, 3> projectedMaterialColorScale = kNoProjectedMaterialColorScale;
 	};
+	static_assert(sizeof(PerGeometryData) == 16);
+
+	std::array<std::array<float, 3>, 2> lodProjectedMaterialColorScales{ kNoProjectedMaterialColorScale, kNoProjectedMaterialColorScale };
 
 	ConstantBuffer* PerGeometryCB = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> sceneGammaDecodeCS;
@@ -77,7 +82,7 @@ struct LinearLighting : Feature
 
 	virtual void RestoreDefaultSettings() override;
 
-	/** @brief Reads the directional light multiplier from ImageSpaceManager during the prepass. */
+	/** @brief Reads the directional light multiplier and projected LOD material colors. */
 	virtual void Prepass() override;
 	/** @brief Installs the lighting geometry hook. */
 	virtual void PostPostLoad() override;
@@ -109,7 +114,7 @@ struct LinearLighting : Feature
 	static RE::NiColor DecodeAuthoredColor(RE::NiColor inColor);
 
 	/**
-	 * @brief Uploads emissive multiplier data to the per-geometry constant buffer during shader setup.
+	 * @brief Uploads emissive and projected material data during lighting geometry setup.
 	 * @param a_pass The render pass whose lighting properties to read.
 	 */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);

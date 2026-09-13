@@ -292,8 +292,13 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.LandBlendWeights2.w = 1 - saturate(0.000375600968 * (9625.59961 - length(gridOffset)));
 	vsout.LandBlendWeights2.xyz = input.LandBlendWeights2.xyz;
 #	elif defined(PROJECTED_UV) && !defined(SKINNED)
+#		if defined(ENVMAP)
+	// ENVMAP supplies the projection direction in world space.
+	vsout.TexProj = TextureProj[eyeIndex][2].xyz;
+#		else
 	float3x3 texProjWorld3x3 = float3x3(World[eyeIndex][0].xyz, World[eyeIndex][1].xyz, World[eyeIndex][2].xyz);
 	vsout.TexProj = mul(texProjWorld3x3, TextureProj[eyeIndex][2].xyz);
+#		endif
 #	endif
 
 #	if defined(EYE)
@@ -1720,12 +1725,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float detailNormalScale = ProjectedUVParams3.y * ProjectedUVParams.z;
 		float3 projDetailNormal = Triplanar::SampleStochastic(TexProjDetail, SampProjDetailSampler, projWorldPos, triWeights, detailNormalScale, screenNoise).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
-		float3 projBaseColor = Color::DiffuseWithAuthoredTint(
+		float3 projBaseColor = Color::ProjectedDiffuse(
 			Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz,
-			ProjectedUVParams2.xyz);
+			ProjectedUVParams2.xyz, MaterialObjectRGBScale);
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
 #			if defined(TRUE_PBR)
-		projBaseColor = max(0, projBaseColor.xyz * MaterialObjectRGBScale);
 		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(ParallaxOccData.x, 0, ParallaxOccData.y), projectedMaterialWeight);
 		float4 projectedGlintParameters = 0;
 		if ((PBRFlags & PBR::Flags::ProjectedGlint) != 0) {
@@ -1811,7 +1815,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
 		pbrVertexColorSrc = 1;
 #		endif
-	float3 pbrVertexColor = Color::GamutTransform(Color::SrgbToLinear(pbrVertexColorSrc));
+	float3 pbrVertexColor = Color::SrgbToLinear(pbrVertexColorSrc);
+	if (!ENABLE_LL)
+		pbrVertexColor = Color::GamutTransform(pbrVertexColor);
 	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
 	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
 
@@ -1820,7 +1826,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		material.F0 = lerp(rawRMAOS.w, baseColor.xyz, material.Metallic);
 		baseColor.xyz = Color::LinearToSrgb(baseColor.xyz);
 	} else {
-		baseColor.xyz *= pbrVertexColor;
+		baseColor.xyz = Color::ApplyLinearSrgbTint(baseColor.xyz, pbrVertexColor);
 		material.F0 = lerp(rawRMAOS.w, baseColor.xyz, material.Metallic);
 	}
 
@@ -1856,7 +1862,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				material.SubsurfaceColor = Color::LinearToSrgb(
 					Color::SrgbToLinear(material.SubsurfaceColor) * pbrVertexColor);
 			} else {
-				material.SubsurfaceColor *= pbrVertexColor;
+				material.SubsurfaceColor = Color::ApplyLinearSrgbTint(material.SubsurfaceColor, pbrVertexColor);
 			}
 
 			material.Thickness *= sampledSubsurfaceProperties.w;

@@ -15,7 +15,7 @@
 cbuffer LLPerGeometry : register(b8)
 {
 	float emissiveMult;
-	float3 pad0;
+	float3 projectedMaterialColorScale;
 };
 #endif
 
@@ -234,6 +234,13 @@ namespace Color
 		return ENABLE_ACEScg ? sRGBToAP1(linearColor) : linearColor;
 	}
 
+	float3 ApplyLinearSrgbTint(float3 color, float3 tint)
+	{
+		// Apply tint in linear sRGB so white stays neutral in ACEScg.
+		float3 linearSrgbColor = ENABLE_ACEScg ? AP1TosRGB(color) : color;
+		return GamutTransform(linearSrgbColor * tint);
+	}
+
 	float3 AuthoredGammaToLinear(float3 color)
 	{
 		return SignedPow(color, SharedData::linearLightingSettings.authoredColorGamma);
@@ -273,11 +280,17 @@ namespace Color
 #	endif
 	}
 
-	float3 DiffuseWithAuthoredTint(float3 color, float3 tint)
+	float3 ProjectedDiffuse(float3 color, float3 tint, float3 materialColorScale)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL ? GamutTransform(color * AuthoredGammaToLinear(tint)) : Diffuse(color) * tint;
+		// The shared UNORM projection texture enters PBR in its legacy gamma space.
+		float3 projectedColor = max(0, color * tint * materialColorScale);
+		return ENABLE_LL ? GamutTransform(SrgbToLinear(projectedColor)) : projectedColor;
 #	else
+#		if defined(PSHADER) && defined(LIGHTING) && (defined(LODOBJECTS) || defined(LODOBJECTSHD))
+		if (ENABLE_LL && projectedMaterialColorScale.x >= 0.0)
+			return GamutTransform(SrgbToLinear(max(0, color * tint * projectedMaterialColorScale)));
+#		endif
 		return Diffuse(color * tint);
 #	endif
 	}
