@@ -220,7 +220,8 @@ namespace
 		if (label == displayName)
 			return ControlLabelMatch::ExactText;
 		return GetVisibleLabel(label) == GetVisibleLabel(displayName) ?
-		           ControlLabelMatch::VisibleText : ControlLabelMatch::None;
+		           ControlLabelMatch::VisibleText :
+		           ControlLabelMatch::None;
 	}
 
 	bool IsSameLogicalControl(const SceneSettingsCatalog::SettingMetadata& lhs,
@@ -371,7 +372,7 @@ namespace
 			} else if (!IsSameLogicalControl(*match, candidate)) {
 				ambiguous = true;
 			} else if (ShouldBlockSetting(candidate) ||
-				(!ShouldBlockSetting(*match) && ShouldOutlineSetting(candidate))) {
+					   (!ShouldBlockSetting(*match) && ShouldOutlineSetting(candidate))) {
 				match = &candidate;
 			}
 		}
