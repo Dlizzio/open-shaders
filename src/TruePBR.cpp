@@ -1508,7 +1508,7 @@ struct BSGrassShader_SetupTechnique
 		auto* renderer = globals::game::renderer;
 
 		uint32_t shaderDescriptor = static_cast<uint32_t>(SIE::ShaderCache::GrassShaderTechniques::TruePbr);
-		if (graphicsState->useEarlyZ) {
+		if (graphicsState->GetUseEarlyZ()) {
 			shaderDescriptor |= static_cast<uint32_t>(SIE::ShaderCache::GrassShaderFlags::AlphaTest);
 		}
 
