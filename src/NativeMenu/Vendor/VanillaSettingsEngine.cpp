@@ -3,6 +3,7 @@
 
 #include "NativeMenu/Vendor/VanillaSettingsEngine.h"
 
+#include "Globals.h"
 #include "NativeMenu/Vendor/ListRows.h"
 #include "NativeMenu/Vendor/Text.h"
 
@@ -114,13 +115,17 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 		// register something in turn.
 		std::recursive_mutex g_settingsMutex;
 
-		constexpr const char* kNativeTabs[] = { "Gameplay", "Display", "Audio" };
-		constexpr std::size_t kNativeTabCount = std::size(kNativeTabs);
+		constexpr const char* kFlatNativeTabs[] = { "Gameplay", "Display", "Audio" };
+		constexpr const char* kVRNativeTabs[] = { "Gameplay", "Display", "Audio", "VR", "VR Performance" };
+
+		const char* const* NativeTabs() { return globals::game::isVR ? kVRNativeTabs : kFlatNativeTabs; }
+		std::size_t NativeTabCount() { return globals::game::isVR ? std::size(kVRNativeTabs) : std::size(kFlatNativeTabs); }
 
 		int NativeTabIndex(const std::string& a_tab)
 		{
-			for (std::size_t i = 0; i < kNativeTabCount; ++i) {
-				if (a_tab == kNativeTabs[i])
+			const auto* tabs = NativeTabs();
+			for (std::size_t i = 0, count = NativeTabCount(); i < count; ++i) {
+				if (a_tab == tabs[i])
 					return static_cast<int>(i);
 			}
 			return -1;
@@ -152,9 +157,10 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 				return {};
 			const auto index = static_cast<std::size_t>(a_index);
 
-			if (index < kNativeTabCount)
-				return kNativeTabs[index];
-			return index == kNativeTabCount && g_haveCustomTab ? g_customTab : std::string{};
+			const auto count = NativeTabCount();
+			if (index < count)
+				return NativeTabs()[index];
+			return index == count && g_haveCustomTab ? g_customTab : std::string{};
 		}
 
 		bool g_hooked = false;
@@ -1025,7 +1031,7 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 			RE::GFxValue entryList;
 			const bool haveEntryList = list.GetMember("entryList", &entryList) && entryList.IsArray();
 			const uint32_t entryCount = haveEntryList ? entryList.GetArraySize() : 0;
-			if (!haveEntryList || entryCount < kNativeTabCount) {
+			if (!haveEntryList || entryCount < NativeTabCount()) {
 				logger::debug("VanillaSettingsEngine: SettingsList.entryList found={} size={} - not populated yet",
 					haveEntryList, entryCount);
 				return;
