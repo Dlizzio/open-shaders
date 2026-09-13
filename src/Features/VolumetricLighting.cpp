@@ -219,8 +219,11 @@ void VolumetricLighting::SetupResources()
 
 void VolumetricLighting::EarlyPrepass()
 {
-	int32_t width = static_cast<int32_t>(globals::game::graphicsState->screenWidth);
-	int32_t height = static_cast<int32_t>(globals::game::graphicsState->screenHeight);
+	// globals::game::graphicsState->screenWidth/Height is the desktop preview window's resolution on
+	// VR, not the HMD's -- use the same nominal size UpdateGrass/HiZPyramid derive from the live
+	// render target.
+	int32_t width = static_cast<int32_t>(globals::state->screenSize.x);
+	int32_t height = static_cast<int32_t>(globals::state->screenSize.y);
 
 	if (width != fullScreenX || height != fullScreenY) {
 		blurHCS = nullptr;
