@@ -45,4 +45,4 @@ The coded defaults are:
 
 Mesh matching is case-insensitive and accepts either slash style. The in-game Global Override is runtime-only and can temporarily replace every per-tree response for testing.
 
-Tree spring state is simulated entirely on the GPU using the global Wind settings. Grass and leaf flutter continue to use the unfiltered wind so fast-moving gust fronts retain their detail.
+Tree spring state is simulated entirely on the GPU using the global Wind settings. Base wind and gusts are combined before spring filtering, and the filtered response drives trunk bending and ambient leaf flutter. Leaf flutter also receives the immediate transient wind response.

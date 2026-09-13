@@ -748,6 +748,15 @@ namespace TreeWindPatcher
 		logger::info("[TreeWindPatcher] Installed model creation hook");
 	}
 
+	const RE::BSLeafAnimNode* FindLeafNode(const RE::BSGeometry* a_geometry)
+	{
+		for (auto* parent = a_geometry ? a_geometry->parent : nullptr; parent; parent = parent->parent) {
+			if (const auto* leafNode = netimmerse_cast<RE::BSLeafAnimNode*>(parent))
+				return leafNode;
+		}
+		return nullptr;
+	}
+
 	Sensitivities GetSensitivities(const RE::BSGeometry* a_geometry)
 	{
 		Sensitivities sensitivities;
@@ -771,7 +780,7 @@ namespace TreeWindPatcher
 			return sensitivities;
 		}
 
-		const auto* leafParent = netimmerse_cast<RE::BSLeafAnimNode*>(a_geometry->parent);
+		const auto* leafParent = FindLeafNode(a_geometry);
 		if (!leafParent)
 			return sensitivities;
 

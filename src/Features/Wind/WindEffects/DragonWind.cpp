@@ -40,11 +40,19 @@ namespace DragonWindRuntime
 		constexpr float kDistanceMin = 100.0f;
 		constexpr float kDistanceMax = 30000.0f;
 		constexpr float kSpeedMin = 0.0f;
+		constexpr float kMinimumPropagationSpeed = 1e-5f;
 		constexpr float kSpeedMax = 10000.0f;
 		constexpr float kTimeMin = 0.0f;
 		constexpr float kTimeMax = WindField::kTransientImpulseMaximumDecayTime;
 		constexpr float kWingbeatConeHalfAngle = 50.0f;
 		constexpr float kWingbeatHorizontalDrift = 0.35f;
+
+		float SanitizePropagationSpeed(float a_value, float a_default) noexcept
+		{
+			return std::isfinite(a_value) && a_value > kMinimumPropagationSpeed ?
+			           std::min(a_value, kSpeedMax) :
+			           a_default;
+		}
 
 		float LengthSquared(const float3& a_value) noexcept
 		{
@@ -740,6 +748,7 @@ void DragonWind::DrawSettings()
 		&settings.shoutsEnabled);
 
 	ImGui::EndDisabled();
+	SanitizeSettings();
 }
 
 void DragonWind::LoadSettings(const nlohmann::json& a_json)
@@ -787,8 +796,8 @@ void DragonWind::SanitizeSettings()
 			DragonWindRuntime::kDistanceMin, DragonWindRuntime::kDistanceMax, a_default.distance);
 		a_profile.waveHalfWidth = WindMath::ClampFiniteOrDefault(a_profile.waveHalfWidth,
 			DragonWindRuntime::kDistanceMin, DragonWindRuntime::kDistanceMax, a_default.waveHalfWidth);
-		a_profile.propagationSpeed = WindMath::ClampFiniteOrDefault(a_profile.propagationSpeed,
-			DragonWindRuntime::kSpeedMin, DragonWindRuntime::kSpeedMax, a_default.propagationSpeed);
+		a_profile.propagationSpeed = DragonWindRuntime::SanitizePropagationSpeed(
+			a_profile.propagationSpeed, a_default.propagationSpeed);
 	};
 
 	settings.strength = WindMath::ClampFiniteOrDefault(settings.strength,
@@ -801,8 +810,8 @@ void DragonWind::SanitizeSettings()
 		DragonWindRuntime::kDistanceMin, DragonWindRuntime::kDistanceMax, defaults.wingbeatDistance);
 	settings.wingbeatWaveHalfWidth = WindMath::ClampFiniteOrDefault(settings.wingbeatWaveHalfWidth,
 		DragonWindRuntime::kDistanceMin, DragonWindRuntime::kDistanceMax, defaults.wingbeatWaveHalfWidth);
-	settings.wingbeatPropagationSpeed = WindMath::ClampFiniteOrDefault(settings.wingbeatPropagationSpeed,
-		DragonWindRuntime::kSpeedMin, DragonWindRuntime::kSpeedMax, defaults.wingbeatPropagationSpeed);
+	settings.wingbeatPropagationSpeed = DragonWindRuntime::SanitizePropagationSpeed(
+		settings.wingbeatPropagationSpeed, defaults.wingbeatPropagationSpeed);
 	settings.wingbeatDecayTime = WindMath::ClampFiniteOrDefault(settings.wingbeatDecayTime,
 		DragonWindRuntime::kTimeMin, DragonWindRuntime::kTimeMax, defaults.wingbeatDecayTime);
 	settings.wingbeatFallbackCooldown = WindMath::ClampFiniteOrDefault(settings.wingbeatFallbackCooldown,

@@ -10,6 +10,7 @@
 namespace RE
 {
 	class BSGeometry;
+	class BSLeafAnimNode;
 }
 
 namespace TreeWindPatcher
@@ -60,6 +61,9 @@ namespace TreeWindPatcher
 
 	/** @brief Loads tree wind patch files and installs model metadata during NIF creation. */
 	void LoadAndInstall();
+
+	/** @brief Finds the nearest leaf-node ancestor owning a geometry's tree profile. */
+	[[nodiscard]] const RE::BSLeafAnimNode* FindLeafNode(const RE::BSGeometry* a_geometry);
 
 	/** @brief Reads live sensitivities and startup-cached model bounds for a tree geometry. */
 	[[nodiscard]] Sensitivities GetSensitivities(const RE::BSGeometry* a_geometry);

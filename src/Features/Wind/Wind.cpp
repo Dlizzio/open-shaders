@@ -348,7 +348,7 @@ void Wind::LoadSettings(json& o_json)
 {
 	const Settings defaults{};
 	settings = o_json;
-	if (!o_json.contains("windFieldGustCrosswindScale")) {
+	if (!o_json.contains("windFieldGustCrosswindScale") && o_json.contains("windFieldGustScale")) {
 		const float legacyGustScale = ClampFiniteOrDefault(settings.windFieldGustScale,
 			kWindFieldGustScaleMin, kWindFieldGustScaleMax, defaults.windFieldGustScale);
 		settings.windFieldGustCrosswindScale = legacyGustScale * WindField::WindTuning{}.frontAspectRatio;

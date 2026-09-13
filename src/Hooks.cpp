@@ -181,11 +181,11 @@ namespace
 
 	bool IsExplicitTreeLeavesGeometry(const RE::BSGeometry* a_geometry)
 	{
-		if (!a_geometry || !netimmerse_cast<RE::BSLeafAnimNode*>(a_geometry->parent))
+		if (!a_geometry)
 			return false;
 
 		const char* geometryName = a_geometry->name.c_str();
-		return geometryName && std::strcmp(geometryName, "leaves") == 0;
+		return geometryName && std::strcmp(geometryName, "leaves") == 0 && TreeWindPatcher::FindLeafNode(a_geometry);
 	}
 
 	bool IsTreeGeometry(const RE::BSGeometry* a_geometry)
@@ -291,9 +291,10 @@ namespace
 			state->permutationData.TreeTransientMaximumBendMultiplier =
 				sensitivities.transientMaximumBendMultiplier;
 			if (sensitivities.hasBounds) {
+				const float worldHeight = sensitivities.boundHeight * std::abs(a_pass->geometry->world.scale);
 				state->permutationData.TreeWindBoundsBase = sensitivities.boundMinimumZ;
 				state->permutationData.TreeWindBoundsHeight = sensitivities.boundHeight;
-				state->permutationData.TreeWindProbeBase = { sensitivities.probeBase.x, sensitivities.probeBase.y, sensitivities.probeBase.z, 0.0f };
+				state->permutationData.TreeWindProbeBase = { sensitivities.probeBase.x, sensitivities.probeBase.y, sensitivities.probeBase.z, worldHeight };
 				state->permutationData.TreeWindProbeTop = { sensitivities.probeTop.x, sensitivities.probeTop.y, sensitivities.probeTop.z, 0.0f };
 			} else {
 				state->permutationData.TreeWindBoundsBase = 0.0f;

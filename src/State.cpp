@@ -87,7 +87,6 @@ void State::UpdatePermutationBuffer()
 void State::Draw()
 {
 	ZoneScoped;
-	UpdateGrassGpuPass();
 	if (globals::features::sceneManager.loaded)
 		globals::features::sceneManager.Update();
 
@@ -153,17 +152,6 @@ void State::Draw()
 			Debug();
 
 		updateShader = false;
-	}
-}
-
-void State::UpdateGrassGpuPass()
-{
-	const bool isGrassDraw = currentShader && currentShader->shaderType.get() == RE::BSShader::Type::Grass;
-	if (isGrassDraw) {
-		if (!grassGpuPass)
-			grassGpuPass.emplace("Grass::Draw");
-	} else {
-		grassGpuPass.reset();
 	}
 }
 
@@ -302,8 +290,6 @@ void State::SetOutputRenderTarget(RE::RENDER_TARGET a_output)
  */
 void State::Reset()
 {
-	grassGpuPass.reset();
-
 	// Land staged SKSE API setter writes before features consume settings this frame.
 	CSPluginAPI::ProcessStagedSettings();
 

@@ -125,6 +125,7 @@ public:
 	Texture2D* deformationTextures[2] = {};
 	Texture2D* velocityTextures[2] = {};
 	uint currentTextureIndex = 0;
+	bool fieldsCleared = true;
 	winrt::com_ptr<ID3D11SamplerState> deformationSampler;
 
 	struct CapsuleHistory

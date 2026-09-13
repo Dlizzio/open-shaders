@@ -15,6 +15,7 @@ using namespace WindSettingsLimits;
 namespace
 {
 	constexpr UINT kGrassWindSpringVertexConstantBufferSlot = 3;
+	constexpr uint32_t kGrassWindSpringBorderTexels = 2;
 }
 
 void Wind::RecreateGrassWindSpringTextures(uint32_t a_qualityIndex, uint32_t a_textureSize)
@@ -122,13 +123,13 @@ void Wind::UpdateGrassWindSpring(bool a_compute)
 		RE::NiPoint3 center{};
 		if (globals::game::player)
 			center = globals::game::player->GetPosition();
-		const float anchorCellSize = sanitizedSettings.grassWindSpringQuality[0].maxDistance * 2.0f /
-		                             static_cast<float>(sanitizedSettings.grassWindSpringQuality[0].textureSize);
-		const float2 snappedCenter{
-			std::floor(center.x / anchorCellSize) * anchorCellSize,
-			std::floor(center.y / anchorCellSize) * anchorCellSize
+		const auto& nearQuality = sanitizedSettings.grassWindSpringQuality[0];
+		const float anchorCellSize = nearQuality.maxDistance * 2.0f /
+		                             static_cast<float>(nearQuality.textureSize - kGrassWindSpringBorderTexels);
+		const float2 anchorCenter{
+			std::round(center.x / anchorCellSize) * anchorCellSize,
+			std::round(center.y / anchorCellSize) * anchorCellSize
 		};
-
 		GrassWindSpringData data{};
 		data.transientFieldMask = GetTransientFieldMask();
 		const float fieldHeight = center.z;
@@ -142,7 +143,13 @@ void Wind::UpdateGrassWindSpring(bool a_compute)
 		ID3D11UnorderedAccessView* nullUavs[2]{};
 		for (uint32_t qualityIndex = 0; qualityIndex < kGrassWindSpringQualityRangeCount; ++qualityIndex) {
 			const auto& quality = sanitizedSettings.grassWindSpringQuality[qualityIndex];
-			const float fieldSize = quality.maxDistance * 2.0f;
+			const float cellSize = quality.maxDistance * 2.0f /
+			                       static_cast<float>(quality.textureSize - kGrassWindSpringBorderTexels);
+			const float fieldSize = cellSize * quality.textureSize;
+			const float2 snappedCenter{
+				std::round(anchorCenter.x / cellSize) * cellSize,
+				std::round(anchorCenter.y / cellSize) * cellSize
+			};
 			if (quality.textureSize != grassState.springTextureSizes[qualityIndex])
 				RecreateGrassWindSpringTextures(qualityIndex, quality.textureSize);
 			if (fieldSize != grassState.springWorldSizes[qualityIndex]) {

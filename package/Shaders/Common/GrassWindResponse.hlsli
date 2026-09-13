@@ -16,8 +16,8 @@ namespace GrassWindResponse
 		float currentFrequency = 1.0;
 		float previousFrequency = 1.0;
 		if (Permutation::EnableAmbientGrassWind != 0) {
-			uint currentField = GrassWindSpring::SelectField(rootWorldPosition);
-			uint previousField = GrassWindSpring::SelectField(previousRootWorldPosition);
+			uint currentField = GrassWindSpring::SelectField(rootWorldPosition, false);
+			uint previousField = GrassWindSpring::SelectField(previousRootWorldPosition, true);
 			if (currentField == previousField && GrassWindSpring::HasTemporalCoverage(
 													 currentField, previousField, rootWorldPosition, previousRootWorldPosition)) {
 				float4 currentSample = GrassWindSpring::SampleCurrent(currentField, rootWorldPosition);

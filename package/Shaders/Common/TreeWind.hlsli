@@ -108,7 +108,7 @@ namespace TreeWind
 			return 0.0.xx;
 
 		float maximumDisplacement =
-			treeHeight * max(Permutation::TreeWindMaximumDisplacementPercent, 0.0) * 0.01;
+			Permutation::TreeWindProbeBase.w * max(Permutation::TreeWindMaximumDisplacementPercent, 0.0) * 0.01;
 		return windVelocity *
 		       (maximumDisplacement * Detail::GetBendFlexibility(localHeight) *
 				   max(Permutation::TrunkWindBendSensitivity, 0.0) *

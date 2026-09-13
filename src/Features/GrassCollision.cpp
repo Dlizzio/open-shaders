@@ -438,6 +438,8 @@ void GrassCollision::SetupResources()
 		globals::d3d::context->ClearUnorderedAccessViewFloat(velocityTextures[textureIndex]->uav.get(), clearValue);
 	}
 
+	fieldsCleared = true;
+
 	D3D11_SAMPLER_DESC samplerDesc{};
 	samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 	samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -523,14 +525,18 @@ void GrassCollision::UpdateCollisionTexture()
 	context->VSSetShaderResources(100, ARRAYSIZE(nullVertexSrvs), nullVertexSrvs);
 
 	if (!settings.EnableGrassCollision) {
+		if (fieldsCleared)
+			return;
 		const float clearColor[4] = {};
 		for (uint textureIndex = 0; textureIndex < 2; ++textureIndex) {
 			context->ClearUnorderedAccessViewFloat(deformationTextures[textureIndex]->uav.get(), clearColor);
 			context->ClearUnorderedAccessViewFloat(velocityTextures[textureIndex]->uav.get(), clearColor);
 		}
+		fieldsCleared = true;
 		return;
 	}
 
+	fieldsCleared = false;
 	{
 		const uint outputTextureIndex = currentTextureIndex ^ 1;
 		ID3D11Buffer* buffers[1] = { perFrame->CB() };

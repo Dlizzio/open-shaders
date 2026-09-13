@@ -1,6 +1,7 @@
 #include "FrameAnnotations.h"
 
 #include "GpuPass.h"
+#include "Profiler.h"
 #include "State.h"
 #include "Util.h"
 
@@ -212,7 +213,23 @@ namespace FrameAnnotations
 
 	struct BSBatchRenderer_RenderBatches
 	{
-		static bool thunk(void* renderer, uint32_t* currentPass, uint32_t* bucketIndex,
+		static bool IsGrassBatch(const RE::BSBatchRenderer& renderer, uint32_t technique, uint32_t bucketIndex)
+		{
+			using PassGroup = RE::BSBatchRenderer::PassGroup;
+			using PassMap = RE::BSTHashMap<uint32_t, uint32_t, std::identity>;
+			if (!renderer.renderPass.data() || bucketIndex >= std::extent_v<decltype(PassGroup::passes)>)
+				return false;
+			// The engine stores inline PassGroups and a standard scatter table with identity hashing.
+			const auto& passMap = reinterpret_cast<const PassMap&>(renderer.renderPassMap);
+			const auto entry = passMap.find(technique);
+			if (entry == passMap.end() || entry->second >= renderer.renderPass.size())
+				return false;
+			const auto* groups = reinterpret_cast<const PassGroup*>(renderer.renderPass.data());
+			const auto* pass = groups[entry->second].passes[bucketIndex];
+			return pass && pass->shader && pass->shader->shaderType.get() == RE::BSShader::Type::Grass;
+		}
+
+		static bool thunk(RE::BSBatchRenderer* renderer, uint32_t* currentPass, uint32_t* bucketIndex,
 			void* passIndexList,
 			uint32_t renderFlags)
 		{
@@ -222,7 +239,17 @@ namespace FrameAnnotations
 					renderFlags);
 			}
 
-			const bool result = func(renderer, currentPass, bucketIndex, passIndexList, renderFlags);
+			bool profileGrass = frameAnnotations || (globals::profiler && globals::profiler->IsEnabled());
+#ifdef TRACY_ENABLE
+			profileGrass = true;
+#endif
+			bool result;
+			if (profileGrass && IsGrassBatch(*renderer, *currentPass, *bucketIndex)) {
+				CS_GPU_PASS("Grass::Draw");
+				result = func(renderer, currentPass, bucketIndex, passIndexList, renderFlags);
+			} else {
+				result = func(renderer, currentPass, bucketIndex, passIndexList, renderFlags);
+			}
 
 			if (frameAnnotations) {
 				globals::state->EndPerfEvent();
@@ -406,6 +433,8 @@ namespace FrameAnnotations
 
 	void OnPostPostLoad()
 	{
+		stl::detour_thunk<BSBatchRenderer_RenderBatches>(REL::RelocationID(100852, 107642));
+
 		if (!globals::state->frameAnnotations)
 			return;
 
@@ -1074,7 +1103,6 @@ namespace FrameAnnotations
 		stl::write_vfunc<0xA, BSShadowParabolicLight_RenderShadowmaps>(
 			RE::VTABLE_BSShadowParabolicLight[0]);
 
-		stl::detour_thunk<BSBatchRenderer_RenderBatches>(REL::RelocationID(100852, 107642));
 		stl::detour_thunk<Main_RenderDepth>(REL::RelocationID(100421, 107139));
 		stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
 		stl::detour_thunk<Main_RenderFirstPersonView>(REL::RelocationID(100411, 107129));

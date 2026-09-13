@@ -11,7 +11,6 @@
 #include <iterator>
 #include <mutex>
 #include <nlohmann/json.hpp>
-#include <optional>
 #include <span>
 
 using json = nlohmann::json;
@@ -98,7 +97,6 @@ public:
 	LARGE_INTEGER frameTimingFrequency;
 	LARGE_INTEGER frameStartTime;
 	bool frameTimingActive = false;
-	std::optional<ScopedGpuPass> grassGpuPass;
 
 	enum ConfigMode
 	{
@@ -110,8 +108,6 @@ public:
 
 	/** @brief Per-draw-call hook: updates feature state, constant buffers, and overlay. */
 	void Draw();
-	/** @brief Keeps one GPU timer open across each contiguous batch of Grass draw calls. */
-	void UpdateGrassGpuPass();
 	/** @brief Accumulates per-shader-type draw call counts and frame timing for the performance overlay. */
 	void Debug();
 	/** @brief Per-frame reset: advances timer, caches menu state, resets descriptors and frame counters. */
@@ -511,7 +507,7 @@ public:
 		float TreeLeafTransientFlutterMaximum;
 		float GrassWindCompressionToBend;
 
-		float4 TreeWindProbeBase;
+		float4 TreeWindProbeBase;  // W holds the bounds height scaled to world units.
 		float4 TreeWindProbeTop;
 
 		bool operator==(const PermutationCB& other) const
@@ -544,6 +540,7 @@ public:
 			       TreeWindProbeBase.x == other.TreeWindProbeBase.x &&
 			       TreeWindProbeBase.y == other.TreeWindProbeBase.y &&
 			       TreeWindProbeBase.z == other.TreeWindProbeBase.z &&
+			       TreeWindProbeBase.w == other.TreeWindProbeBase.w &&
 			       TreeWindProbeTop.x == other.TreeWindProbeTop.x &&
 			       TreeWindProbeTop.y == other.TreeWindProbeTop.y &&
 			       TreeWindProbeTop.z == other.TreeWindProbeTop.z;

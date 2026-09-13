@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <format>
 #include <random>
 #include <string_view>
 
@@ -577,8 +576,9 @@ void Wind::DrawTreeMeshRuleControls()
 		const auto result = TreeWindPatcher::SaveRules();
 		uiState.treeWindSaveSucceeded = result.success;
 		uiState.treeWindSaveStatus = result.success ?
-		                                 std::format("Saved {} meshes to {}", result.savedRuleCount, result.path) :
-		                                 std::format("Save failed: {}", result.error);
+		                                 I18n::GetSingleton()->Format(TKEY("tree_mesh_save_succeeded"),
+											 { { "count", std::to_string(result.savedRuleCount) }, { "path", result.path } }, "Saved {count} meshes to {path}") :
+		                                 I18n::GetSingleton()->Format(TKEY("tree_mesh_save_failed"), { { "error", result.error } }, "Save failed: {error}");
 	}
 	ImGui::SameLine();
 	if (ImGui::Button(T(TKEY("tree_mesh_revert"), "Revert Unsaved"))) {
@@ -752,27 +752,21 @@ void Wind::DrawGrassWindSettings()
 		ImGui::TextUnformatted(T(TKEY("grass_wind_spring_damping_tooltip"),
 			"Below one allows a natural rebound; one is critically damped; above one settles without overshoot."));
 
-	static constexpr const char* qualityNames[] = { "Near", "Mid", "Far" };
+	const char* qualityNames[] = {
+		T(TKEY("grass_wind_spring_near"), "Near"),
+		T(TKEY("grass_wind_spring_mid"), "Mid"),
+		T(TKEY("grass_wind_spring_far"), "Far")
+	};
 	static constexpr const char* textureSizeLabels[] = { "32", "64", "128", "256", "512", "1024" };
-	static constexpr const char* textureSizeKeys[] = {
-		"grass_wind_spring_near_texture_size",
-		"grass_wind_spring_mid_texture_size",
-		"grass_wind_spring_far_texture_size"
+	const char* textureSizeNames[] = {
+		T("grass_wind_spring_near_texture_size", "Near Field Texture Size"),
+		T("grass_wind_spring_mid_texture_size", "Mid Field Texture Size"),
+		T("grass_wind_spring_far_texture_size", "Far Field Texture Size")
 	};
-	static constexpr const char* textureSizeDefaults[] = {
-		"Near Field Texture Size",
-		"Mid Field Texture Size",
-		"Far Field Texture Size"
-	};
-	static constexpr const char* distanceKeys[] = {
-		"grass_wind_spring_near_distance",
-		"grass_wind_spring_mid_distance",
-		"grass_wind_spring_far_distance"
-	};
-	static constexpr const char* distanceDefaults[] = {
-		"Near Range End",
-		"Mid Range End",
-		"Far Range End"
+	const char* distanceNames[] = {
+		T("grass_wind_spring_near_distance", "Near Range End"),
+		T("grass_wind_spring_mid_distance", "Mid Range End"),
+		T("grass_wind_spring_far_distance", "Far Range End")
 	};
 	for (uint32_t index = 0; index < kGrassWindSpringQualityRangeCount; ++index) {
 		ImGui::SeparatorText(qualityNames[index]);
@@ -783,10 +777,10 @@ void Wind::DrawGrassWindSettings()
 				break;
 			}
 		}
-		if (ImGui::Combo(T(textureSizeKeys[index], textureSizeDefaults[index]), &textureSizeIndex,
+		if (ImGui::Combo(textureSizeNames[index], &textureSizeIndex,
 				textureSizeLabels, static_cast<int>(std::size(textureSizeLabels))))
 			settings.grassWindSpringQuality[index].textureSize = kGrassWindSpringTextureSizes[textureSizeIndex];
-		ImGui::SliderFloat(T(distanceKeys[index], distanceDefaults[index]),
+		ImGui::SliderFloat(distanceNames[index],
 			&settings.grassWindSpringQuality[index].maxDistance, kGrassWindSpringDistanceMin,
 			kGrassWindSpringDistanceMax, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
 	}
