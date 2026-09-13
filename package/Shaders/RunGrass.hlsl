@@ -626,8 +626,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 		lightsDiffuseColor += dirLightColor * dirDetailedShadow * GetFoliageTransmission(dirLightAngle, dot(viewDirection, SharedData::DirLightDirection.xyz)) * Color::VanillaNormalization();
 
-	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	float3 vertexColor = Color::AuthoredColor(input.Color.xyz);
+	float vertexAO = max(max(input.Color.r, input.Color.g), input.Color.b);
 
 #			if defined(SKYLIGHTING)
 #				if defined(VR)
@@ -811,6 +811,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
 	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
 #		endif
+#		if !defined(RENDER_DEPTH)
+	if (ENABLE_LL && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget))
+		psout.Diffuse.xyz = Color::SceneLinearToGamma(psout.Diffuse.xyz);
+#		endif
 	return psout;
 }
 #	else
@@ -953,8 +957,8 @@ PS_OUTPUT main(PS_INPUT input)
 	if (dot(normal, -normalize(input.WorldPosition.xyz)) < 0.0)
 		normal = -normal;
 
-	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	float3 vertexColor = Color::AuthoredColor(input.Color.xyz);
+	float vertexAO = max(max(input.Color.r, input.Color.g), input.Color.b);
 
 #			if defined(SKYLIGHTING)
 #				if defined(VR)
@@ -1012,6 +1016,10 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
 #		endif
 
+#		if !defined(RENDER_DEPTH)
+	if (ENABLE_LL && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget))
+		psout.Diffuse.xyz = Color::SceneLinearToGamma(psout.Diffuse.xyz);
+#		endif
 	return psout;
 }
 #	endif

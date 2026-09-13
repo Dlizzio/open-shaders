@@ -328,7 +328,8 @@ public:
 		// --- Open Shaders fork-only flags below: reserved high end, not upstream's sequence. ---
 		IsEye = 1u << 31,
 		IsCharacterRainSurface = 1u << 30,
-		IsHeldWeapon = 1u << 29
+		IsHeldWeapon = 1u << 29,
+		GammaRenderTarget = 1u << 28
 	};
 
 	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */

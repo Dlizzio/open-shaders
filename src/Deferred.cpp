@@ -12,6 +12,7 @@
 #include "Features/Effects11.h"
 #include "Features/IBL.h"
 #include "Features/LightLimitFix/ShadowCasterManager.h"
+#include "Features/LinearLighting.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -775,7 +776,10 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	state->inWorld = true;
 	state->worldRenderedThisFrame = true;
+	globals::features::linearLighting.BeginSceneGamma();
 	func(a1);
+	if (globals::game::isVR)
+		globals::features::linearLighting.EndSceneGamma(RE::RENDER_TARGET::kMAIN);
 
 	state->inWorld = false;
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
@@ -814,11 +818,16 @@ void Deferred::Hooks::BSCubeMapCamera_RenderCubemap::thunk(RE::NiAVObject* camer
 {
 	auto deferred = globals::deferred;
 	auto state = globals::state;
+	constexpr auto gammaRenderTarget = static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
+	const bool restoreGammaRenderTarget = (state->permutationData.ExtraShaderDescriptor & gammaRenderTarget) != 0;
 
 	deferred->ReflectionsPrepasses();
+	state->permutationData.ExtraShaderDescriptor &= ~gammaRenderTarget;
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections);
 	func(camera, a2, a3, a4, a5);
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections);
+	if (restoreGammaRenderTarget)
+		state->permutationData.ExtraShaderDescriptor |= gammaRenderTarget;
 }
 
 void Deferred::Hooks::Main_RenderFirstPersonView::thunk(bool a1, bool a2)
@@ -827,6 +836,12 @@ void Deferred::Hooks::Main_RenderFirstPersonView::thunk(bool a1, bool a2)
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	func(a1, a2);
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
+}
+
+void Deferred::Hooks::Main_RenderPlayerView_EndWorld::thunk(bool a1)
+{
+	func(a1);
+	globals::features::linearLighting.EndSceneGamma(RE::RENDER_TARGET::kMAIN);
 }
 
 void Deferred::Hooks::Renderer_ResetState::thunk(void* This)

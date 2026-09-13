@@ -16,6 +16,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
@@ -330,6 +331,7 @@ namespace WeatherExtensions
 				globals::features::effects11.OnSkyUpdateColors(sky);
 #endif
 			globals::features::skySync.OnSkyUpdateColors(sky);
+			globals::features::linearLighting.UpdateWeatherLightingColors(sky);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -402,6 +404,8 @@ namespace PostProcessingExtensions
 			auto* state = globals::state;
 			const auto input = static_cast<RE::RENDER_TARGET>(a3);
 			const auto output = static_cast<RE::RENDER_TARGET>(a4);
+
+			globals::features::linearLighting.EndSceneGamma(input);
 
 			if (state->HandlePostProcessing(input, output))
 				return;

@@ -118,6 +118,28 @@
 	}
 }
 
+/// @tags color, colorspace, acescg, gamma
+[numthreads(1, 1, 1)] void TestAP1AuthoredTransferRoundtrip()
+{
+	const float authoredGamma = 1.8f;
+	const float3 testColors[4] = {
+		float3(1.0f, 0.0f, 0.0f),
+		float3(0.0f, 1.0f, 0.0f),
+		float3(0.0f, 0.0f, 1.0f),
+		float3(4.0f, 0.2f, 1.5f)
+	};
+
+	for (int i = 0; i < 4; i++) {
+		const float3 linearSrgb = AP1TosRGB(testColors[i]);
+		const float3 authored = Color::SignedPow(linearSrgb, rcp(authoredGamma));
+		const float3 decoded = Color::SignedPow(authored, authoredGamma);
+		const float3 roundtrip = sRGBToAP1(decoded);
+
+		ASSERT(IsTrue, all(abs(roundtrip - testColors[i]) < 0.0001f));
+		ASSERT(IsTrue, all(authored * linearSrgb >= 0.0f));
+	}
+}
+
 /// @tags color, luminance
 [numthreads(1, 1, 1)] void TestRGBToLuminanceVariants() {
 	float3 testColor = float3(0.6, 0.4, 0.3);
