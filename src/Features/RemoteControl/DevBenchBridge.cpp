@@ -25,6 +25,7 @@
 #	include "Globals.h"
 #	include "Menu.h"
 #	include "Profiler.h"
+#	include "SceneSettingsManager.h"
 #	include "ShaderCache.h"
 #	include "State.h"
 #	include "Utils/DevBenchUx.h"
@@ -131,6 +132,8 @@ namespace
 			{ "isCore", f->IsCore() },
 			{ "supportsVR", f->SupportsVR() },
 			{ "inMenu", f->IsInMenu() },
+			{ "favorite", globals::state->IsFeatureFavorite(f->GetShortName()) },
+			{ "enabledAtBoot", !globals::state->IsFeatureDisabled(f->GetShortName()) },
 		};
 
 		const auto fields = f->GetRestartRequiredFields();
@@ -175,6 +178,25 @@ namespace
 		}
 
 		const std::string shortName = a_args.value("shortName", std::string{});
+
+		if (action == "favorite" || action == "boot") {
+			if (!a_args.contains("enabled") || !a_args["enabled"].is_boolean())
+				return json{ { "error", "missing required boolean parameter 'enabled'" } };
+			const bool enabled = a_args["enabled"].get<bool>();
+			return RunOnMainThread([shortName, action, enabled]() -> json {
+				auto& features = Feature::GetFeatureList();
+				const auto target = std::ranges::find_if(features, [&shortName](Feature* feature) { return feature->GetShortName() == shortName; });
+				if (target == features.end())
+					return json{ { "error", "unknown or missing shortName" }, { "shortName", shortName } };
+				if (action == "favorite" && (!(*target)->loaded || !(*target)->IsInMenu()))
+					return json{ { "error", "favorites require a loaded menu feature" }, { "shortName", shortName } };
+				const bool saved = action == "favorite" ? globals::state->SetFeatureFavorite(shortName, enabled) : globals::state->SetFeatureBootEnabled(shortName, enabled);
+				if (!saved)
+					return json{ { "error", "could not save feature preference" }, { "shortName", shortName } };
+				return json{ { "action", action }, { "shortName", shortName }, { "saved", true },
+					{ "favorite", globals::state->IsFeatureFavorite(shortName) }, { "enabledAtBoot", !globals::state->IsFeatureDisabled(shortName) } };
+			});
+		}
 
 		if (action == "toggle") {
 			// Match over the full feature list (NOT FindFeatureByShortName, which only
@@ -310,6 +332,8 @@ namespace
 				if (!feature)
 					return json{ { "error", "feature not found or not loaded" }, { "shortName", shortName } };
 				try {
+					SceneSettingsManager::SceneLayerGuard sceneLayerGuard(
+						*SceneSettingsManager::GetSingleton());
 					std::vector<std::string> unknown;
 					if (!Util::Settings::ApplyPatch(*feature, blob, unknown))
 						return json{
@@ -332,6 +356,8 @@ namespace
 				if (!feature)
 					return json{ { "error", "feature not found or not loaded" }, { "shortName", shortName } };
 				try {
+					SceneSettingsManager::SceneLayerGuard sceneLayerGuard(
+						*SceneSettingsManager::GetSingleton());
 					feature->RestoreDefaultSettings();
 					logger::info("DevBenchBridge: feature(reset, {}) applied", shortName);
 					return json{ { "action", "reset" }, { "shortName", shortName }, { "applied", true } };
@@ -1024,6 +1050,8 @@ namespace
 			// Restore every feature to its defaults, then persist. Mirrors what the UI's
 			// global reset does: per-feature RestoreDefaultSettings followed by a Save.
 			task->AddTask([state]() {
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard(
+					*SceneSettingsManager::GetSingleton());
 				for (auto* f : Feature::GetFeatureList()) {
 					try {
 						f->RestoreDefaultSettings();
@@ -1056,6 +1084,8 @@ namespace
 				return json{ { "error", "unknown profile (performance|balanced|quality)" }, { "profile", profileName } };
 
 			task->AddTask([state, profile]() {
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard(
+					*SceneSettingsManager::GetSingleton());
 				try {
 					Feature::ApplyPerformanceProfileToAll(profile);
 				} catch (const std::exception& e) {
@@ -1086,6 +1116,10 @@ namespace
 
 	json BuildMenuResult(const json& a_args)
 	{
+		const auto sidebarVisibility = a_args.find("sidebarVisible");
+		if (sidebarVisibility != a_args.end() && !sidebarVisibility->is_boolean())
+			return json{ { "error", "sidebarVisible must be a boolean" } };
+
 		const std::string op = a_args.value("op", std::string("toggle"));
 		Menu::VisibilityRequest req;
 		if (op == "open")
@@ -1110,6 +1144,8 @@ namespace
 		// it can't run on this listener thread (nor on the SKSE main thread). Enqueue an atomic
 		// request the render loop consumes next frame, mirroring the ToggleKey path.
 		Menu::GetSingleton()->RequestVisibility(req);
+		if (sidebarVisibility != a_args.end())
+			Menu::GetSingleton()->RequestSidebarVisibility(sidebarVisibility->get<bool>());
 		return json{ { "op", op }, { "page", page }, { "queued", true } };
 	}
 
@@ -1215,7 +1251,7 @@ namespace DevBenchBridge
 		// so existing MCP clients keep working under the new prefix.
 
 		static constexpr const char* featureDesc =
-			R"({"description":"All Open Shaders graphics-feature operations — enumerate, inspect settings, mutate settings, restore defaults, toggle on/off, read live diagnostics, read/write runtime-only debug flags. Action-dispatched. list: returns an array of {name,shortName,loaded,version,category,isCore,supportsVR,inMenu}; features with restart-gated settings also include restartFields:[{key,label,pending}]. get: params shortName, returns the SaveSettings blob (null if the feature has no override; set/reset then no-op). set: params shortName, settings (object) — a partial blob merged over the current settings, so it MUST use the same shape get returns, including nested groups (e.g. LightLimitFix's shadow settings live under settings.ShadowSettings.*, NOT at the top level). Keys the feature does not define are rejected with unknownKeys rather than silently ignored; call get first if unsure of the shape. Restart-gated keys (see list's restartFields) apply on the next launch, so verify with get rather than assuming a set took effect immediately. reset: params shortName, calls RestoreDefaultSettings. toggle: params shortName, enabled (boolean, OPTIONAL — omit to flip the current loaded state); flips Feature::loaded. Rejects enabling a feature unsupported on the current runtime unless Developer Mode is on, which force-enables it with a logged warning instead. diagnostics: params shortName, returns the feature's live runtime stats via GetDiagnostics (an empty object if the feature does not override it); use this instead of adding a new inspect kind for a new counter. runtimeGet: params shortName, returns the feature's live runtime-only debug flags via GetRuntimeFlags as {name: bool} (an empty object if the feature does not override it) — these are deliberately never persisted to SettingsUser.json (e.g. a debug instrumentation toggle that would otherwise cost every user extra GPU work on every load), so 'set' cannot reach them and they reset to their code default on every relaunch. runtimeSet: params shortName, name (string), value (boolean) — sets one flag via SetRuntimeFlag; fails with an error if the feature has no runtime flag by that name (call runtimeGet first to see valid names).","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","reset","toggle","diagnostics","runtimeGet","runtimeSet"]},"shortName":{"type":"string"},"settings":{"type":"object"},"enabled":{"type":"boolean"},"name":{"type":"string"},"value":{"type":"boolean"}}}})";
+			R"({"description":"All Open Shaders graphics-feature operations — enumerate, inspect settings, mutate settings, restore defaults, toggle on/off, read live diagnostics, read/write runtime-only debug flags. Action-dispatched. list: returns an array of {name,shortName,loaded,version,category,isCore,supportsVR,inMenu,favorite,enabledAtBoot}; features with restart-gated settings also include restartFields:[{key,label,pending}]. get: params shortName, returns the SaveSettings blob (null if the feature has no override; set/reset then no-op). set: params shortName, settings (object) — a partial blob merged over the current settings, so it MUST use the same shape get returns, including nested groups (e.g. LightLimitFix's shadow settings live under settings.ShadowSettings.*, NOT at the top level). Keys the feature does not define are rejected with unknownKeys rather than silently ignored; call get first if unsure of the shape. Restart-gated keys (see list's restartFields) apply on the next launch, so verify with get rather than assuming a set took effect immediately. reset: params shortName, calls RestoreDefaultSettings. toggle: params shortName, enabled (boolean, OPTIONAL — omit to flip the current loaded state); flips Feature::loaded. Rejects enabling a feature unsupported on the current runtime unless Developer Mode is on, which force-enables it with a logged warning instead. diagnostics: params shortName, returns the feature's live runtime stats via GetDiagnostics (an empty object if the feature does not override it); use this instead of adding a new inspect kind for a new counter. runtimeGet: params shortName, returns the feature's live runtime-only debug flags via GetRuntimeFlags as {name: bool} (an empty object if the feature does not override it) — these are deliberately never persisted to SettingsUser.json (e.g. a debug instrumentation toggle that would otherwise cost every user extra GPU work on every load), so 'set' cannot reach them and they reset to their code default on every relaunch. runtimeSet: params shortName, name (string), value (boolean) — sets one flag via SetRuntimeFlag; fails with an error if the feature has no runtime flag by that name (call runtimeGet first to see valid names). favorite: params shortName, enabled (required boolean); automatically saves favorite status for a loaded menu feature. Unloaded favorites retain their status but remain in Unloaded Features and cannot be changed until loaded. boot: params shortName, enabled (required boolean); automatically saves whether the feature loads next launch, without changing its current loaded state. Both actions persist only the selected preference and preserve unrelated unsaved settings; failures return an error.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","reset","toggle","diagnostics","runtimeGet","runtimeSet","favorite","boot"]},"shortName":{"type":"string"},"settings":{"type":"object"},"enabled":{"type":"boolean"},"name":{"type":"string"},"value":{"type":"boolean"}},"oneOf":[{"properties":{"action":{"enum":["favorite","boot"]},"shortName":{"minLength":1}},"required":["action","shortName","enabled"]},{"properties":{"action":{"not":{"enum":["favorite","boot"]}}}}]}})";
 		dvb->RegisterTool("openshaders.feature", featureDesc, &FeatureToolHandler, nullptr);
 
 		// One-time: builds Util::DevBenchUx::Registry from every feature's
@@ -1255,7 +1291,7 @@ namespace DevBenchBridge
 		// up with the on-screen window.
 		if (dvb->GetBuildNumber() >= 10500) {
 			static constexpr const char* menuDesc =
-				R"({"description":"Open, close, or toggle the Open Shaders in-game settings menu headlessly, the same window the ToggleKey (default End) shows. op: open|close|toggle (default toggle). page: OPTIONAL built-in page name (e.g. \"Performance\", \"Home\") or a feature's shortName (see openshaders.feature list) to navigate to on the next frame, same as clicking it in the left pane. Returns {op,page,queued:true}; the change is applied on the render thread on the next frame (open is a no-op while first-time setup is pending).","inputSchema":{"type":"object","properties":{"op":{"type":"string","enum":["open","close","toggle"]},"page":{"type":"string"}}}})";
+				R"({"description":"Open, close, or toggle the Open Shaders in-game settings menu headlessly, the same window the ToggleKey (default End) shows. op: open|close|toggle (default toggle). page: OPTIONAL built-in page name (e.g. \"Performance\", \"Home\") or a feature's shortName (see openshaders.feature list) to navigate to on the next frame, same as clicking it in the left pane. sidebarVisible: OPTIONAL boolean to show or hide the sidebar with its slide animation without saving settings; false suppresses hover auto-hide expansion, true restores the configured auto-hide behavior. Use op=open when changing sidebar visibility. Returns {op,page,queued:true}; the change is applied on the render thread on the next frame (open is a no-op while first-time setup is pending).","inputSchema":{"type":"object","properties":{"op":{"type":"string","enum":["open","close","toggle"]},"page":{"type":"string"},"sidebarVisible":{"type":"boolean"}}}})";
 			dvb->RegisterToolExtension("menu", "CommunityShaders", menuDesc, &MenuHandler, nullptr);
 
 			static constexpr const char* inspectStateDesc =
@@ -1271,7 +1307,7 @@ namespace DevBenchBridge
 			dvb->RegisterToolExtension("inspect", "llfshadows", inspectShadowsDesc, &InspectShadowsHandler, nullptr);
 
 			static constexpr const char* inspectProfilerDesc =
-				R"({"description":"Open Shaders GPU/CPU profiler snapshot -> {enabled,capturing,frame_count,capturedFrameCount,capturedGpuFrameCount,capturedCpuFrameCount,totalMs,cpuTotalMs,resolvedTotalMs,resolvedCpuTotalMs,acquiredSlots,peakAcquiredSlots,slotRefusals,maxTimers,timers:[{name,gpuMs,topLevelMs,avgMs,p95Ms,p99Ms,cpuMs,cpuAvgMs,cpuP95Ms,cpuP99Ms,hasGpu,hasCpu,activeGpu,activeCpu,historyHead,historyCount,cpuHistoryHead,cpuHistoryCount}]}. Calling this primes the next capture, so an idle first call may show stale data. CPU samples publish at their engine-frame boundary and pair with capturedCpuFrameCount, resolvedCpuTotalMs, cpuMs, and CPU history. GPU samples resolve independently through a three-slot query ring and pair with capturedGpuFrameCount, resolvedTotalMs, gpuMs, topLevelMs, and GPU history. capturedFrameCount is a compatibility summary containing the newest frame published by either source; do not use it to pair both sources. totalMs and cpuTotalMs are live menu values that zero while idle. activeGpu and activeCpu describe the latest published frame for their own source. Each valid filtered capture cycle contributes exactly one history sample per matching known timer, including zero when that timer did not run. Same-name intervals are summed before one sample is pushed. acquiredSlots is the last completed GPU cycle's slot count; peakAcquiredSlots is its session high-water mark. slotRefusals is cumulative, and any nonzero value means a GPU interval lacked a slot, although a requested CPU sample is still retained. Enable or disable capture via openshaders.profiler.","readOnly":true,"inputSchema":{"type":"object"}})";
+				R"({"description":"Open Shaders GPU/CPU profiler snapshot -> {enabled,capturing,frame_count,capturedFrameCount,capturedGpuFrameCount,capturedCpuFrameCount,totalMs,cpuTotalMs,resolvedTotalMs,resolvedCpuTotalMs,acquiredSlots,peakAcquiredSlots,slotRefusals,maxTimers,timers:[{name,gpuMs,topLevelMs,avgMs,p95Ms,p99Ms,cpuMs,cpuAvgMs,cpuP95Ms,cpuP99Ms,hasGpu,hasCpu,activeGpu,activeCpu,historyHead,historyCount,cpuHistoryHead,cpuHistoryCount}]}. Calling this primes the next capture, so an idle first call may show stale data. CPU samples publish at their engine-frame boundary and pair with capturedCpuFrameCount, resolvedCpuTotalMs, cpuMs, and CPU history. GPU samples resolve independently through a three-slot query ring and pair with capturedGpuFrameCount, resolvedTotalMs, gpuMs, topLevelMs, and GPU history. gpuMs and its rolling statistics report self time with directly nested GPU passes removed. topLevelMs is the inclusive contribution from top-level intervals; resolvedTotalMs equals the sum of topLevelMs across timers. capturedFrameCount is a compatibility summary containing the newest frame published by either source; do not use it to pair both sources. totalMs and cpuTotalMs are live menu values that zero while idle. activeGpu and activeCpu describe the latest published frame for their own source. Each valid filtered capture cycle contributes exactly one history sample per matching known timer, including zero when that timer did not run. Same-name intervals are summed before one sample is pushed. acquiredSlots is the last completed GPU cycle's slot count; peakAcquiredSlots is its session high-water mark. slotRefusals is cumulative, and any nonzero value means a GPU interval lacked a slot, although a requested CPU sample is still retained. Enable or disable capture via openshaders.profiler.","readOnly":true,"inputSchema":{"type":"object"}})";
 			dvb->RegisterToolExtension("inspect", "profiler", inspectProfilerDesc, &InspectProfilerHandler, nullptr);
 
 			static constexpr const char* inspectFeatureIssuesDesc =

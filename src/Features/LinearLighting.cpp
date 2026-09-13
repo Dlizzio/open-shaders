@@ -59,9 +59,9 @@ void LinearLighting::DrawSettings()
 	}
 #endif
 
-	if (ImGui::Checkbox(T(TKEY("enable"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting))
+	if (Util::CheckboxFlag(T(TKEY("enable"), "Enable Linear Lighting"), settings.enableLinearLighting))
 		weatherLightingColorsInitialized = false;
-	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
+	Util::CheckboxFlag(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), settings.enableACEScg);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("enable_acescg_tooltip"),
 							  "Render in ACEScg color space for wider gamut and more accurate lighting.\n"

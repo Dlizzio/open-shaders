@@ -10,9 +10,11 @@
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
+#include "Features/FeatureOverwrites.h"
 #include "Features/FoliageLighting.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
+#include "Features/GrassOptimizations.h"
 #include "Features/HDRDisplay.h"
 #include "Features/HairSpecular.h"
 #include "Features/HorizonFix.h"
@@ -26,6 +28,7 @@
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
+#include "Features/SceneManager.h"
 #include "Features/SceneSelector.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
@@ -53,7 +56,6 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/Game.h"
-#include "WeatherManager.h"
 
 namespace globals
 {
@@ -74,6 +76,7 @@ namespace globals
 		GrassCollision grassCollision{};
 		GrassLighting grassLighting{};
 		FoliageLighting foliageLighting{};
+		GrassOptimizations grassOptimizations{};
 		IBL ibl{};
 		LightLimitFix lightLimitFix{};
 		LinearLighting linearLighting{};
@@ -110,10 +113,12 @@ namespace globals
 		ScreenshotFeature screenshotFeature{};
 		CSEditor csEditor{};
 		CSUtility csUtility{};
+		FeatureOverwrites featureOverwrites{};
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
 		Skin skin{};
 		PostProcessing postProcessing{};
+		SceneManager sceneManager{};
 
 		namespace llf
 		{
@@ -183,13 +188,14 @@ namespace globals
 		REL::Relocation<const RE::NiRTTI*> NiBillboardNodeRTTI;
 		REL::Relocation<const RE::NiRTTI*> NiAlphaPropertyRTTI;
 		REL::Relocation<const RE::NiRTTI*> NiSourceTextureRTTI;
+		REL::Relocation<const RE::NiRTTI*> BSGrassShaderPropertyRTTI;
+		REL::Relocation<const RE::NiRTTI*> BSMultiStreamInstanceTriShapeRTTI;
 	}
 
 	State* state = nullptr;
 	Deferred* deferred = nullptr;
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
-	WeatherManager* weatherManager = nullptr;
 	SceneSettingsManager* sceneSettingsManager = nullptr;
 
 	static Profiler profilerInstance;
@@ -201,7 +207,6 @@ namespace globals
 		state = State::GetSingleton();
 		menu = Menu::GetSingleton();
 		deferred = Deferred::GetSingleton();
-		weatherManager = WeatherManager::GetSingleton();
 		sceneSettingsManager = SceneSettingsManager::GetSingleton();
 	}
 
@@ -250,6 +255,8 @@ namespace globals
 			NiBillboardNodeRTTI = { RE::NiBillboardNode::Ni_RTTI };
 			NiAlphaPropertyRTTI = { RE::NiAlphaProperty::Ni_RTTI };
 			NiSourceTextureRTTI = { RE::NiSourceTexture::Ni_RTTI };
+			BSGrassShaderPropertyRTTI = { RE::BSGrassShaderProperty::Ni_RTTI };
+			BSMultiStreamInstanceTriShapeRTTI = { RE::BSMultiStreamInstanceTriShape::Ni_RTTI };
 		}
 
 		d3d::device = reinterpret_cast<ID3D11Device*>(game::renderer->GetRuntimeData().forwarder);

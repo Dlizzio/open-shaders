@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <d3d11.h>
 #include <functional>
 #include <mutex>
@@ -74,10 +75,10 @@ public:
 	struct TimerResult
 	{
 		std::string name;
+		/// GPU self time, excluding all directly nested profiled passes.
 		float gpuTimeMs = 0.0f;
-		/// Portion of gpuTimeMs contributed by depth-0 intervals this cycle
-		/// (0 when not active this cycle, not a stale carry-over): exact
-		/// nesting-correctness check via totalMs == sum(topLevelMs).
+		/// Inclusive duration contributed by depth-0 intervals this cycle.
+		/// Zero when not active this cycle; sums exactly to the frame total.
 		float topLevelMs = 0.0f;
 		float avgMs = 0.0f;
 		float p95Ms = 0.0f;
@@ -298,10 +299,13 @@ private:
 		{
 			std::string name;
 			LARGE_INTEGER cpuBegin{};
+			/// Slot of the directly enclosing GPU pass, or -1 at frame depth 0.
+			int32_t parentSlot = -1;
 			uint32_t depth = 0;
 			uint32_t cpuDepth = 0;
 		};
 		std::vector<TimerMeta> timers;
+		uint32_t acquiredTimerCount = 0;
 		std::vector<int> activeStack;
 		/// Includes filtered capture cycles with no matching pass.
 		bool captureCycle = false;
@@ -402,6 +406,7 @@ private:
 		frame.batch.Reset();
 		frame.activeStack.clear();
 		frame.captureCycle = false;
+		frame.acquiredTimerCount = 0;
 		frame.inFlight = false;
 		frame.capturedCycle = 0;
 		frame.namePrefix.clear();

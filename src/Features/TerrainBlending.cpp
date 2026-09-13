@@ -7,6 +7,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
+#include "Utils/UI.h"
 #include "VR.h"
 
 #define I18N_KEY_PREFIX "feature.terrain_blending."
@@ -459,7 +460,7 @@ namespace
 
 void TerrainBlending::DrawSettings()
 {
-	ImGui::Checkbox(T(TKEY("enable"), "Enable Terrain Blending"), (bool*)&settings.Enabled);
+	Util::CheckboxFlag(T(TKEY("enable"), "Enable Terrain Blending"), settings.Enabled);
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("enable_tooltip"), "Enable seamless blending between terrain and objects."));
@@ -1027,5 +1028,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 
 	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	mainDepth.depthSRV = depthSRVBackup;
+	auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+	zPrepassCopy.depthSRV = prepassSRVBackup;
 }
 #undef I18N_KEY_PREFIX
