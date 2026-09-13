@@ -1013,19 +1013,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 
 	float3 normalVS = normalize(FrameBuffer::WorldToView(normal, false, eyeIndex));
-	float3 reflectance = 0;
-#				if defined(DYNAMIC_CUBEMAPS) && defined(VANILLA_FRESNEL)
-#					if defined(VANILLA_FRESNEL)
-	if (SharedData::vanillaFresnelSettings.Enable) {
-#					endif
-		float2 specularBDRF = BRDF::EnvBRDF(roughness, saturate(dot(viewDirection, normal)));
-		reflectance = F0 * specularBDRF.x + specularBDRF.y;
-#					if defined(VANILLA_FRESNEL)
-	}
-#					endif
-#				endif
 
-	psout.Reflectance = float4(reflectance, 1);
 	psout.Albedo = float4(albedo, 1);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1.0 - roughness, 1);
 
