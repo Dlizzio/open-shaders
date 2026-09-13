@@ -55,12 +55,8 @@ namespace LegacyGraphicsCompatibility
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		// BSUtilityShader's shadow-mask pass scissors to BSShadowLight::projectedBoundingBox.
-		// 1.7.99 builds that rect from screen dimensions already multiplied by the dynamic
-		// resolution ratio, then passes extents; older runtimes pass unscaled bounds. VR's own
-		// call site already multiplies by the same dynamic-resolution ratio at its call site
-		// (like 1.7.99), so it must not be scaled again here. The rect has no other consumer, so
-		// scaling here is equivalent to scaling it at the source.
+		// VR's call site already multiplies by the dynamic-resolution ratio (like 1.7.99+), so
+		// scaling it again here would double-scale the shadow-mask scissor rect.
 		struct ShadowBounds_SetViewport
 		{
 			static void thunk(
