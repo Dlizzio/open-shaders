@@ -4,7 +4,11 @@
 
 cbuffer CullParams : register(b0)
 {
-	float4 FrustumPlanes[6];
+	// [0..5] = eye 0's planes; [6..11] = eye 1's. VR planes use camera-relative coordinates.
+	float4 FrustumPlanes[12];
+
+	uint EyeCount;
+	float3 _padEye;
 
 	float MinPixelSize;
 	float FullDetailPixelSize;
@@ -51,18 +55,19 @@ cbuffer CullBucket : register(b1)
 	float MinPixelScale;
 	float IsComplex;
 	float MidLODEnabled;
-	// The dispatch covers the instances referenced by this slice range.
+	// The dispatch covers only these slices' combined instance count.
 	uint SliceTableOffset;
 	uint SliceCount;
 	float FarLODEnabled;
-	float _pad2;
+	// Per-eye slot capacity of the output buffers below; eye 1's survivors land at this offset.
+	uint OutputCapacityPerEye;
 };
 
 ByteAddressBuffer Instances : register(t0);
 StructuredBuffer<float4> Origins : register(t1);
-// Scene-depth max pyramid; see GrassHiZCS.hlsl.
+// Max-depth reduction of the scene depth copy (see GrassHiZCS.hlsl).
 Texture2D<float> HiZ : register(t2);
-// .x is the first source instance; .y is the compacted start index.
+// Maps a compacted thread index back to a real instance: .x = the slice's first instance, .y = the instance total of every visible slice before it.
 StructuredBuffer<uint2> SliceTable : register(t3);
 
 RWByteAddressBuffer Compacted : register(u0);
@@ -74,13 +79,15 @@ RWStructuredBuffer<float4> MidLODExtras : register(u4);
 
 RWByteAddressBuffer FarLODCompacted : register(u5);
 RWStructuredBuffer<float4> FarLODExtras : register(u6);
-// Both LOD counts share one UAV so the shader stays within D3D11's eight-UAV limit.
+// Mid and Far LOD survivor counts share one UAV so the shader stays within D3D11's eight-UAV limit.
+// Packed as 4 bytes per (eye, tier): eye 1's slots sit kLODCounterEyeStride bytes past eye 0's.
 RWByteAddressBuffer LODCounters : register(u7);
 
+static const uint kLODCounterEyeStride = 8;
 static const uint MiddleLODCountOffset = 0;
 static const uint FarLODCountOffset = 4;
 
-// Convert hashed bits to a uniform value in [0, 1).
+// Uses a uint hash to generate a random float between [0, 1)
 float RandFloat(uint bits)
 {
 	const uint mantissaMask = 0x007FFFFFu;
@@ -92,7 +99,7 @@ float RandFloat(uint bits)
 	return asfloat(bits) - 1.0;
 }
 
-// Precompute the per-instance wind term used by the vertex shader.
+// Precomputed here so the vertex shader only scales by the wind vector and adds.
 float WindScalar(float basis, float timer)
 {
 	const float a = 0.4 * (basis + timer);
@@ -102,6 +109,191 @@ float WindScalar(float basis, float timer)
 	const float t1 = sin(Math::PI * sa);
 	const float t2 = sin(Math::TAU * sa);
 	return (t1 + t2) * 0.3 + t3;
+}
+
+bool CullEye(uint eyeIndex, float3 world, float4 og, uint4 raw0, uint4 raw1, uint2 rand,
+	float sizeVariance, out float fade, out float flags, out uint tier)
+{
+	fade = 0.0;
+	flags = 0.0;
+	tier = 0u;
+	const float3 dv = world - FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+	const float distSq = dot(dv, dv);
+
+	const float dist = sqrt(distSq);
+
+	// Mesh complexity only biases culling past CostBiasStartDist, ramping to full over the distance past that
+	const float costRamp = saturate((dist - CostBiasStartDist) / max(CostBiasStartDist, 1e-4));
+	const float effCostBias = MeshCostBias * costRamp;
+
+	const float dScale = lerp(1.0, DistScale, effCostBias);
+	const float effMaxDistSq = MaxDistSq * dScale * dScale;
+	if (distSq > effMaxDistSq)
+		return false;
+
+	const float instanceRadius = ModelRadius * (1.0 + max(sizeVariance, 0.0));
+#if defined(VR)
+	// The VR planes are camera-relative and conservatively test the full instance bound.
+	const float frustumRadius = instanceRadius + length(BoundCenter) * (1.0 + max(sizeVariance, 0.0));
+#endif
+	[unroll] for (uint p = 0; p < 6; ++p)
+	{
+		const float4 plane = FrustumPlanes[eyeIndex * 6 + p];
+#if defined(VR)
+		if (dot(plane.xyz, dv) - plane.w < -frustumRadius)
+			return false;
+#else
+		if (dot(plane.xyz, world) - plane.w < 0.0)
+			return false;
+#endif
+	}
+
+	const float projPx = (instanceRadius / dist) * ProjScale;
+	const float pxScale = lerp(1.0, MinPixelScale, effCostBias);
+	const float effMinPx = MinPixelSize * pxScale;
+	if (projPx < effMinPx)
+		return false;
+
+	if (HiZEnabled > 0.5) {
+		// ModelRadius bounds about BoundCenter, not the instance root, so the sphere has to be there to be accurately occluded.
+		const float3 rot0 = float3(f16tof32(raw0.z & 0xFFFF), f16tof32(raw0.z >> 16), f16tof32(raw0.w & 0xFFFF));
+		const float3 rot1 = float3(f16tof32(raw1.x & 0xFFFF), f16tof32(raw1.x >> 16), f16tof32(raw1.y & 0xFFFF));
+		const float3 rot2 = float3(f16tof32(raw1.z & 0xFFFF), f16tof32(raw0.w >> 16), f16tof32(raw1.y >> 16));
+
+		const float3 msCentre = BoundCenter * (1.0 + max(sizeVariance, 0.0));
+		const float3 dvC = dv + float3(dot(rot0, msCentre), dot(rot1, msCentre), dot(rot2, msCentre));
+
+		const float occRadius = instanceRadius + length(BoundCenter) * abs(sizeVariance);
+		const float distC = max(length(dvC), 1e-4);
+		const float projPxOcc = (occRadius / distC) * ProjScale;
+
+		const float4 clipC = mul(FrameBuffer::CameraViewProj[eyeIndex], float4(dvC, 1.0));
+		if (clipC.w > 0.0) {
+			float2 uv = (clipC.xy / clipC.w) * float2(0.5, -0.5) + 0.5;
+			// Same UV split as Stereo::ConvertToStereoUV -- keep in sync if that changes.
+			if (EyeCount > 1)
+				uv.x = (uv.x + (float)eyeIndex) * 0.5;
+			const float2 tc = uv * HiZSize;
+			const float rT = projPxOcc / HiZTexelPixels;  // occlusion radius expressed in level-0 texels
+
+			// The level where the instance spans ~2 texels, so the 3x3 below covers it exactly.
+			const float wantLevel = ceil(log2(max(2.0 * rT, 1.0)));
+
+			// A level too fine to cover the instance would underestimate the max and cull visible grass.
+			[branch] if (wantLevel <= HiZMipCount - 1.0)
+			{
+				const int level = (int)wantLevel;
+				const float scale = exp2((float)level);
+				const float2 tcL = tc / scale;
+				const float rTL = rT / scale;
+				const int2 dimL = max(int2(ceil(HiZSize / scale)), int2(1, 1));
+				// Clamp the footprint to the active eye's half so taps near the stereo seam don't sample the other eye.
+				const int eyeHalf = dimL.x / 2;
+				const int xMin = (EyeCount > 1 && eyeHalf > 0) ? (int(eyeIndex) * eyeHalf) : 0;
+				const int xMax = (EyeCount > 1 && eyeHalf > 0) ? (xMin + eyeHalf - 1) : (dimL.x - 1);
+
+				const int2 t0 = int2(floor(tcL - rTL));
+				const int2 t1 = int2(floor(tcL + rTL));
+				// An instance hides only once even its nearest point is behind the occluder. A camera inside
+				// the sphere collapses dvC, putting nearZ below any tile depth so the test never fires.
+				const float3 dvNear = dvC * (max(distC - occRadius, 0.0) / distC);
+				const float4 clipN = mul(FrameBuffer::CameraViewProj[eyeIndex], float4(dvNear, 1.0));
+				const float nearZ = clipN.z / max(clipN.w, 1e-4);
+
+				float tileMax = 0.0;
+				[unroll] for (int y = 0; y < 3; ++y)
+				{
+					[unroll] for (int x = 0; x < 3; ++x)
+					{
+						if (t0.x + x <= t1.x && t0.y + y <= t1.y) {
+							const int2 t = clamp(t0 + int2(x, y), int2(xMin, 0), int2(xMax, dimL.y - 1));
+							tileMax = max(tileMax, HiZ.Load(int3(t, level)));
+						}
+					}
+				}
+
+				// Behind the farthest occluder of every covering tile means hidden. The tolerance absorbs
+				// projection and depth error that would otherwise drop instances only marginally behind it.
+				if (nearZ > tileMax + OcclusionBias)
+					return false;
+			}
+		}
+	}
+
+	float lodFade = 1.0;
+	const float effFullPx = FullDetailPixelSize * pxScale;
+	if (projPx < effFullPx) {
+		const float t = saturate((effFullPx - projPx) / max(effFullPx - effMinPx, 1e-4));
+		const float keep = lerp(1.0, LODMinKeep, t);
+		const float h = RandFloat(rand.x);
+		if (h > keep + LODFadeBand)
+			return false;
+		lodFade = saturate((keep + LODFadeBand - h) / LODFadeBand);
+	}
+
+	const float maxDist = sqrt(effMaxDistSq);
+	const float edgeStart = maxDist * EdgeFadeStart;
+	const float edgeFade = saturate((maxDist - dist) / max(maxDist - edgeStart, 1e-4));
+
+	const float4 clip = mul(FrameBuffer::CameraViewProj[eyeIndex], float4(dv, 1.0));
+	const float distFade = 1.0 - saturate((length(clip.xyz) - AlphaParam1) / AlphaParam2);
+	const float spawnFade = saturate((FadeNow - og.w) * FadeInTimeRcp);
+
+	fade = distFade * spawnFade * lodFade * edgeFade;
+	if (fade <= InvisibleFadeCull)
+		return false;
+
+	const float collisionFlag = (distSq < CollisionDistSq) ? 1.0 : 0.0;
+	const float farFlag = (SimpleShadingPixelSize > 0.0 && projPx < SimpleShadingPixelSize) ? 2.0 : 0.0;
+	flags = collisionFlag + farFlag;
+
+	// Both thresholds use the same hash so an instance crosses middle then far in order.
+	const float h = RandFloat(rand.y);
+	const float halfBand = MeshLODBandPx * 0.5;
+	const float bandRcp = 1.0 / max(MeshLODBandPx, 1e-4);
+	if (MidLODEnabled > 0.5 && h < saturate((MidLODPixelSize + halfBand - projPx) * bandRcp))
+		tier = 1u;
+	if (FarLODEnabled > 0.5 && h < saturate((FarLODPixelSize + halfBand - projPx) * bandRcp))
+		tier = 2u;
+
+	return true;
+}
+
+void StoreSurvivor(uint eyeIndex, uint tier, uint4 raw0, uint4 raw1, float4 e0, float4 e1)
+{
+	// Scaled by 4 so it clears the collision and far-shading flags already packed into e1.w.
+	const float4 e1Tier = float4(e1.xyz, e1.w + 4.0 * (float)tier);
+
+	// eyeSlotBase must match the StartInstanceLocation baked into eye 1's args block: SV_InstanceID
+	// excludes it, so the SRV index needs it added explicitly.
+	static const uint kArgsBlockStride = 32;
+	const uint eyeByteOffset = eyeIndex * kArgsBlockStride;
+	const uint eyeSlotBase = eyeIndex * OutputCapacityPerEye;
+	const uint lodCounterEyeOffset = eyeIndex * kLODCounterEyeStride;
+
+	uint slot;
+	if (tier == 2) {
+		LODCounters.InterlockedAdd(lodCounterEyeOffset + FarLODCountOffset, 1, slot);
+		slot += eyeSlotBase;
+		FarLODCompacted.Store4(slot * 32, raw0);
+		FarLODCompacted.Store4(slot * 32 + 16, raw1);
+		FarLODExtras[slot * 2 + 0] = e0;
+		FarLODExtras[slot * 2 + 1] = e1Tier;
+	} else if (tier == 1) {
+		LODCounters.InterlockedAdd(lodCounterEyeOffset + MiddleLODCountOffset, 1, slot);
+		slot += eyeSlotBase;
+		MidLODCompacted.Store4(slot * 32, raw0);
+		MidLODCompacted.Store4(slot * 32 + 16, raw1);
+		MidLODExtras[slot * 2 + 0] = e0;
+		MidLODExtras[slot * 2 + 1] = e1Tier;
+	} else {
+		Counter.InterlockedAdd(eyeByteOffset, 1, slot);
+		slot += eyeSlotBase;
+		Compacted.Store4(slot * 32, raw0);
+		Compacted.Store4(slot * 32 + 16, raw1);
+		Extras[slot * 2 + 0] = e0;
+		Extras[slot * 2 + 1] = e1;
+	}
 }
 
 [numthreads(64, 1, 1)] void main(uint3 tid : SV_DispatchThreadID) {
@@ -138,159 +330,32 @@ float WindScalar(float basis, float timer)
 	const float4 og = Origins[idx];
 	const float3 world = float3(localXY, localZ) + og.xyz;
 
-	const float3 dv = world - FrameBuffer::CameraPosAdjust.xyz;
-	const float distSq = dot(dv, dv);
-
-	const float dist = sqrt(distSq);
-
-	// Ramp the mesh-cost bias in beyond CostBiasStartDist.
-	const float costRamp = saturate((dist - CostBiasStartDist) / max(CostBiasStartDist, 1e-4));
-	const float effCostBias = MeshCostBias * costRamp;
-
-	const float dScale = lerp(1.0, DistScale, effCostBias);
-	const float effMaxDistSq = MaxDistSq * dScale * dScale;
-	if (distSq > effMaxDistSq)
-		return;
-
-	[unroll] for (uint p = 0; p < 6; ++p)
-	{
-		if (dot(FrustumPlanes[p].xyz, world) - FrustumPlanes[p].w < 0.0)
-			return;
-	}
-
-	// Conservatively approximate the vertex shader's ScaleMask-based size variation.
 	const float sizeVariance = f16tof32(raw1.z >> 16);
-	const float instanceRadius = ModelRadius * (1.0 + max(sizeVariance, 0.0));
-
-	const float projPx = (instanceRadius / dist) * ProjScale;
-	const float pxScale = lerp(1.0, MinPixelScale, effCostBias);
-	const float effMinPx = MinPixelSize * pxScale;
-	if (projPx < effMinPx)
-		return;
-
-	if (HiZEnabled > 0.5) {
-		// Transform the model-space bounding-sphere center into instance space.
-		const float3 rot0 = float3(f16tof32(raw0.z & 0xFFFF), f16tof32(raw0.z >> 16), f16tof32(raw0.w & 0xFFFF));
-		const float3 rot1 = float3(f16tof32(raw1.x & 0xFFFF), f16tof32(raw1.x >> 16), f16tof32(raw1.y & 0xFFFF));
-		const float3 rot2 = float3(f16tof32(raw1.z & 0xFFFF), f16tof32(raw0.w >> 16), f16tof32(raw1.y >> 16));
-
-		const float3 msCentre = BoundCenter * (1.0 + max(sizeVariance, 0.0));
-		const float3 dvC = dv + float3(dot(rot0, msCentre), dot(rot1, msCentre), dot(rot2, msCentre));
-
-		const float occRadius = instanceRadius + length(BoundCenter) * abs(sizeVariance);
-		const float distC = max(length(dvC), 1e-4);
-		const float projPxOcc = (occRadius / distC) * ProjScale;
-
-		const float4 clipC = mul(FrameBuffer::CameraViewProj, float4(dvC, 1.0));
-		if (clipC.w > 0.0) {
-			const float2 uv = (clipC.xy / clipC.w) * float2(0.5, -0.5) + 0.5;
-			const float2 tc = uv * HiZSize;
-			// Projected radius in level-0 Hi-Z texels.
-			const float rT = projPxOcc / HiZTexelPixels;
-
-			// Select a mip coarse enough for the 3x3 footprint to cover the sphere.
-			const float wantLevel = ceil(log2(max(2.0 * rT, 1.0)));
-
-			// Skip occlusion when no available mip can cover the sphere safely.
-			[branch] if (wantLevel <= HiZMipCount - 1.0)
-			{
-				const int level = (int)wantLevel;
-				const float scale = exp2((float)level);
-				const float2 tcL = tc / scale;
-				const float rTL = rT / scale;
-				const int2 dimL = max(int2(ceil(HiZSize / scale)), int2(1, 1));
-
-				const int2 t0 = int2(floor(tcL - rTL));
-				const int2 t1 = int2(floor(tcL + rTL));
-
-				// Test the sphere's nearest point; a camera inside it yields a non-occluded depth.
-				const float3 dvNear = dvC * (max(distC - occRadius, 0.0) / distC);
-				const float4 clipN = mul(FrameBuffer::CameraViewProj, float4(dvNear, 1.0));
-				const float nearZ = clipN.z / max(clipN.w, 1e-4);
-
-				float tileMax = 0.0;
-				[unroll] for (int y = 0; y < 3; ++y)
-				{
-					[unroll] for (int x = 0; x < 3; ++x)
-					{
-						if (t0.x + x <= t1.x && t0.y + y <= t1.y) {
-							const int2 t = clamp(t0 + int2(x, y), int2(0, 0), dimL - 1);
-							tileMax = max(tileMax, HiZ.Load(int3(t, level)));
-						}
-					}
-				}
-
-				// Cull only when the sphere is behind every sampled tile, allowing for depth error.
-				if (nearZ > tileMax + OcclusionBias)
-					return;
-			}
-		}
-	}
-
-	float lodFade = 1.0;
-	const float effFullPx = FullDetailPixelSize * pxScale;
-	if (projPx < effFullPx) {
-		const float t = saturate((effFullPx - projPx) / max(effFullPx - effMinPx, 1e-4));
-		const float keep = lerp(1.0, LODMinKeep, t);
-		const float h = RandFloat(rand.x);
-		if (h > keep + LODFadeBand)
-			return;
-		lodFade = saturate((keep + LODFadeBand - h) / LODFadeBand);
-	}
-
-	const float maxDist = sqrt(effMaxDistSq);
-	const float edgeStart = maxDist * EdgeFadeStart;
-	const float edgeFade = saturate((maxDist - dist) / max(maxDist - edgeStart, 1e-4));
-
-	const float4 clip = mul(FrameBuffer::CameraViewProj, float4(dv, 1.0));
-	const float distFade = 1.0 - saturate((length(clip.xyz) - AlphaParam1) / AlphaParam2);
-	const float spawnFade = saturate((FadeNow - og.w) * FadeInTimeRcp);
-
-	const float fade = distFade * spawnFade * lodFade * edgeFade;
-	if (fade <= InvisibleFadeCull)
-		return;
-
 	const float basis = (localXY.x + localXY.y) * -0.0078125;
-
 	const float4 e0 = float4(og.xyz, IsComplex);
 
-	const float collisionFlag = (distSq < CollisionDistSq) ? 1.0 : 0.0;
-	const float farFlag = (SimpleShadingPixelSize > 0.0 && projPx < SimpleShadingPixelSize) ? 2.0 : 0.0;
+	float fade0, flags0;
+	uint tier0;
+	const bool visible0 = CullEye(0u, world, og, raw0, raw1, rand, sizeVariance, fade0, flags0, tier0);
+#if defined(VR)
+	float fade1 = 0.0, flags1 = 0.0;
+	uint tier1 = 0u;
+	const bool visible1 = CullEye(1u, world, og, raw0, raw1, rand, sizeVariance, fade1, flags1, tier1);
 
-	const float4 e1 = float4(WindScalar(basis, TimeBase * WavePeriod), WindScalar(basis, PrevTimeBase * WavePeriod), fade, collisionFlag + farFlag);
+	if (!visible0 && !visible1)
+		return;
+#else
+	if (!visible0)
+		return;
+#endif
 
-	// Dither both LOD transitions with the same value to keep tier changes gradual and ordered.
-	const float h = RandFloat(rand.y);
-	const float halfBand = MeshLODBandPx * 0.5;
-	const float bandRcp = 1.0 / max(MeshLODBandPx, 1e-4);
-
-	uint tier = 0;
-	if (MidLODEnabled > 0.5 && h < saturate((MidLODPixelSize + halfBand - projPx) * bandRcp))
-		tier = 1;
-	if (FarLODEnabled > 0.5 && h < saturate((FarLODPixelSize + halfBand - projPx) * bandRcp))
-		tier = 2;
-
-	// Store the tier above the two low flag bits in e1.w.
-	const float4 e1Tier = float4(e1.xyz, e1.w + 4.0 * (float)tier);
-
-	uint slot;
-	if (tier == 2) {
-		LODCounters.InterlockedAdd(FarLODCountOffset, 1, slot);
-		FarLODCompacted.Store4(slot * 32, raw0);
-		FarLODCompacted.Store4(slot * 32 + 16, raw1);
-		FarLODExtras[slot * 2 + 0] = e0;
-		FarLODExtras[slot * 2 + 1] = e1Tier;
-	} else if (tier == 1) {
-		LODCounters.InterlockedAdd(MiddleLODCountOffset, 1, slot);
-		MidLODCompacted.Store4(slot * 32, raw0);
-		MidLODCompacted.Store4(slot * 32 + 16, raw1);
-		MidLODExtras[slot * 2 + 0] = e0;
-		MidLODExtras[slot * 2 + 1] = e1Tier;
-	} else {
-		Counter.InterlockedAdd(0, 1, slot);
-		Compacted.Store4(slot * 32, raw0);
-		Compacted.Store4(slot * 32 + 16, raw1);
-		Extras[slot * 2 + 0] = e0;
-		Extras[slot * 2 + 1] = e1;
-	}
+	// Both eyes share the wind calculation while retaining independent visibility and draw records.
+	const float2 wind = float2(
+		WindScalar(basis, TimeBase * WavePeriod), WindScalar(basis, PrevTimeBase * WavePeriod));
+	if (visible0)
+		StoreSurvivor(0u, tier0, raw0, raw1, e0, float4(wind, fade0, flags0));
+#if defined(VR)
+	if (visible1)
+		StoreSurvivor(1u, tier1, raw0, raw1, e0, float4(wind, fade1, flags1));
+#endif
 }
