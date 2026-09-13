@@ -1130,7 +1130,8 @@ PS_OUTPUT main(PS_INPUT input)
 	const bool linearRenderTarget = ENABLE_LL &&
 	                                inReflection &&
 	                                !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget);
-	[branch] if (linearRenderTarget) {
+	[branch] if (linearRenderTarget)
+	{
 		float3 linearDiffuse = Color::SceneGammaToLinear(blendedColor);
 #		if defined(MULTBLEND_DECAL)
 		linearDiffuse *= alpha;

@@ -297,7 +297,8 @@ namespace Color
 
 	float3 Light(float3 color, bool isLinear = false)
 	{
-		color = (ENABLE_LL && !isLinear) ? DecodeAuthoredColor(color) : (ENABLE_LL && isLinear) ? GamutTransform(color) : color;
+		color = (ENABLE_LL && !isLinear) ? DecodeAuthoredColor(color) : (ENABLE_LL && isLinear) ? GamutTransform(color) :
+		                                                                                          color;
 #	if defined(TRUE_PBR)
 		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #	else
