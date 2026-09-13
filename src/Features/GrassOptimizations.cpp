@@ -179,22 +179,6 @@ void GrassOptimizations::PostPostLoad()
 	Hooks::Install();
 }
 
-json GrassOptimizations::GetRuntimeFlags()
-{
-	return json{
-		{ "ForceVanillaOnVisible", ForceVanillaOnVisible },
-	};
-}
-
-bool GrassOptimizations::SetRuntimeFlag(std::string_view name, bool value)
-{
-	if (name == "ForceVanillaOnVisible") {
-		ForceVanillaOnVisible = value;
-		return true;
-	}
-	return false;
-}
-
 bool GrassOptimizations::HasShaderDefine(RE::BSShader::Type shaderType)
 {
 	switch (shaderType) {
