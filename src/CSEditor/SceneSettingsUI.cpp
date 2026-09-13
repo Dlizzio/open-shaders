@@ -2769,6 +2769,7 @@ namespace SceneSettingsUI
 		auto& state = s_featurePageEditor;
 		if (state.featureShortName == feature->GetShortName()) {
 			state.toolbarOpen = true;
+			SceneSettingsManager::GetSingleton()->SetFeatureSceneEditPreviewEnabled(true);
 			return true;
 		}
 		if (!state.featureShortName.empty() && SceneSettingsManager::GetSingleton()->HasPendingFeatureSceneEdits()) {
@@ -2836,6 +2837,8 @@ namespace SceneSettingsUI
 	void HideFeaturePageEditing()
 	{
 		s_featurePageEditor.toolbarOpen = false;
+		SetFeaturePagePreviewPlaying(false);
+		SceneSettingsManager::GetSingleton()->SetFeatureSceneEditPreviewEnabled(false);
 	}
 
 	bool DrawFeaturePageControls(Feature* feature, bool enabled)
