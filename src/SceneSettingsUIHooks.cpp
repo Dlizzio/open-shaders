@@ -197,14 +197,30 @@ namespace
 		return label.substr(0, label.find("##"));
 	}
 
-	bool MatchesLocalizedLabel(std::string_view label, std::string_view displayName,
+	enum class ControlLabelMatch
+	{
+		None,
+		VisibleText,
+		ExactText,
+		TranslationIdentity
+	};
+
+	ControlLabelMatch MatchLocalizedLabel(std::string_view label, std::string_view displayName,
 		std::string_view displayNameKey)
 	{
-		if (displayNameKey.empty())
-			return GetVisibleLabel(label) == GetVisibleLabel(displayName);
-		std::string fallback(displayName);
-		const auto* translated = T(displayNameKey, fallback.c_str());
-		return translated && GetVisibleLabel(label) == GetVisibleLabel(translated);
+		if (!displayNameKey.empty()) {
+			std::string fallback(displayName);
+			const auto* translated = T(displayNameKey, fallback.c_str());
+			if (!translated)
+				return ControlLabelMatch::None;
+			if (label.data() == translated)
+				return ControlLabelMatch::TranslationIdentity;
+			displayName = translated;
+		}
+		if (label == displayName)
+			return ControlLabelMatch::ExactText;
+		return GetVisibleLabel(label) == GetVisibleLabel(displayName) ?
+		           ControlLabelMatch::VisibleText : ControlLabelMatch::None;
 	}
 
 	bool IsSameLogicalControl(const SceneSettingsCatalog::SettingMetadata& lhs,
@@ -270,20 +286,19 @@ namespace
 				g_cachedBlockedFeatureSceneEditSettings.insert(&setting);
 	}
 
-	bool MatchesSettingLabel(const SceneSettingsCatalog::SettingMetadata& setting,
+	ControlLabelMatch MatchSettingLabel(const SceneSettingsCatalog::SettingMetadata& setting,
 		std::string_view label, bool choiceLabelsOnly)
 	{
+		auto match = ControlLabelMatch::None;
 		if (!choiceLabelsOnly) {
 			const auto displayName = setting.displayName.empty() ? setting.settingKey : setting.displayName;
-			if (MatchesLocalizedLabel(label, displayName, setting.displayNameKey))
-				return true;
+			match = MatchLocalizedLabel(label, displayName, setting.displayNameKey);
 		}
 		for (std::size_t index = 0; index < setting.choiceCount; ++index) {
 			const auto& choice = setting.choices[index];
-			if (MatchesLocalizedLabel(label, choice.displayName, choice.displayNameKey))
-				return true;
+			match = std::max(match, MatchLocalizedLabel(label, choice.displayName, choice.displayNameKey));
 		}
-		return false;
+		return match;
 	}
 
 	bool ShouldBlockSetting(const SceneSettingsCatalog::SettingMetadata& setting)
@@ -326,10 +341,14 @@ namespace
 
 		const auto featureShortName = g_currentFeature->GetShortName();
 		const SceneSettingsCatalog::SettingMetadata* match = nullptr;
+		auto bestLabelMatch = ControlLabelMatch::None;
+		bool ambiguous = false;
 		for (const auto& candidate : SceneSettingsCatalog::GetSettings()) {
 			if (candidate.featureShortName != featureShortName ||
-				!SceneSettingsCatalog::IsSceneControllable(candidate) ||
-				!MatchesSettingLabel(candidate, label, choiceLabelsOnly))
+				!SceneSettingsCatalog::IsSceneControllable(candidate))
+				continue;
+			const auto labelMatch = MatchSettingLabel(candidate, label, choiceLabelsOnly);
+			if (labelMatch == ControlLabelMatch::None || labelMatch < bestLabelMatch)
 				continue;
 			if (!candidate.controlScope.empty()) {
 				const auto* window = ImGui::GetCurrentWindowRead();
@@ -345,11 +364,18 @@ namespace
 				if (!scopeMatches)
 					continue;
 			}
-			if (match && !IsSameLogicalControl(*match, candidate))
-				return nullptr;
-			match = &candidate;
+			if (labelMatch > bestLabelMatch) {
+				match = &candidate;
+				bestLabelMatch = labelMatch;
+				ambiguous = false;
+			} else if (!IsSameLogicalControl(*match, candidate)) {
+				ambiguous = true;
+			} else if (ShouldBlockSetting(candidate) ||
+				(!ShouldBlockSetting(*match) && ShouldOutlineSetting(candidate))) {
+				match = &candidate;
+			}
 		}
-		return match && (ShouldBlockSetting(*match) || ShouldOutlineSetting(*match)) ? match : nullptr;
+		return match && !ambiguous && (ShouldBlockSetting(*match) || ShouldOutlineSetting(*match)) ? match : nullptr;
 	}
 
 	template <class Aggregate>
