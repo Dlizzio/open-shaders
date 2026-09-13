@@ -1153,14 +1153,16 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #	endif
 
-#	if defined(DEFERRED)
+#	if defined(DEFERRED) || !defined(MOTIONVECTORS_NORMALS)
 	float3 auxiliaryColor = ENABLE_LL ? Color::SceneGammaToLinear(blendedColor) : blendedColor;
 #		if defined(MULTBLEND_DECAL)
 	auxiliaryColor *= alpha;
 #		else
 	auxiliaryColor *= fogMul.xyz;
 #		endif
+#	endif
 
+#	if defined(DEFERRED)
 #		if defined(MOTIONVECTORS_NORMALS)
 #			if (defined(MEMBRANE) && defined(SKINNED) && defined(NORMALS))
 	float3 screenSpaceNormal = normalize(input.TBN0);
@@ -1201,7 +1203,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.ScreenSpaceNormals.xy = screenSpaceNormal.xy + 0.5.xx;
 	psout.ScreenSpaceNormals.zw = 0.0.xx;
 #	else
-	psout.Color2 = finalColor;
+	psout.Color2 = float4(auxiliaryColor, finalColor.w);
 #	endif
 
 	return psout;
