@@ -266,7 +266,7 @@ void EditorWindow::DrawBrowserHeader()
 	if (window->Hidden)
 		return;
 	const auto& style = ImGui::GetStyle();
-	const bool titleBar = window->TitleBarHeight > 0.0f;
+	const bool titleBar = !window->DockIsActive && window->TitleBarHeight > 0.0f;
 	const float headerInset = std::max(style.WindowPadding.x, window->WindowRounding + window->WindowBorderSize);
 	const bool savedSkipItems = window->SkipItems;
 	const auto savedNavLayer = window->DC.NavLayerCurrent;
@@ -348,10 +348,13 @@ void EditorWindow::ShowObjectsWindow()
 	const float minWidth = ImGui::GetFrameHeight() + modeButtonsWidth + MenuHeaderRenderer::GetCompactActionsWidth(globals::menu->uiIcons) +
 	                       headerStyle.ItemSpacing.x * 4.0f + headerInset * 2.0f;
 	ImGui::SetNextWindowSizeConstraints({ minWidth, headerStyle.WindowMinSize.y }, { FLT_MAX, FLT_MAX });
-	const auto title = std::format("###{}", T(TKEY("weather_lighting_browser"), "OS Editor Browser"));
-	const auto* previousWindow = ImGui::FindWindowByName(title.c_str());
+	constexpr auto windowId = "###OS Editor Browser";
+	const auto* previousWindow = ImGui::FindWindowByName(windowId);
+	const auto* dockNode = previousWindow ? previousWindow->DockNode : nullptr;
+	const bool docked = dockNode && dockNode->HostWindow;
+	const auto title = std::format("{}{}", docked ? T(TKEY("weather_lighting_browser"), "OS Editor Browser") : "", windowId);
 	ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-	if (previousWindow && previousWindow->DockIsActive)
+	if (docked)
 		flags |= ImGuiWindowFlags_MenuBar;
 	bool visible;
 	{
