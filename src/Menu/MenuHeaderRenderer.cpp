@@ -315,9 +315,7 @@ void MenuHeaderRenderer::RenderCompactActions(const Menu::UIIcons& uiIcons)
 		ImGui::PopID();
 		ImGui::EndDisabled();
 		if (auto tooltip = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(clearing ? Util::GetClearShaderCacheTooltip() : icon.tooltip);
-			if (clearing)
-				ImGui::TextUnformatted(T("menu.clear_shader_cache_modifier_hint", "Shift-click for the other clear mode."));
+			ImGui::TextUnformatted(icon.tooltip);
 		}
 	}
 }
