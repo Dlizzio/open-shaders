@@ -215,7 +215,8 @@ void LinearLighting::OnWorldRenderEnd(RE::RENDER_TARGET a_renderTarget)
 
 void LinearLighting::OnBeforePostProcessing(RE::RENDER_TARGET a_renderTarget)
 {
-	OnWorldRenderEnd(a_renderTarget);
+	if (a_renderTarget == RE::RENDER_TARGET::kMAIN)
+		OnWorldRenderEnd(a_renderTarget);
 }
 
 std::function<void()> LinearLighting::OnReflectionsRenderBegin()
