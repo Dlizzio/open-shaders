@@ -76,11 +76,16 @@ RWByteAddressBuffer Counter : register(u2);
 
 RWByteAddressBuffer MidLODCompacted : register(u3);
 RWStructuredBuffer<float4> MidLODExtras : register(u4);
-RWByteAddressBuffer MidLODCounter : register(u5);
 
-RWByteAddressBuffer FarLODCompacted : register(u6);
-RWStructuredBuffer<float4> FarLODExtras : register(u7);
-RWByteAddressBuffer FarLODCounter : register(u8);
+RWByteAddressBuffer FarLODCompacted : register(u5);
+RWStructuredBuffer<float4> FarLODExtras : register(u6);
+// Mid and Far LOD survivor counts share one UAV so the shader stays within D3D11's eight-UAV limit.
+// Packed as 4 bytes per (eye, tier): eye 1's slots sit kLODCounterEyeStride bytes past eye 0's.
+RWByteAddressBuffer LODCounters : register(u7);
+
+static const uint kLODCounterEyeStride = 8;
+static const uint MiddleLODCountOffset = 0;
+static const uint FarLODCountOffset = 4;
 
 // Uses a uint hash to generate a random float between [0, 1)
 float RandFloat(uint bits)
@@ -264,17 +269,18 @@ void StoreSurvivor(uint eyeIndex, uint tier, uint4 raw0, uint4 raw1, float4 e0, 
 	static const uint kArgsBlockStride = 32;
 	const uint eyeByteOffset = eyeIndex * kArgsBlockStride;
 	const uint eyeSlotBase = eyeIndex * OutputCapacityPerEye;
+	const uint lodCounterEyeOffset = eyeIndex * kLODCounterEyeStride;
 
 	uint slot;
 	if (tier == 2) {
-		FarLODCounter.InterlockedAdd(eyeByteOffset, 1, slot);
+		LODCounters.InterlockedAdd(lodCounterEyeOffset + FarLODCountOffset, 1, slot);
 		slot += eyeSlotBase;
 		FarLODCompacted.Store4(slot * 32, raw0);
 		FarLODCompacted.Store4(slot * 32 + 16, raw1);
 		FarLODExtras[slot * 2 + 0] = e0;
 		FarLODExtras[slot * 2 + 1] = e1Tier;
 	} else if (tier == 1) {
-		MidLODCounter.InterlockedAdd(eyeByteOffset, 1, slot);
+		LODCounters.InterlockedAdd(lodCounterEyeOffset + MiddleLODCountOffset, 1, slot);
 		slot += eyeSlotBase;
 		MidLODCompacted.Store4(slot * 32, raw0);
 		MidLODCompacted.Store4(slot * 32 + 16, raw1);
@@ -289,11 +295,13 @@ void StoreSurvivor(uint eyeIndex, uint tier, uint4 raw0, uint4 raw1, float4 e0, 
 		Extras[slot * 2 + 1] = e1;
 	}
 }
+
 [numthreads(64, 1, 1)] void main(uint3 tid : SV_DispatchThreadID) {
 	const uint compactIdx = tid.x;
 	if (compactIdx >= InstanceCount || SliceCount == 0)
 		return;
 
+	// Find the source slice containing this compacted index.
 	uint lo = 0;
 	uint hi = SliceCount - 1;
 	[loop] while (lo < hi)
@@ -305,14 +313,20 @@ void StoreSurvivor(uint eyeIndex, uint tier, uint4 raw0, uint4 raw1, float4 e0, 
 			hi = mid - 1;
 	}
 	const uint2 slice = SliceTable[SliceTableOffset + lo];
+
+	// Use the source index to keep dither decisions stable across slice changes.
 	const uint idx = slice.x + (compactIdx - slice.y);
+
+	// Generate independent density and LOD dither values with one hash.
 	const uint2 rand = Random::pcg2d(uint2(idx, 0u));
 
 	const uint base = idx * 32;
 	const uint4 raw0 = Instances.Load4(base);
 	const uint4 raw1 = Instances.Load4(base + 16);
+
 	const float2 localXY = float2(f16tof32(raw0.x & 0xFFFF), f16tof32(raw0.x >> 16));
 	const float localZ = f16tof32(raw0.y & 0xFFFF);
+
 	const float4 og = Origins[idx];
 	const float3 world = float3(localXY, localZ) + og.xyz;
 
