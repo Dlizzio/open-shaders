@@ -999,6 +999,9 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 					return;
 
 				if (IsNativeTab(tab)) {
+					g_currentTab = tab;
+					g_haveCurrentTab = true;
+					g_showingCustomTab = false;
 					if (a_params.argCount >= 1 && a_params.args)
 						page.Invoke("onSettingsCategoryPress", nullptr, a_params.args, 1);
 					else
