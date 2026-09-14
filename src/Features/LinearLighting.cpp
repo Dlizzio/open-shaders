@@ -122,7 +122,7 @@ void LinearLighting::CompileSceneGammaDecodeShader()
 	}
 
 	D3D11_UNORDERED_ACCESS_VIEW_DESC mainUAVDesc{};
-	mainTarget.UAV->GetDesc(&mainUAVDesc);
+	Util::AsReal(mainTarget.UAV)->GetDesc(&mainUAVDesc);
 	if (!State::SupportsTypedUAVLoad(mainUAVDesc.Format)) {
 		logger::warn("[LinearLighting] kMAIN format lacks typed UAV load support; scene gamma decode disabled");
 		return;
@@ -132,7 +132,7 @@ void LinearLighting::CompileSceneGammaDecodeShader()
 		Util::CompileShader(L"Data\\Shaders\\LinearLighting\\SceneGammaDecodeCS.hlsl", {}, "cs_5_0")));
 }
 
-void LinearLighting::BeginSceneGamma()
+void LinearLighting::OnWorldRenderBegin()
 {
 	sceneGammaActive = false;
 	globals::state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
@@ -144,7 +144,7 @@ void LinearLighting::BeginSceneGamma()
 	globals::state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
 }
 
-void LinearLighting::EndSceneGamma(RE::RENDER_TARGET a_renderTarget)
+void LinearLighting::OnWorldRenderEnd(RE::RENDER_TARGET a_renderTarget)
 {
 	if (!globals::state) {
 		sceneGammaActive = false;
@@ -165,7 +165,8 @@ void LinearLighting::EndSceneGamma(RE::RENDER_TARGET a_renderTarget)
 		return;
 
 	auto& target = globals::game::renderer->GetRuntimeData().renderTargets[targetIndex];
-	if (!target.UAV)
+	auto* targetUAV = Util::AsReal(target.UAV);
+	if (!targetUAV)
 		return;
 	if (!globals::d3d::context || !globals::state->sharedDataCB || !globals::state->featureDataCB)
 		return;
@@ -182,9 +183,9 @@ void LinearLighting::EndSceneGamma(RE::RENDER_TARGET a_renderTarget)
 		if (!target.texture)
 			return;
 		D3D11_TEXTURE2D_DESC textureDesc{};
-		target.texture->GetDesc(&textureDesc);
+		Util::AsReal(target.texture)->GetDesc(&textureDesc);
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		target.UAV->GetDesc(&uavDesc);
+		targetUAV->GetDesc(&uavDesc);
 		if (uavDesc.ViewDimension != D3D11_UAV_DIMENSION_TEXTURE2D)
 			return;
 		const auto mipLevel = uavDesc.Texture2D.MipSlice;
@@ -202,7 +203,7 @@ void LinearLighting::EndSceneGamma(RE::RENDER_TARGET a_renderTarget)
 	context->CSSetShader(sceneGammaDecodeCS.get(), nullptr, 0);
 	ID3D11Buffer* constantBuffers[2] = { globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
 	context->CSSetConstantBuffers(5, 2, constantBuffers);
-	context->CSSetUnorderedAccessViews(0, 1, &target.UAV, nullptr);
+	context->CSSetUnorderedAccessViews(0, 1, &targetUAV, nullptr);
 
 	context->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
 
@@ -210,6 +211,22 @@ void LinearLighting::EndSceneGamma(RE::RENDER_TARGET a_renderTarget)
 	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 	context->CSSetShader(nullptr, nullptr, 0);
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+}
+
+void LinearLighting::OnBeforePostProcessing(RE::RENDER_TARGET a_renderTarget)
+{
+	OnWorldRenderEnd(a_renderTarget);
+}
+
+std::function<void()> LinearLighting::OnReflectionsRenderBegin()
+{
+	constexpr auto gammaRenderTarget = static_cast<uint32_t>(State::ExtraShaderDescriptors::GammaRenderTarget);
+	auto* const state = globals::state;
+	if ((state->permutationData.ExtraShaderDescriptor & gammaRenderTarget) == 0)
+		return nullptr;
+
+	state->permutationData.ExtraShaderDescriptor &= ~gammaRenderTarget;
+	return [state]() { state->permutationData.ExtraShaderDescriptor |= gammaRenderTarget; };
 }
 
 void LinearLighting::Prepass()
@@ -280,7 +297,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.vanillaDiffuseColorMult = sanitizedSettings.vanillaDiffuseColorMult;
 	data.ambientMult = sanitizedSettings.ambientMult;
 	if (data.enableLinearLighting && !weatherLightingColorsInitialized)
-		UpdateWeatherLightingColors(globals::game::sky);
+		OnWeatherColorsUpdated(globals::game::sky);
 	data.effectLightingColor = effectLightingColor;
 	data.skyStaticsColor = skyStaticsColor;
 
@@ -312,7 +329,7 @@ bool LinearLighting::IsLinearLightingActive() const
 	return true;
 }
 
-void LinearLighting::UpdateWeatherLightingColors(RE::Sky* a_sky)
+void LinearLighting::OnWeatherColorsUpdated(RE::Sky* a_sky)
 {
 	if (!a_sky || !IsLinearLightingActive()) {
 		weatherLightingColorsInitialized = false;

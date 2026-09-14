@@ -92,9 +92,13 @@ struct LinearLighting : Feature
 	/** @brief Recompiles the scene gamma decode shader after a shader-cache clear. */
 	virtual void ClearShaderCache() override;
 	/** @brief Marks kMAIN as gamma-domain storage for the main world-rendering interval. */
-	void BeginSceneGamma();
+	virtual void OnWorldRenderBegin() override;
 	/** @brief Decodes the completed gamma-domain world scene in place. */
-	void EndSceneGamma(RE::RENDER_TARGET a_renderTarget);
+	virtual void OnWorldRenderEnd(RE::RENDER_TARGET a_renderTarget) override;
+	/** @brief Finishes any pending scene decode before post-processing consumes its input. */
+	virtual void OnBeforePostProcessing(RE::RENDER_TARGET a_renderTarget) override;
+	/** @brief Suspends gamma-target storage for cubemap rendering and restores it on scope exit. */
+	virtual std::function<void()> OnReflectionsRenderBegin() override;
 
 	/** @brief Populates and returns the per-frame constant buffer data with gamma and multiplier settings. */
 	PerFrameData GetCommonBufferData();
@@ -104,7 +108,7 @@ struct LinearLighting : Feature
 	void CompileSceneGammaDecodeShader();
 
 	/** @brief Caches linear copies of the interpolated weather colors used by effect meshes. */
-	void UpdateWeatherLightingColors(RE::Sky* a_sky);
+	virtual void OnWeatherColorsUpdated(RE::Sky* a_sky) override;
 
 	/**
 	 * @brief Decodes an authored Skyrim color into linear sRGB.
