@@ -148,8 +148,7 @@ namespace CloudRelight
 	float GetCelestialRelighting(float3 viewDir, float3 dirLightDir, float cloudDensity, float3 scatter, float3 lightWeights, SamplerState textureSampler)
 	{
 		// A negative sun weight preserves the engine light when Sky Sync is inactive.
-		[branch] if (lightWeights.x < 0.0)
-			return GetDirectionalRelighting(viewDir, dirLightDir, cloudDensity, scatter, textureSampler);
+		[branch] if (lightWeights.x < 0.0) return GetDirectionalRelighting(viewDir, dirLightDir, cloudDensity, scatter, textureSampler);
 
 		float3 lightDirections[3] = {
 			SharedData::SunDirection.xyz,
@@ -160,12 +159,16 @@ namespace CloudRelight
 		float fallbackWeight = 1.0 - saturate(dot(lightWeights, 1.0));
 		[unroll] for (int i = 0; i < 3; i++)
 		{
-			[branch] if (lightWeights[i] > 0.0) {
+			[branch] if (lightWeights[i] > 0.0)
+			{
 				float directionLengthSquared = dot(lightDirections[i], lightDirections[i]);
-				[branch] if (directionLengthSquared > EPSILON_LENGTH_SQ) {
+				[branch] if (directionLengthSquared > EPSILON_LENGTH_SQ)
+				{
 					float3 lightDir = lightDirections[i] * rsqrt(directionLengthSquared);
 					relighting += lightWeights[i] * GetDirectionalRelighting(viewDir, lightDir, cloudDensity, scatter, textureSampler);
-				} else {
+				}
+				else
+				{
 					fallbackWeight += lightWeights[i];
 				}
 			}

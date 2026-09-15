@@ -123,11 +123,11 @@ namespace TestConstants
 	}
 }
 
-/// @tags cloud-relight, phase-function, regression
-[numthreads(1, 1, 1)] void TestSilverSpreadMonotonic() {
+	/// @tags cloud-relight, phase-function, regression
+	[numthreads(1, 1, 1)] void TestSilverSpreadMonotonic()
+{
 	float spreads[5] = { -1.0f, -0.5f, 0.0f, 0.5f, 1.0f };
-	for (int i = 0; i <= 100; i++)
-	{
+	for (int i = 0; i <= 100; i++) {
 		float density = float(i) / 100.0f;
 		float opticalDepth = CloudRelight::GetOpticalDepth(density);
 		float previousBroad = 0.0f;
@@ -155,8 +155,9 @@ namespace TestConstants
 	}
 }
 
-/// @tags cloud-relight, inner-shadow
-[numthreads(1, 1, 1)] void TestInnerShadowOpacity() {
+	/// @tags cloud-relight, inner-shadow
+	[numthreads(1, 1, 1)] void TestInnerShadowOpacity()
+{
 	ASSERT(IsTrue, CloudRelight::GetInnerShadowOpacity(0.0f) == 0.0f);
 	ASSERT(IsTrue, CloudRelight::GetInnerShadowOpacity(0.5f) == 0.25f);
 	ASSERT(IsTrue, CloudRelight::GetInnerShadowOpacity(1.0f) == 1.0f);
