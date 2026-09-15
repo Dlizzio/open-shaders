@@ -25,6 +25,7 @@
 #include "Features/Upscaling/FoveatedRender/Bridge.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
+#include "Features/Wind/Wind.h"
 
 #include <optional>
 #include <unordered_map>
@@ -284,6 +285,8 @@ namespace GrassExtensions
 		{
 			func(shader, pass, renderFlags);
 			LegacyGraphicsCompatibility::BindLegacyGrassPerGeometryToPixelShader();
+			if (globals::features::wind.loaded)
+				globals::features::wind.UpdateGrassWindSpring();
 
 			auto state = globals::state;
 
@@ -525,6 +528,8 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	func(isCompute);
 	globals::state->Draw();
+	if (!isCompute)
+		globals::state->BindVertexPermutationData();
 }
 
 struct ID3D11Device_CreateVertexShader
