@@ -312,8 +312,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 #endif
 
-	if (!ENABLE_LL)
-		color = Color::IrradianceToGamma(color);
+	color = Color::SceneLinearToGamma(color);
 
 #if defined(DEBUG)
 
@@ -380,9 +379,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 			color = Color::TurboColormap(max(ambientPressure, saturate(displayedSample.transientImpulse)));
 		}
 	}
-
-	if (ENABLE_LL)
-		color = Color::SceneLinearToGamma(color);
 
 	MainRW[dispatchID.xy] = float4(color, 1.0);
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = float4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
