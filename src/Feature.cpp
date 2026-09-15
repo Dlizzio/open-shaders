@@ -6,6 +6,7 @@
 #include "Features/CSUtility.h"
 #include "Features/CloudRelight.h"
 #include "Features/CloudShadows.h"
+#include "Features/ProceduralSun.h"
 #include "Features/DynamicCubemaps.h"
 #if defined(ENABLE_EFFECTS11)
 #	include "Features/Effects11.h"
@@ -253,6 +254,7 @@ namespace
 			&globals::features::dynamicCubemaps,
 			&globals::features::cloudShadows,
 			&globals::features::cloudRelight,
+			&globals::features::proceduralSun,
 			&globals::features::waterEffects,
 			&globals::features::performanceOverlay,
 			&globals::features::subsurfaceScattering,
