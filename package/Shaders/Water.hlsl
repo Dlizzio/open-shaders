@@ -1023,7 +1023,8 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 #					endif
 #				endif
 
-	float2 refractionUV = FrameBuffer::DynamicResolutionParams1.xy * clamp(refractionUvRaw, refractionMinUV, refractionMaxUV);
+	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(
+		clamp(refractionUvRaw, refractionMinUV, refractionMaxUV));
 	float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
 	if (ENABLE_LL && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget))
 		refractionColor = Color::SceneGammaToLinear(refractionColor);
