@@ -73,6 +73,8 @@ void OverlayRenderer::RenderOverlay(
 	float& cachedFontSize,
 	float currentFontSize)
 {
+	BackgroundBlur::RestoreRetainedBuffers();
+
 	// Apply the VR panel size before pumping input: PumpInput reads
 	// io.DisplaySize to map wand UV to pixels for this frame.
 	ApplyVRPanelDisplaySize();
@@ -415,8 +417,8 @@ void OverlayRenderer::FinalizeImGuiFrame()
 
 	ImGui::Render();
 
-	BackgroundBlur::RenderBackgroundBlur();
-	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+	if (!BackgroundBlur::RenderDrawData(ImGui::GetDrawData()))
+		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
 	// Render the same draw data into the ImGuiVRHelper's panel RTV so the
 	// helper can composite our menu as a 3D quad in the HMD. The helper owns
