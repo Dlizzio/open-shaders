@@ -2109,7 +2109,7 @@
     "feature.procedural_sun.cloud_occlusion_strength_tooltip": "Zusätzliche Abschwächung der Sonnenscheibe und des Halos hinter Wolken. 0 behält die normale Wolkenüberblendung bei; höhere Werte verdecken die Sonne stärker. Klarer Himmel bleibt unverändert.",
     "feature.procedural_sun.description": "Ersetzt die Vanilla-Sonnentextur durch eine anhand ihres Winkelradius definierte prozedurale Sonnenscheibe und behält dabei Wetterfärbung und Blendeffekt von Vanilla bei.",
     "feature.procedural_sun.disk_intensity": "Scheibenintensität",
-    "feature.procedural_sun.disk_intensity_tooltip": "Helligkeit der prozeduralen Scheibe vor den vorhandenen Anpassungen für Himmelhelligkeit und HDR.",
+    "feature.procedural_sun.disk_intensity_tooltip": "Helligkeit der prozeduralen Scheibe vor den vorhandenen Anpassungen für Himmelshelligkeit und HDR.",
     "feature.procedural_sun.edge_softness": "Kantenweichheit",
     "feature.procedural_sun.edge_softness_tooltip": "Breite des kantengeglätteten Übergangs am Rand der Sonnenscheibe.",
     "feature.procedural_sun.enabled": "Aktiviert",
