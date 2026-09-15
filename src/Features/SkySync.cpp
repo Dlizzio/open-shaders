@@ -550,7 +550,7 @@ inline void SkySync::SetSunPosition(const RE::Sun* sun, const RE::NiPoint3& dir,
 
 void SkySync::ShadowFader::Reset()
 {
-	lightWeights = { 1.0f, 0.0f, 0.0f };
+	lightWeights = float3{ 1.0f, 0.0f, 0.0f };
 	startLightWeights = lightWeights;
 	target = Caster::Sun;
 	previousTarget = Caster::Sun;
@@ -626,7 +626,7 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 	const float effectiveFadeAdvance = immediateTransitionRemaining > 0.0f ? fadeDuration : fadeAdvance;
 	fadeTimer = std::min(fadeTimer + effectiveFadeAdvance, fadeDuration);
 	const float t = fadeDuration > 0.0f ? fadeTimer / fadeDuration : 1.0f;
-	lightWeights = {
+	lightWeights = float3{
 		std::lerp(startLightWeights.x, targetLightWeights.x, t),
 		std::lerp(startLightWeights.y, targetLightWeights.y, t),
 		std::lerp(startLightWeights.z, targetLightWeights.z, t)
