@@ -552,7 +552,6 @@ void ExtractEffectLightingReference(
 {
 	static const float minLightingLuminance = 1e-5;
 
-	// Preserve the engine's DALC-tinted shadow model before decoding the completed mixture.
 	float inputLuminance = Color::RGBToLuminance(inputReference);
 	float ambientLuminance = Color::RGBToLuminance(ambientReference);
 	float directionalLuminance = Color::RGBToLuminance(directionalReference);
