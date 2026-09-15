@@ -384,7 +384,7 @@ void State::Reset()
 	// Publish for off-thread readers (e.g. the MCP listener thread).
 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
 
-	globals::shaderCache->TickActiveShaderCapture(globals::menu->IsEnabled);
+	globals::shaderCache->TickActiveShaderCapture(globals::menu->ShouldSwallowInput());
 	globals::shaderCache->ProcessPendingClear();
 
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
