@@ -1023,7 +1023,7 @@ std::vector<std::pair<std::string, std::string>>* State::GetDefines()
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
 {
 	auto index = magic_enum::enum_integer(a_type) + 1;
-	if (index < sizeof(enabledClasses)) {
+	if (index < static_cast<int>(sizeof(enabledClasses))) {
 		return enabledClasses[index];
 	}
 	return false;
@@ -1255,6 +1255,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= 256;
 			}
+			break;
+		default:
 			break;
 		}
 	}

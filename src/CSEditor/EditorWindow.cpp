@@ -508,7 +508,7 @@ void EditorWindow::ShowObjectsWindow()
 				};
 
 				auto addTOD = [&](auto*(&fields)[RE::TESWeather::ColorTimes::kTotal], const WidgetVec& widgets) {
-					for (int tod = 0; tod < RE::TESWeather::ColorTimes::kTotal; ++tod) {
+					for (int tod = 0; tod < static_cast<int>(RE::TESWeather::ColorTimes::kTotal); ++tod) {
 						auto* form = fields[tod];
 						if (!form)
 							continue;
@@ -921,7 +921,7 @@ void EditorWindow::ShowObjectsWindow()
 				};
 
 				// Filtered display of widgets
-				for (int i = 0; i < sortedWidgets.size(); ++i) {
+				for (size_t i = 0; i < sortedWidgets.size(); ++i) {
 					if (!shouldShowWidget(sortedWidgets[i]))
 						continue;
 
@@ -1016,11 +1016,11 @@ void EditorWindow::ShowObjectsWindow()
 
 					// Form ID column
 					ImGui::TableNextColumn();
-					ImGui::Text(sortedWidgets[i]->GetFormID().c_str());
+					ImGui::TextUnformatted(sortedWidgets[i]->GetFormID().c_str());
 
 					// File column
 					ImGui::TableNextColumn();
-					ImGui::Text(sortedWidgets[i]->GetFilename().c_str());
+					ImGui::TextUnformatted(sortedWidgets[i]->GetFilename().c_str());
 
 					// Status column
 					ImGui::TableNextColumn();
