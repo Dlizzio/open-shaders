@@ -6,8 +6,8 @@
 #include "Features/CSUtility.h"
 #include "Features/CloudRelight.h"
 #include "Features/CloudShadows.h"
-#include "Features/ProceduralSun.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/ProceduralSun.h"
 #if defined(ENABLE_EFFECTS11)
 #	include "Features/Effects11.h"
 #endif

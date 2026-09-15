@@ -19,8 +19,9 @@ namespace TestConstants
 	ASSERT(IsTrue, all(center > limb));
 }
 
-/// @tags procedural-sun, coverage
-[numthreads(1, 1, 1)] void TestDiscCenterAndBoundary() {
+	/// @tags procedural-sun, coverage
+	[numthreads(1, 1, 1)] void TestDiscCenterAndBoundary()
+{
 	float3 limbDarkening;
 	float coverage;
 	ProceduralSun::EvaluateDisc(1.0f, TestConstants::SUN_DISK_COS, 0.125f, limbDarkening, coverage);
@@ -46,8 +47,9 @@ namespace TestConstants
 	ASSERT(IsTrue, coverage == 1.0f);
 }
 
-/// @tags procedural-sun, coverage
-[numthreads(1, 1, 1)] void TestSoftEdgeCoverage() {
+	/// @tags procedural-sun, coverage
+	[numthreads(1, 1, 1)] void TestSoftEdgeCoverage()
+{
 	float edgeWidth = (1.0f - TestConstants::SUN_DISK_COS) * 0.125f;
 	float3 limbDarkening;
 	float coverage;
@@ -69,8 +71,9 @@ namespace TestConstants
 	ASSERT(IsTrue, coverage >= 0.0f && coverage <= 1.0f);
 }
 
-/// @tags procedural-sun, coverage
-[numthreads(1, 1, 1)] void TestOutsideDiscIsEmpty() {
+	/// @tags procedural-sun, coverage
+	[numthreads(1, 1, 1)] void TestOutsideDiscIsEmpty()
+{
 	float3 limbDarkening;
 	float coverage;
 	ProceduralSun::EvaluateDisc(0.99f, TestConstants::SUN_DISK_COS, 0.125f, limbDarkening, coverage);
@@ -93,8 +96,9 @@ namespace TestConstants
 	ASSERT(IsTrue, center > midpoint && midpoint > outerEdge);
 }
 
-/// @tags procedural-sun, halo, composition
-[numthreads(1, 1, 1)] void TestDiscCompositionWithoutHalo() {
+	/// @tags procedural-sun, halo, composition
+	[numthreads(1, 1, 1)] void TestDiscCompositionWithoutHalo()
+{
 	float3 limbDarkening = float3(0.8f, 0.6f, 0.4f);
 	float3 sunColor;
 	float sunCoverage;
@@ -115,8 +119,9 @@ namespace TestConstants
 	ASSERT(IsTrue, all(abs(sunColor * sunCoverage - 0.1f) < TestConstants::EXACT_TOLERANCE));
 }
 
-/// @tags procedural-sun, halo, robustness
-[numthreads(1, 1, 1)] void TestInvalidHaloRangeIsEmpty() {
+	/// @tags procedural-sun, halo, robustness
+	[numthreads(1, 1, 1)] void TestInvalidHaloRangeIsEmpty()
+{
 	float halo = ProceduralSun::EvaluateHalo(1.0f, TestConstants::SUN_DISK_COS, TestConstants::SUN_DISK_COS, 10.0f);
 	ASSERT(IsTrue, halo == 0.0f);
 }
@@ -132,8 +137,9 @@ namespace TestConstants
 	ASSERT(IsTrue, ProceduralSun::GetCloudTransmission(0.8f, -1.0f) == 1.0f);
 }
 
-/// @tags procedural-sun, cloud-occlusion
-[numthreads(1, 1, 1)] void TestCloudTransmissionStrengthAndDensity() {
+	/// @tags procedural-sun, cloud-occlusion
+	[numthreads(1, 1, 1)] void TestCloudTransmissionStrengthAndDensity()
+{
 	float thinCloud = ProceduralSun::GetCloudTransmission(0.2f, 1.0f);
 	float thickCloud = ProceduralSun::GetCloudTransmission(0.8f, 1.0f);
 	float strongerOcclusion = ProceduralSun::GetCloudTransmission(0.8f, 2.0f);
