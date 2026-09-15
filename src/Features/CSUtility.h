@@ -82,6 +82,7 @@ struct CSUtility : Feature
 	struct Settings
 	{
 		float skyBrightness = 1.0f;
+		float ambientLightMult = 1.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
 		float linearPointLightMult = 1.0f;
@@ -110,6 +111,7 @@ struct CSUtility : Feature
 	struct alignas(16) PerFrameData
 	{
 		float skyBrightness;
+		float ambientLightMult;
 		float directionalLightMult;
 		float pointLightMult;
 		float linearPointLightMult;
@@ -125,9 +127,10 @@ struct CSUtility : Feature
 		float waterFresnelMin;
 		float waterFresnelMax;
 		float waterMuddiness;
+		float pad0[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 64);
+	static_assert(sizeof(PerFrameData) == 80);
 
 	struct alignas(16) VanillaPointLightData
 	{
