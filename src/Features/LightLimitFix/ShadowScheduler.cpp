@@ -235,12 +235,12 @@ namespace ShadowCasterManager
 	// atlas slot owns what's actually baked, so a realloc can't leave this stale.
 	struct SplitState
 	{
-		uint64_t pendingHash = 0;      ///< static hash observed on the latest accumulate
-		bool bakeQueued = true;        ///< a rebake is due -- next accumulate is StaticOnly
-		bool bakeThisFrame = false;    ///< this frame's accumulate was StaticOnly (render to cache)
-		uint8_t mismatchStreak = 0;    ///< consecutive accumulates whose hash differed from the bake
-		RE::NiPoint3 bakePos{};        ///< light position the static tile was baked at
-		RE::NiMatrix3 bakeRot{};       ///< light rotation the static tile was baked at
+		uint64_t pendingHash = 0;    ///< static hash observed on the latest accumulate
+		bool bakeQueued = true;      ///< a rebake is due -- next accumulate is StaticOnly
+		bool bakeThisFrame = false;  ///< this frame's accumulate was StaticOnly (render to cache)
+		uint8_t mismatchStreak = 0;  ///< consecutive accumulates whose hash differed from the bake
+		RE::NiPoint3 bakePos{};      ///< light position the static tile was baked at
+		RE::NiMatrix3 bakeRot{};     ///< light rotation the static tile was baked at
 		float bakeRadius = 0.0f;
 		bool bakePoseValid = false;
 		uint8_t poseRebakes = 0;       ///< pose-drift rebakes inside the current window
