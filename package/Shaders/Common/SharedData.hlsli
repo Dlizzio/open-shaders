@@ -208,6 +208,22 @@ namespace SharedData
 		float3 celestialLightWeights;
 	};
 
+	struct ProceduralSunSettings
+	{
+		uint enabled;
+		float sunDiskCos;
+		float diskIntensity;
+		float edgeSoftness;
+
+		uint haloEnabled;
+		float sunHaloCos;
+		float haloIntensity;
+		float haloFalloff;
+
+		float cloudOcclusionStrength;
+		float3 pad0;
+	};
+
 	struct LODBlendingSettings
 	{
 		float LODTerrainBrightness;
@@ -502,6 +518,7 @@ namespace SharedData
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		CloudRelightSettings cloudRelightSettings;
+		ProceduralSunSettings proceduralSunSettings;
 		LODBlendingSettings lodBlendingSettings;
 		HairSpecularSettings hairSpecularSettings;
 		TerrainVariationSettings terrainVariationSettings;
