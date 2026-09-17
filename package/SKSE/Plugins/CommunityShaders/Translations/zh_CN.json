@@ -368,7 +368,6 @@
     "cs_editor.velocity": "速度",
     "cs_editor.viewport": "视口",
     "cs_editor.viewport_unavailable": "视口不可用",
-    "cs_editor.viewport_unavailable_hdr": "启用HDR显示时视口不可用",
     "cs_editor.visual_effect_begin": "视觉效果开始",
     "cs_editor.visual_effect_end": "视觉效果结束",
     "cs_editor.volume": "音量",

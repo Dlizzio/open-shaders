@@ -368,7 +368,6 @@
     "cs_editor.velocity": "Скорость",
     "cs_editor.viewport": "Вьюпорт",
     "cs_editor.viewport_unavailable": "Вьюпорт недоступен",
-    "cs_editor.viewport_unavailable_hdr": "Вьюпорт недоступен при включённом HDR-дисплее",
     "cs_editor.visual_effect_begin": "Начало визуального эффекта",
     "cs_editor.visual_effect_end": "Конец визуального эффекта",
     "cs_editor.volume": "Объём",
