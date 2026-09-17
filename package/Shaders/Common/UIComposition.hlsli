@@ -7,7 +7,8 @@ namespace UIComposition
 {
 	float3 CompositeSDR(float3 scene, float4 ui, bool sceneIsLinear, bool sceneIsBT2020, float brightness)
 	{
-		[branch] if (ui.a != 0.0 || any(ui.rgb != 0.0)) {
+		[branch] if (ui.a != 0.0 || any(ui.rgb != 0.0))
+		{
 			if (sceneIsBT2020)
 				scene = Color::BT2020ToBT709(scene);
 			if (sceneIsLinear)

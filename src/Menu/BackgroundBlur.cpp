@@ -773,7 +773,8 @@ namespace BackgroundBlur
 			context->PSSetShaderResources(0, 1, &source);
 			context->PSSetSamplers(0, 1, &sampler);
 			context->Draw(FULLSCREEN_TRIANGLE_VERTICES, 0);
-		}, nullptr);
+		},
+			nullptr);
 		ImGui::Dummy(size);
 		return true;
 	}

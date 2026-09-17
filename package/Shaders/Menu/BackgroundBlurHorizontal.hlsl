@@ -1,6 +1,6 @@
-#include "Menu/BackgroundBlur.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/UIComposition.hlsli"
+#include "Menu/BackgroundBlur.hlsli"
 
 Texture2D<float4> UITexture : register(t1);
 
@@ -28,7 +28,8 @@ float4 PS_HDRDownsample(VS_OUTPUT input) : SV_TARGET
 	float4 ui = (UITexture.SampleLevel(LinearSampler, input.TexCoord + offset, 0) +
 					UITexture.SampleLevel(LinearSampler, input.TexCoord - offset, 0) +
 					UITexture.SampleLevel(LinearSampler, input.TexCoord + float2(offset.x, -offset.y), 0) +
-					UITexture.SampleLevel(LinearSampler, input.TexCoord + float2(-offset.x, offset.y), 0)) * 0.25f;
+					UITexture.SampleLevel(LinearSampler, input.TexCoord + float2(-offset.x, offset.y), 0)) *
+	            0.25f;
 	bool isMainLoading = SharedData::HDRData.w > kMainLoadingSceneThreshold;
 	bool postProcessOutput = SharedData::postProcessingSettings.DisableVanillaTonemapping != 0 && !isMainLoading;
 	bool sceneIsLinear = SharedData::linearLightingSettings.enableLinearLighting || postProcessOutput;

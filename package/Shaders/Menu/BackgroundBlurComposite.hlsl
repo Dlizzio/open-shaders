@@ -86,8 +86,8 @@ float4 PS_Layer(VS_OUTPUT input) : SV_TARGET
 
 struct SceneOutput
 {
-	float4 ui : SV_TARGET0;
-	float4 scene : SV_TARGET1;
+	float4 ui: SV_TARGET0;
+	float4 scene: SV_TARGET1;
 };
 
 SceneOutput PS_Scene(VS_OUTPUT input)
