@@ -2215,6 +2215,7 @@
     "feature.scene_manager.action.pause": "暂停",
     "feature.scene_manager.action.resume": "恢复",
     "feature.scene_manager.action.resume_all": "全部恢复",
+    "feature.scene_manager.action.save": "保存",
     "feature.scene_manager.bulk.delete_overwrites_message": "删除{0}中所有已加载的覆盖文件？其他场景类型将保留。此操作无法撤销。",
     "feature.scene_manager.bulk.delete_user_message": "删除{0}中的所有用户设置？其他场景类型和显示偏好将保留。",
     "feature.scene_manager.bulk.export_message": "将{0}中所选设置层导出为分组的覆盖文件。",

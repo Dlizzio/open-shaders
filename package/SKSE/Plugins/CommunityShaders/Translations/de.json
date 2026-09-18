@@ -2215,6 +2215,7 @@
     "feature.scene_manager.action.pause": "Pausieren",
     "feature.scene_manager.action.resume": "Fortsetzen",
     "feature.scene_manager.action.resume_all": "Alle fortsetzen",
+    "feature.scene_manager.action.save": "Speichern",
     "feature.scene_manager.bulk.delete_overwrites_message": "Alle geladenen Überschreibungsdateien in {0} löschen? Andere Szenentypen bleiben erhalten. Dies kann nicht rückgängig gemacht werden.",
     "feature.scene_manager.bulk.delete_user_message": "Alle Benutzereinstellungen in {0} löschen? Andere Szenentypen und Anzeigeeinstellungen bleiben erhalten.",
     "feature.scene_manager.bulk.export_message": "Exportiert die ausgewählte Ebene in {0} in gruppierte Überschreibungsdateien.",
