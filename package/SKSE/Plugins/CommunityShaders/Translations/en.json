@@ -368,7 +368,6 @@
     "cs_editor.velocity": "Velocity",
     "cs_editor.viewport": "Viewport",
     "cs_editor.viewport_unavailable": "Viewport unavailable",
-    "cs_editor.viewport_unavailable_hdr": "Viewport is unavailable when HDR Display is enabled",
     "cs_editor.visual_effect_begin": "Visual Effect Begin",
     "cs_editor.visual_effect_end": "Visual Effect End",
     "cs_editor.volume": "Volume",
