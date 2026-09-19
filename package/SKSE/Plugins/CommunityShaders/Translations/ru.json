@@ -2215,6 +2215,7 @@
     "feature.scene_manager.action.pause": "Приостановить",
     "feature.scene_manager.action.resume": "Возобновить",
     "feature.scene_manager.action.resume_all": "Возобновить всё",
+    "feature.scene_manager.action.save": "Сохранить",
     "feature.scene_manager.bulk.delete_overwrites_message": "Удалить все загруженные файлы перезаписи в {0}? Другие типы сцен будут сохранены. Это действие нельзя отменить.",
     "feature.scene_manager.bulk.delete_user_message": "Удалить все пользовательские настройки в {0}? Другие типы сцен и параметры отображения будут сохранены.",
     "feature.scene_manager.bulk.export_message": "Экспортирует выбранный слой в {0} в сгруппированные файлы перезаписи.",

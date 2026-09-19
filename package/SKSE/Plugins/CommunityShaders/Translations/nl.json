@@ -2215,6 +2215,7 @@
     "feature.scene_manager.action.pause": "Pauzeren",
     "feature.scene_manager.action.resume": "Hervatten",
     "feature.scene_manager.action.resume_all": "Alles hervatten",
+    "feature.scene_manager.action.save": "Opslaan",
     "feature.scene_manager.bulk.delete_overwrites_message": "Alle geladen overschrijvingsbestanden in {0} verwijderen? Andere scènetypen blijven behouden. Dit kan niet ongedaan worden gemaakt.",
     "feature.scene_manager.bulk.delete_user_message": "Alle gebruikersinstellingen in {0} verwijderen? Andere scènetypen en weergavevoorkeuren blijven behouden.",
     "feature.scene_manager.bulk.export_message": "Exporteert de geselecteerde laag in {0} naar gegroepeerde overschrijvingsbestanden.",

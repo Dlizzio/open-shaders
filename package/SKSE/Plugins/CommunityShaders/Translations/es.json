@@ -2215,6 +2215,7 @@
     "feature.scene_manager.action.pause": "Pausar",
     "feature.scene_manager.action.resume": "Reanudar",
     "feature.scene_manager.action.resume_all": "Reanudar todo",
+    "feature.scene_manager.action.save": "Guardar",
     "feature.scene_manager.bulk.delete_overwrites_message": "¿Eliminar todos los archivos de sobrescritura cargados de {0}? Se conservarán los demás tipos de escena. Esta acción no se puede deshacer.",
     "feature.scene_manager.bulk.delete_user_message": "¿Eliminar todos los ajustes de usuario de {0}? Se conservarán los demás tipos de escena y las preferencias de visualización.",
     "feature.scene_manager.bulk.export_message": "Exporta la capa seleccionada de {0} a archivos de sobrescritura agrupados.",

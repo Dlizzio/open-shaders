@@ -2215,6 +2215,7 @@
     "feature.scene_manager.action.pause": "Mettre en pause",
     "feature.scene_manager.action.resume": "Reprendre",
     "feature.scene_manager.action.resume_all": "Tout reprendre",
+    "feature.scene_manager.action.save": "Enregistrer",
     "feature.scene_manager.bulk.delete_overwrites_message": "Supprimer tous les fichiers de remplacement chargés dans {0} ? Les autres types de scènes seront conservés. Cette action est irréversible.",
     "feature.scene_manager.bulk.delete_user_message": "Supprimer tous les paramètres utilisateur dans {0} ? Les autres types de scènes et les préférences d'affichage seront conservés.",
     "feature.scene_manager.bulk.export_message": "Exporte la couche sélectionnée dans {0} vers des fichiers de remplacement groupés.",

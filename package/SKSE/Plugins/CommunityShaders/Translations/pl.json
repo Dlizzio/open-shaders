@@ -2215,6 +2215,7 @@
     "feature.scene_manager.action.pause": "Wstrzymaj",
     "feature.scene_manager.action.resume": "Wznów",
     "feature.scene_manager.action.resume_all": "Wznów wszystkie",
+    "feature.scene_manager.action.save": "Zapisz",
     "feature.scene_manager.bulk.delete_overwrites_message": "Usunąć wszystkie wczytane pliki nadpisujące w {0}? Pozostałe typy scen zostaną zachowane. Tej operacji nie można cofnąć.",
     "feature.scene_manager.bulk.delete_user_message": "Usunąć wszystkie ustawienia użytkownika w {0}? Pozostałe typy scen i preferencje wyświetlania zostaną zachowane.",
     "feature.scene_manager.bulk.export_message": "Eksportuje wybraną warstwę w {0} do pogrupowanych plików nadpisujących.",
