@@ -7,12 +7,11 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
+#include "NativeMenu/NativeMenu.h"
 #include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "VRAPI/CSpluginapi.h"
-
-#define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;
 
@@ -46,7 +45,7 @@ void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::
 	spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%t] [%s:%#] %v");
 }
 
-extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
+SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* a_skse)
 {
 #ifndef NDEBUG
 	while (!REX::W32::IsDebuggerPresent()) {};
@@ -54,12 +53,11 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION.string());
 	SKSE::Init(a_skse);
-	logger::info("[ShaderIncludeIO v2] Open Shaders 2.11.0 Win32 include reader active; include reads do not use CRT file descriptors.");
 	SKSE::AllocTrampoline(1 << 12);
 	return Load();
 }
 
-extern "C" DLLEXPORT constinit auto SKSEPlugin_Version = []() noexcept {
+SKSE_PLUGIN_VERSION = []() noexcept {
 	SKSE::PluginVersionData v;
 	v.PluginName(Plugin::NAME.data());
 	v.PluginVersion(Plugin::VERSION);
@@ -68,7 +66,7 @@ extern "C" DLLEXPORT constinit auto SKSEPlugin_Version = []() noexcept {
 	return v;
 }();
 
-extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, SKSE::PluginInfo* pluginInfo)
+SKSE_PLUGIN_QUERY(const SKSE::QueryInterface*, SKSE::PluginInfo* pluginInfo)
 {
 	pluginInfo->name = SKSEPlugin_Version.pluginName;
 	pluginInfo->infoVersion = SKSE::PluginInfo::kVersion;
@@ -102,9 +100,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				// Run feature PostPostLoad() first so features can disable themselves if needed
 				Feature::ForEachLoadedFeature("PostPostLoad", [](Feature* feature) { feature->PostPostLoad(); });
-
-				// Register scene settings event handler (Interior Only transitions)
-				SceneSettingsManager::MenuOpenCloseEventHandler::Register();
 
 				// Now validate disk cache after features have had a chance to modify their state
 				shaderCache->ValidateDiskCache();
@@ -147,6 +142,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 				globals::state->startupMenuInitializationComplete.store(true, std::memory_order_release);
+
+				NativeMenu::Register();
 			}
 
 			break;
@@ -163,7 +160,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 bool Load()
 {
 	if (REL::Module::IsVR()) {  // Pre-ReInit check; globals::game::isVR not populated yet
-		REL::IDDB::get().IsVRAddressLibraryAtLeastVersion("0.257.0", true);
+		REL::IDDB::get().IsVRAddressLibraryAtLeastVersion("0.265.0", true);
 	}
 
 	auto privateProfileRedirectorVersion = Util::GetDllVersion(L"Data/SKSE/Plugins/PrivateProfileRedirector.dll");
@@ -172,8 +169,16 @@ bool Load()
 	}
 
 	// Frame generation is flatrim-only; the DRS reset must precede any D3D device.
-	if (!REL::Module::IsVR())
+	if (!REL::Module::IsVR()) {
 		Streamline::EnsureDriverProfileAllowsDLSSG();
+
+		if (Streamline::IsSmoothMotionEnabledForProfile())
+			logger::warn(
+				"NVIDIA Smooth Motion is enabled for this profile. It is known to crash "
+				"alongside D3D11 hooking mods (including this plugin). Disable Smooth "
+				"Motion for Skyrim Special Edition in the NVIDIA App if you experience "
+				"crashes at startup.");
+	}
 
 	auto messaging = SKSE::GetMessagingInterface();
 	messaging->RegisterListener("SKSE", MessageHandler);

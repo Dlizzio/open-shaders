@@ -58,32 +58,23 @@ namespace Util::ShaderInclude
 		return true;
 	}
 
-	void Report(const std::filesystem::path& source, const char* loader, const char* include,
-		const std::filesystem::path& attemptedPath, const ReadError& error) noexcept
+	void Report(const std::filesystem::path& source, const std::filesystem::path& attemptedPath, const ReadError& error) noexcept
 	{
 		try {
 			constexpr size_t kMaxReports = 128;
 			static std::mutex mutex;
 			static std::unordered_set<std::string> reported;
-			const auto key = std::format("{}|{}|{}|{}|{}", loader, source.string(), attemptedPath.string(), error.operation, error.code);
+			const auto key = std::format("{}|{}|{}|{}", source.string(), attemptedPath.string(), error.operation, error.code);
 			{
 				std::lock_guard lock(mutex);
 				if (reported.size() >= kMaxReports || !reported.insert(key).second)
 					return;
 			}
-			std::error_code cwdError;
-			const auto cwd = std::filesystem::current_path(cwdError);
-			std::error_code pathError;
-			const auto absolute = std::filesystem::absolute(attemptedPath, pathError);
-			spdlog::error(
-				"[ShaderIncludeIO v2] loader={} source='{}' include='{}' operation={} attempted='{}' "
-				"absolute_at_report='{}' cwd_at_report='{}' win32_error={} ({}) expected_bytes={} read_bytes={} "
-				"cwd_error={} absolute_error={}. Duplicate diagnostics suppressed until process exit; maximum {} distinct reports.",
-				loader, source.string(), include, error.operation, attemptedPath.string(), absolute.string(), cwd.string(), error.code,
-				std::system_category().message(static_cast<int>(error.code)), error.expectedBytes, error.readBytes,
-				cwdError.value(), pathError.value(), kMaxReports);
+			spdlog::error("[ShaderInclude] source='{}' path='{}' operation={} win32_error={} ({}) expected_bytes={} read_bytes={}",
+				source.string(), attemptedPath.string(), error.operation, error.code,
+				std::system_category().message(static_cast<int>(error.code)), error.expectedBytes, error.readBytes);
 		} catch (...) {
-			OutputDebugStringA("[ShaderIncludeIO v2] Unable to format include failure diagnostics.\n");
+			OutputDebugStringA("[ShaderInclude] Unable to format include failure diagnostics.\n");
 		}
 	}
 }
@@ -91,31 +82,32 @@ namespace Util::ShaderInclude
 namespace Util
 {
 	HRESULT CustomInclude::Open([[maybe_unused]] D3D_INCLUDE_TYPE type, LPCSTR filename,
-		[[maybe_unused]] LPCVOID parent, LPCVOID* data, UINT* size)
+		[[maybe_unused]] LPCVOID parent, LPCVOID* data, UINT* size) noexcept
 	{
 		*data = nullptr;
 		*size = 0;
+		std::filesystem::path path;
 		try {
-			const auto path = std::filesystem::path(L"Data\\Shaders") / filename;
+			path = std::filesystem::path(L"Data\\Shaders") / filename;
 			ShaderInclude::File contents;
 			ShaderInclude::ReadError error;
 			if (!ShaderInclude::Read(path, contents, error)) {
-				ShaderInclude::Report(sourcePath, "CustomInclude", filename, path, error);
+				ShaderInclude::Report(sourcePath, path, error);
 				return HRESULT_FROM_WIN32(error.code);
 			}
 			*size = contents.size;
 			*data = contents.data.release();
 			return S_OK;
 		} catch (const std::bad_alloc&) {
-			ShaderInclude::Report(sourcePath, "CustomInclude", filename, sourcePath, { "prepare_include", ERROR_NOT_ENOUGH_MEMORY });
+			ShaderInclude::Report(sourcePath, path, { "prepare_include", ERROR_NOT_ENOUGH_MEMORY });
 			return E_OUTOFMEMORY;
 		} catch (...) {
-			ShaderInclude::Report(sourcePath, "CustomInclude", filename, sourcePath, { "prepare_include", ERROR_UNHANDLED_EXCEPTION });
+			ShaderInclude::Report(sourcePath, path, { "prepare_include", ERROR_UNHANDLED_EXCEPTION });
 			return E_FAIL;
 		}
 	}
 
-	HRESULT CustomInclude::Close(LPCVOID data)
+	HRESULT CustomInclude::Close(LPCVOID data) noexcept
 	{
 		delete[] static_cast<const char*>(data);
 		return S_OK;
