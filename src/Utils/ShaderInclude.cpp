@@ -82,7 +82,7 @@ namespace Util::ShaderInclude
 namespace Util
 {
 	HRESULT CustomInclude::Open([[maybe_unused]] D3D_INCLUDE_TYPE type, LPCSTR filename,
-		[[maybe_unused]] LPCVOID parent, LPCVOID* data, UINT* size)
+		[[maybe_unused]] LPCVOID parent, LPCVOID* data, UINT* size) noexcept
 	{
 		*data = nullptr;
 		*size = 0;
@@ -107,7 +107,7 @@ namespace Util
 		}
 	}
 
-	HRESULT CustomInclude::Close(LPCVOID data)
+	HRESULT CustomInclude::Close(LPCVOID data) noexcept
 	{
 		delete[] static_cast<const char*>(data);
 		return S_OK;

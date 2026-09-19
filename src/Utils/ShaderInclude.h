@@ -38,9 +38,9 @@ namespace Util
 		explicit CustomInclude(const std::filesystem::path& source) : sourcePath(source) {}
 
 		/** @brief Return an owned include buffer, including a non-null buffer for empty files. */
-		HRESULT Open(D3D_INCLUDE_TYPE type, LPCSTR filename, LPCVOID parent, LPCVOID* data, UINT* size) override;
+		HRESULT Open(D3D_INCLUDE_TYPE type, LPCSTR filename, LPCVOID parent, LPCVOID* data, UINT* size) noexcept override;
 		/** @brief Release the buffer returned by Open. */
-		HRESULT Close(LPCVOID data) override;
+		HRESULT Close(LPCVOID data) noexcept override;
 
 	private:
 		std::filesystem::path sourcePath;
