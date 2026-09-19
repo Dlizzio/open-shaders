@@ -54,6 +54,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION.string());
 	SKSE::Init(a_skse);
+	logger::info("[ShaderIncludeIO v2] Open Shaders 2.11.0 Win32 include reader active; include reads do not use CRT file descriptors.");
 	SKSE::AllocTrampoline(1 << 12);
 	return Load();
 }

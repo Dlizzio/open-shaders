@@ -134,7 +134,7 @@ namespace Util
 	{
 		auto device = globals::d3d::device;
 
-		CustomInclude include;
+		CustomInclude include(FilePath);
 
 		// Build defines (aka convert vector->D3DCONSTANT array)
 		std::vector<D3D_SHADER_MACRO> macros;
