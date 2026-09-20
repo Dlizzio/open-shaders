@@ -213,6 +213,18 @@ bool Load()
 		}
 	}
 
+	for (const auto& plugin : Compatibility::outdatedPlugins) {
+		const auto version = Util::GetDllVersion(plugin.dll);
+		if (version && *version < plugin.minimumVersion) {
+			auto dllName = stl::utf16_to_utf8(plugin.dll).value_or("<unicode conversion error>"s);
+			auto errorMessage = plugin.reason.empty() ?
+			                        std::format("Incompatible version {} of {} detected ({} or newer required). Update or remove it to use Open Shaders.", version->string("."), dllName, plugin.minimumVersion.string(".")) :
+			                        std::format("Incompatible version {} of {} detected ({} or newer required; {}). Update or remove it to use Open Shaders.", version->string("."), dllName, plugin.minimumVersion.string("."), plugin.reason);
+			logger::error("{}", errorMessage);
+			errors.push_back(errorMessage);
+		}
+	}
+
 	auto pushMissingDllError = [&](std::string_view dllName) {
 		auto errorMessage = std::format("Required DLL {} was missing. Install it to use Open Shaders.", dllName);
 		logger::error("{}", errorMessage);
