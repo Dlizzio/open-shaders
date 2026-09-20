@@ -75,6 +75,27 @@ namespace BackgroundBlur
 		winrt::com_ptr<ID3D11ShaderResourceView> cachedSourceSRV;
 		ID3D11Texture2D* cachedSourceTexture = nullptr;  // raw pointer for cache invalidation check
 
+		winrt::com_ptr<ID3D11Texture2D> editorUITexture;
+		winrt::com_ptr<ID3D11RenderTargetView> editorUIRTV;
+		winrt::com_ptr<ID3D11ShaderResourceView> editorUISRV;
+
+		struct RetainedBuffer
+		{
+			winrt::com_ptr<ID3D11Texture2D> source;
+			winrt::com_ptr<ID3D11Texture2D> clean;
+			uint64_t generation = 0;
+			bool dirty = false;
+		};
+		RetainedBuffer retainedScene;
+		RetainedBuffer retainedUI;
+		struct SceneImage
+		{
+			ImDrawList* drawList = nullptr;
+			ImRect rect;
+			ImRect clip;
+		};
+		SceneImage sceneImage;
+
 		UINT textureWidth = 0;
 		UINT textureHeight = 0;
 		UINT downsampledWidth = 0;
@@ -144,7 +165,41 @@ namespace BackgroundBlur
 			return globals::state && globals::state->startupMenuBlurSourceReady;
 		}
 
-		bool IsStartupMenuBlurSourceReady(SIE::ShaderCache* shaderCache)
+		winrt::com_ptr<ID3D11Texture2D> GetTexture(ID3D11View* view)
+		{
+			winrt::com_ptr<ID3D11Resource> resource;
+			if (view)
+				view->GetResource(resource.put());
+			return resource ? resource.try_as<ID3D11Texture2D>() : nullptr;
+		}
+
+		bool CopyCompatible(ID3D11Texture2D* first, ID3D11Texture2D* second)
+		{
+			if (!first || !second)
+				return false;
+			D3D11_TEXTURE2D_DESC a{}, b{};
+			first->GetDesc(&a);
+			second->GetDesc(&b);
+			return a.Width == b.Width && a.Height == b.Height && a.Format == b.Format &&
+			       a.MipLevels == b.MipLevels && a.ArraySize == b.ArraySize &&
+			       a.SampleDesc.Count == b.SampleDesc.Count && a.SampleDesc.Quality == b.SampleDesc.Quality;
+		}
+
+		void RestoreBuffer(RetainedBuffer& buffer, ID3D11Texture2D* current, uint64_t generation)
+		{
+			if (buffer.source.get() != current || buffer.generation != generation) {
+				buffer.source = nullptr;
+				buffer.dirty = false;
+				return;
+			}
+			if (buffer.dirty && CopyCompatible(current, buffer.clean.get())) {
+				CS_GPU_PASS("BackgroundBlur::RestoreRetainedBuffer");
+				globals::d3d::context->CopyResource(current, buffer.clean.get());
+			}
+			buffer.dirty = false;
+		}
+
+		bool PreserveUIBuffer(const UIBufferViews& uiBuffer)
 		{
 			if (!uiBuffer.rtv || !globals::state->IsPausedOrMenuOpen(globals::game::ui)) {
 				retainedUI = {};
@@ -819,20 +874,9 @@ namespace BackgroundBlur
 			CreateBlurTextures(texDesc.Width, texDesc.Height, blurFormat);
 		}
 
-		// Snapshot the clean scene before the in-place HDR blur, for clean captures.
-		if (hdrActive) {
-			hdr->SnapshotCleanScene();
-		}
-
-		const bool allowUIBufferClear =
-			!globals::state || !globals::state->IsPausedOrMenuOpen(globals::game::ui);
-		// CS editor mode: single fullscreen blur pass (better perf than per-window)
-		if (csEditorActive) {
-			ImVec2 screenMin = { 0, 0 };
-			ImVec2 screenMax = { static_cast<float>(texDesc.Width), static_cast<float>(texDesc.Height) };
-			PerformBlur(currentTexture.get(), sourceSRV, currentRTV.get(), screenMin, screenMax, 0.0f, uiBuffer.srv, uiBuffer.rtv, allowUIBufferClear);
-			return;
-		}
+		std::lock_guard<std::mutex> lock(resourceMutex);
+		if (!downsampleRTV || !blurRTV1 || !blurRTV2)
+			return false;
 
 		winrt::com_ptr<ID3D11RenderTargetView> imguiRTV;
 		context->OMGetRenderTargets(1, imguiRTV.put(), nullptr);

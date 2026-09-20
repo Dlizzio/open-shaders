@@ -1211,8 +1211,6 @@ void HDRDisplay::ApplyHDR()
 				}
 			}
 
-			RestoreCleanScene();
-			state->EndPerfEvent();
 			return;
 		}
 
@@ -1233,9 +1231,6 @@ void HDRDisplay::ApplyHDR()
 			backBuffer->Release();
 		}
 	}
-
-	RestoreCleanScene();
-	state->EndPerfEvent();
 }
 
 void HDRDisplay::DispatchHDROutput(ID3D11ShaderResourceView* sceneSRV, ID3D11ShaderResourceView* uiSRV, ID3D11UnorderedAccessView* uav)
@@ -1326,15 +1321,6 @@ void HDRDisplay::SnapshotCleanScene()
 	globals::d3d::context->CopyResource(cleanSceneCapture->resource.get(), hdrTexture->resource.get());
 	cleanSceneCaptureFrame = globals::state->frameCount;
 	cleanSceneCaptureGeneration = sceneGeneration;
-}
-
-void HDRDisplay::RestoreCleanScene()
-{
-	if (!IsCleanSceneCaptureFresh() || !hdrTexture || !hdrTexture->resource ||
-		!cleanSceneCapture || !cleanSceneCapture->resource)
-		return;
-
-	globals::d3d::context->CopyResource(hdrTexture->resource.get(), cleanSceneCapture->resource.get());
 }
 
 bool HDRDisplay::IsCleanSceneCaptureFresh() const

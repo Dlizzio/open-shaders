@@ -128,7 +128,8 @@ bool TerrainVariation::IsLandscapeDiffuseTexture(const RE::BSFixedString& a_name
 	auto [it, inserted] = meshTextureCache.try_emplace(key, false);
 	if (inserted) {
 		const auto canonical = CanonicaliseTexturePath(key);
-		it->second = canonical.starts_with(LandscapeDirectory) && canonical.find('/', LandscapeDirectory.size()) == std::string::npos;
+		it->second = (canonical.starts_with(LandscapeDirectory) && canonical.find('/', LandscapeDirectory.size()) == std::string::npos) ||
+		             (landscapeDiffusePaths.contains(canonical) && !canonical.starts_with(LandscapeTreeDirectory));
 		meshTextureKeepAlive.push_back(a_name);
 	}
 

@@ -870,8 +870,10 @@ namespace NativeMenu::Vendor::VanillaSettingsEngine
 			RE::GFxValue entryList;
 			if (!a_list.GetMember("EntriesA", &entryList) || !entryList.IsArray())
 				return;
-			if (HasOurEntries(entryList))
+			if (HasOurEntries(entryList)) {
+				g_optionsListTouched = true;
 				return;
+			}
 
 			std::uint32_t added = 0;
 			for (std::size_t i = 0; i < g_settings.size(); ++i) {
