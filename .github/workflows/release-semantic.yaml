@@ -353,12 +353,12 @@ jobs:
 
     attach-artifacts:
         needs: [release, build-artifacts]
-        # cpp-built alone, not needs.build-artifacts.result: a
-        # shader-validation leg failing must not block attaching what DID build.
+        # Publishing requires the plugin and validated caches from this build.
         if: >
             always() && !cancelled() &&
             needs.release.outputs.new-release-published == 'true' &&
-            needs.build-artifacts.outputs.cpp-built == 'true'
+            needs.build-artifacts.outputs.cpp-built == 'true' &&
+            needs.build-artifacts.outputs.cache-validated == 'true'
         permissions:
             contents: write
             id-token: write
