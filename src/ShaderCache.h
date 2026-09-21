@@ -1134,7 +1134,7 @@ namespace SIE
 		std::chrono::steady_clock::time_point activeShaderCaptureDeadline;                   // render thread only
 		bool activeShaderCaptureMenuWasVisible = false;                                      // render thread only
 		std::atomic<std::thread::id> activeShaderCaptureThread;                              // read cross-thread (TrackActiveShader)
-		ankerl::unordered_dense::map<size_t, ActiveShaderInfo> capturedShaders;               // guarded by activeShadersMutex
+		ankerl::unordered_dense::map<size_t, ActiveShaderInfo> capturedShaders;              // guarded by activeShadersMutex
 		std::unordered_set<size_t> clearedThisCaptureCycle;                                  // render thread only; reset per BeginActiveShaderCapture()
 		std::unordered_set<std::string> clearedBytecodeThisCaptureCycle;
 		size_t lastScopedClearCount = 0;
