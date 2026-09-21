@@ -8,6 +8,7 @@
 
 #include "../EffectManager.h"
 #include "../EffectSourceCompatibility.h"
+#include "../PresetInclude.h"
 #include "../PresetManager.h"
 #include "../TextureManager.h"
 #include "Features/Effects11/SettingsPatches.h"
@@ -387,6 +388,7 @@ bool Effect::LoadFXFile()
 		}
 	}
 
+	EffectSourceCompatibility::PresetInclude includes(filePath.parent_path());
 	winrt::com_ptr<ID3DBlob> compileMessages;
 	HRESULT hr;
 	if (!patchedSource.empty()) {
@@ -395,7 +397,7 @@ bool Effect::LoadFXFile()
 			patchedSource.size(),
 			filePathStr.c_str(),
 			nullptr,
-			D3D_COMPILE_STANDARD_FILE_INCLUDE,
+			&includes,
 			0,
 			0,
 			globals::d3d::device,
@@ -405,13 +407,15 @@ bool Effect::LoadFXFile()
 		hr = D3DX11CompileEffectFromFile(
 			filePath.c_str(),
 			nullptr,
-			D3D_COMPILE_STANDARD_FILE_INCLUDE,
+			&includes,
 			0,
 			0,
 			globals::d3d::device,
 			effect.put(),
 			compileMessages.put());
 	}
+	for (const auto& missing : includes.GetMissingIncludes())
+		logger::warn("[EFFECTS11] Missing include '{}' in '{}'; treated as empty source for preset compatibility", missing, filePathStr);
 	if (FAILED(hr)) {
 		std::string errorMessage = "Compilation failed";
 		if (compileMessages) {
