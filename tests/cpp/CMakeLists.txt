@@ -72,6 +72,7 @@ add_executable(cpp_tests
 	test_weatheridparser.cpp
 	test_effectsourcecompatibility.cpp
 	test_versiongate.cpp
+	test_presetinclude.cpp
 	test_windfield.cpp
     # Stub I18n::Get so units-under-test that call T() (Subrect's DrawEditor)
     # link without pulling the translation loader into the test binary.
@@ -85,6 +86,7 @@ add_executable(cpp_tests
 	"${CMAKE_SOURCE_DIR}/src/Utils/ShaderInclude.cpp"
 	"${CMAKE_SOURCE_DIR}/src/Features/Effects11/WeatherIDParser.cpp"
 	"${CMAKE_SOURCE_DIR}/src/Features/Effects11/EffectSourceCompatibility.cpp"
+	"${CMAKE_SOURCE_DIR}/src/Features/Effects11/PresetInclude.cpp"
 	"${CMAKE_SOURCE_DIR}/src/Features/Wind/WindField.cpp"
 	"${CMAKE_SOURCE_DIR}/src/Features/Wind/TransientWindImpulse.cpp"
 )
