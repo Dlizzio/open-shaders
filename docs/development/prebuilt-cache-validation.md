@@ -7,6 +7,11 @@ succeed. To run it against `dev` without publishing a release, dispatch
 **CI: Prebuilt Shader Cache** with `ref=dev`. The workflow produces the
 `ShaderCache-SE` and `ShaderCache-VR` artifacts; it does not upload to Nexus.
 
+The manual validator grants its shared build `cache-mode: read`: selected refs
+can restore CI dependency/build caches but cannot save them. This token-level
+restriction is separate from `contents: read` and does not block uploading the
+shader-cache test artifacts. Digest checks do not authenticate their producer.
+
 Reused compiler artifacts carry `CompileConfig.yaml` and `CompileInputs.json`,
 recorded immediately after compilation. Finalization rejects changes to source
 digests, permutations, runtime, or bytecode before writing the release manifest.
