@@ -2,6 +2,7 @@
 #include <d3dcompiler.h>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <sstream>
 
 #include <DirectXTex.h>
@@ -388,7 +389,14 @@ bool Effect::LoadFXFile()
 		}
 	}
 
-	EffectSourceCompatibility::PresetInclude includes(filePath.parent_path());
+	std::optional<EffectSourceCompatibility::PresetInclude> includes;
+	try {
+		includes.emplace(filePath.parent_path());
+	} catch (const std::filesystem::filesystem_error& error) {
+		errors.emplace_back(error.what());
+		logger::error("[EFFECTS11] Failed to resolve include directory for '{}': {}", filePathStr, error.what());
+		return false;
+	}
 	winrt::com_ptr<ID3DBlob> compileMessages;
 	HRESULT hr;
 	if (!patchedSource.empty()) {
@@ -397,7 +405,7 @@ bool Effect::LoadFXFile()
 			patchedSource.size(),
 			filePathStr.c_str(),
 			nullptr,
-			&includes,
+			&*includes,
 			0,
 			0,
 			globals::d3d::device,
@@ -407,14 +415,14 @@ bool Effect::LoadFXFile()
 		hr = D3DX11CompileEffectFromFile(
 			filePath.c_str(),
 			nullptr,
-			&includes,
+			&*includes,
 			0,
 			0,
 			globals::d3d::device,
 			effect.put(),
 			compileMessages.put());
 	}
-	for (const auto& missing : includes.GetMissingIncludes())
+	for (const auto& missing : includes->GetMissingIncludes())
 		logger::warn("[EFFECTS11] Missing include '{}' in '{}'; treated as empty source for preset compatibility", missing, filePathStr);
 	if (FAILED(hr)) {
 		std::string errorMessage = "Compilation failed";
