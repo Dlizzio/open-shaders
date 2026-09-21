@@ -10,23 +10,23 @@ Both objects accept the same optional arrays:
 
 ```json
 {
-  "include": {
-    "directories": ["landscape/mountains/"],
-    "paths": ["mytextures/rock.dds"],
-    "filenames": ["customcliff.dds"]
-  },
-  "exclude": {
-    "filenames": ["dirtcliffsroots01.dds"],
-    "paths": ["landscape/example/specifictexture.dds"],
-    "directories": ["landscape/trees/"]
-  }
+    "include": {
+        "directories": ["landscape/mountains/"],
+        "paths": ["mytextures/rock.dds"],
+        "filenames": ["customcliff.dds"]
+    },
+    "exclude": {
+        "filenames": ["dirtcliffsroots01.dds"],
+        "paths": ["landscape/example/specifictexture.dds"],
+        "directories": ["landscape/trees/"]
+    }
 }
 ```
 
-- `filenames` matches a texture filename in any directory, including PBR copies.
-- `paths` matches an exact texture path relative to `Data/Textures/`.
-- `directories` matches a directory and all its subdirectories. A trailing slash
-  is optional; `landscape/trees` does not match `landscape/trees2`.
+-   `filenames` matches a texture filename in any directory, including PBR copies.
+-   `paths` matches an exact texture path relative to `Data/Textures/`.
+-   `directories` matches a directory and all its subdirectories. A trailing slash
+    is optional; `landscape/trees` does not match `landscape/trees2`.
 
 Matching ignores case and treats forward and backward slashes equally. Paths
 may include the `Textures/` or `Data/Textures/` prefix. Filename and path entries
@@ -36,9 +36,9 @@ Rules from all files are combined, so file order does not matter. A blacklist
 match always wins over both the whitelist and automatic matching. Otherwise,
 a texture qualifies when any of these conditions holds:
 
-- It is directly under `landscape/`, with no further subdirectory.
-- It is referenced by a landscape texture record, including seasonal swaps.
-- It matches a whitelist rule.
+-   It is directly under `landscape/`, with no further subdirectory.
+-   It is referenced by a landscape texture record, including seasonal swaps.
+-   It matches a whitelist rule.
 
 Rules affect mesh variation only; they do not alter landscape rendering.
 Whitelisting changes texture eligibility only. Existing alpha-testing, decal,
