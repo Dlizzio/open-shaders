@@ -38,9 +38,9 @@ namespace SIE
 	}
 
 	void ShaderCache::EvictShader(const std::string& a_key, RE::BSShader::Type a_type, uint32_t a_descriptor,
-		ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob)
+		ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob, bool a_evictSharedBytecode)
 	{
-		{
+		if (a_evictSharedBytecode) {
 			std::unique_lock lockM{ mapMutex };
 			shaderMap.erase(a_key);
 		}
@@ -126,6 +126,7 @@ namespace SIE
 
 		activeShaderCaptureMenuWasVisible = false;
 		clearedThisCaptureCycle.clear();
+		clearedBytecodeThisCaptureCycle.clear();
 		StartActiveShaderCaptureWindow(ActiveShaderCaptureStage::FirstWindow);
 	}
 
@@ -223,22 +224,30 @@ namespace SIE
 
 		std::unordered_set<size_t> taskIds;
 		taskIds.reserve(entries.size());
+		std::unordered_set<std::string> eligibleKeys;
 		size_t evictedCount = 0;
 		for (const auto& entry : entries) {
+			const auto taskId = ShaderCompilationTask::MakeId(entry.shaderClass, entry.shaderType, entry.descriptor);
 			// Already evicted earlier in this same click's capture cycle (e.g. still on
 			// screen across both windows) - clearing it again would just force a second,
 			// pointless recompile of a shader that may have already finished the first one.
-			if (clearedThisCaptureCycle.contains(entry.key))
+			if (clearedThisCaptureCycle.contains(taskId))
 				continue;
 			// A shader still Pending is actively compiling on a pool thread. Evicting it here
 			// would let a subsequent Get*Shader miss enqueue a second, duplicate compile for
 			// the same descriptor while the original is still running - two threads racing to
 			// D3DWriteBlobToFile the same disk path. Leave it; it isn't broken, just in flight.
-			if (GetShaderStatus(entry.key) == ShaderCompilationTask::Status::Pending)
-				continue;
-			EvictShader(entry.key, entry.shaderType, entry.descriptor, entry.shaderClass, entry.diskPath, IsDiskCache());
-			taskIds.insert(ShaderCompilationTask::MakeId(entry.shaderClass, entry.shaderType, entry.descriptor));
-			clearedThisCaptureCycle.insert(entry.key);
+			if (!eligibleKeys.contains(entry.key)) {
+				std::scoped_lock lockM{ mapMutex };
+				auto it = shaderMap.find(entry.key);
+				if (it != shaderMap.end() && it->second.status == ShaderCompilationTask::Status::Pending)
+					continue;
+				eligibleKeys.insert(entry.key);
+			}
+			const bool evictSharedBytecode = clearedBytecodeThisCaptureCycle.insert(entry.key).second;
+			EvictShader(entry.key, entry.shaderType, entry.descriptor, entry.shaderClass, entry.diskPath, IsDiskCache(), evictSharedBytecode);
+			taskIds.insert(taskId);
+			clearedThisCaptureCycle.insert(taskId);
 			++evictedCount;
 		}
 		// Must run after every EvictShader() above: Add() refuses to re-enqueue a task still

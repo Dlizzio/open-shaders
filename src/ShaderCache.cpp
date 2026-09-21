@@ -2380,10 +2380,11 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (state->IsDeveloperMode()) {
-			// Track this shader as active
+		if (IsTrackingActiveShaders()) {
 			TrackActiveShader(ShaderClass::Vertex, shader, descriptor);
+		}
 
+		if (state->IsDeveloperMode()) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Vertex, shader, descriptor, true);
 			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -2428,10 +2429,11 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (state->IsDeveloperMode()) {
-			// Track this shader as active
+		if (IsTrackingActiveShaders()) {
 			TrackActiveShader(ShaderClass::Pixel, shader, descriptor);
+		}
 
+		if (state->IsDeveloperMode()) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true);
 			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -2472,10 +2474,11 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (state->IsDeveloperMode()) {
-			// Track this shader as active
+		if (IsTrackingActiveShaders()) {
 			TrackActiveShader(ShaderClass::Compute, shader, descriptor);
+		}
 
+		if (state->IsDeveloperMode()) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Compute, shader, descriptor, true);
 			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -4395,7 +4398,12 @@ namespace SIE
 		// would balloon a scene-scoped capture into a near-full clear.
 		if (activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0 &&
 			std::this_thread::get_id() == activeShaderCaptureThread.load(std::memory_order_relaxed)) {
-			capturedShaders.try_emplace(key, info);  // first sighting wins; info is descriptor-complete
+			const auto taskId = ShaderCompilationTask::MakeId(shaderClass, shader.shaderType.get(), descriptor);
+			auto [captured, wasAdded] = capturedShaders.try_emplace(taskId, info);
+			if (wasAdded) {
+				captured->second.descriptor = descriptor;
+				captured->second.diskPath = SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
+			}
 		}
 	}
 
