@@ -1,6 +1,8 @@
 name: "CI: Prebuilt Shader Cache"
 
 on:
+    push:
+        branches: [ci_test/cache-validation-se-vr-20260920]
     workflow_dispatch:
         inputs:
             ref:
@@ -14,10 +16,11 @@ permissions:
 
 jobs:
     cache:
+        if: github.repository == 'Dlizzio/open-shaders'
         cache-mode: read
         uses: ./.github/workflows/_shared-build.yaml
         with:
-            ref: ${{ inputs.ref }}
+            ref: ${{ inputs.ref || github.sha }}
             repository: ${{ github.repository }}
             run-cpp: false
             run-shader-validation: true

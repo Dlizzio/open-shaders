@@ -191,6 +191,14 @@ jobs:
                 pass: [full-config, release-parity]
             fail-fast: false
         steps:
+            - name: Verify read-only cache token for fork CI
+              shell: pwsh
+              run: |
+                  if ($env:ACTIONS_CACHE_MODE -ne 'read') {
+                      throw "Expected read-only cache token, received '$env:ACTIONS_CACHE_MODE'"
+                  }
+                  Write-Host "ACTIONS_CACHE_MODE=read"
+
             - name: Checkout code
               uses: actions/checkout@v6
               with:
