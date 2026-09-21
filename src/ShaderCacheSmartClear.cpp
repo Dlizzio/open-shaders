@@ -40,6 +40,7 @@ namespace SIE
 	void ShaderCache::EvictShader(const std::string& a_key, RE::BSShader::Type a_type, uint32_t a_descriptor,
 		ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob, bool a_evictSharedBytecode)
 	{
+		// Release mapMutex before taking compilationMutex to avoid deadlocking with Complete().
 		if (a_evictSharedBytecode) {
 			std::unique_lock lockM{ mapMutex };
 			shaderMap.erase(a_key);
@@ -224,7 +225,6 @@ namespace SIE
 
 		std::unordered_set<size_t> taskIds;
 		taskIds.reserve(entries.size());
-		std::unordered_set<std::string> eligibleKeys;
 		size_t evictedCount = 0;
 		for (const auto& entry : entries) {
 			const auto taskId = ShaderCompilationTask::MakeId(entry.shaderClass, entry.shaderType, entry.descriptor);
@@ -237,12 +237,11 @@ namespace SIE
 			// would let a subsequent Get*Shader miss enqueue a second, duplicate compile for
 			// the same descriptor while the original is still running - two threads racing to
 			// D3DWriteBlobToFile the same disk path. Leave it; it isn't broken, just in flight.
-			if (!eligibleKeys.contains(entry.key)) {
+			{
 				std::scoped_lock lockM{ mapMutex };
 				auto it = shaderMap.find(entry.key);
 				if (it != shaderMap.end() && it->second.status == ShaderCompilationTask::Status::Pending)
 					continue;
-				eligibleKeys.insert(entry.key);
 			}
 			const bool evictSharedBytecode = clearedBytecodeThisCaptureCycle.insert(entry.key).second;
 			EvictShader(entry.key, entry.shaderType, entry.descriptor, entry.shaderClass, entry.diskPath, IsDiskCache(), evictSharedBytecode);
