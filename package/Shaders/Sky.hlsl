@@ -6,6 +6,22 @@
 #include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 
+#if defined(PROCEDURAL_SUN)
+#	include "ProceduralSun/ProceduralSun.hlsli"
+
+bool IsProceduralSunActive()
+{
+	bool effects11OwnsSun = false;
+#	if defined(EFFECTS11)
+	effects11OwnsSun = SharedData::enbSettings.EnableProceduralSun != 0;
+#	endif
+	return SharedData::proceduralSunSettings.enabled && !effects11OwnsSun &&
+	       (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun) &&
+	       (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) &&
+	       !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection);
+}
+#endif
+
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
@@ -91,10 +107,26 @@ VS_OUTPUT main(VS_INPUT input)
 	);
 
 	float4 inputPosition = float4(input.Position.xyz, 1.0);
+	float4 previousInputPosition = inputPosition;
+
+#	if defined(PROCEDURAL_SUN) && defined(TEX) && !defined(DITHER)
+	if (IsProceduralSunActive()) {
+		float outerCos = SharedData::proceduralSunSettings.haloEnabled && SharedData::proceduralSunSettings.haloIntensity > 0.0f ?
+		                     SharedData::proceduralSunSettings.sunHaloCos :
+		                     SharedData::proceduralSunSettings.sunDiskCos;
+		inputPosition.xyz = ProceduralSun::ResizeBillboardVertex(input.Position.xyz, World[eyeIndex], SharedData::proceduralSunSettings.sunQuadModelRadius, outerCos);
+		previousInputPosition.xyz = ProceduralSun::ResizeBillboardVertex(input.Position.xyz, PreviousWorld[eyeIndex], SharedData::proceduralSunSettings.sunQuadModelRadius, outerCos);
+	}
+#	endif
 
 #	if defined(OCCLUSION)
 
-	// Intentionally left blank
+#		if defined(PROCEDURAL_SUN)
+	if (IsProceduralSunActive()) {
+		inputPosition.xyz *= ProceduralSun::GetOcclusionBillboardScale(SharedData::proceduralSunSettings.sunQuadModelRadius);
+		previousInputPosition = inputPosition;
+	}
+#		endif
 
 #	elif defined(MOONMASK)
 
@@ -147,7 +179,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Position = mul(WorldViewProj[eyeIndex], inputPosition).xyww;
 	vsout.WorldPosition = mul(World[eyeIndex], inputPosition);
 	vsout.FogPosition = vsout.WorldPosition.xyz - EyePosition[eyeIndex].xyz;
-	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], inputPosition);
+	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousInputPosition);
 
 #	ifdef VR
 	vsout.EyeIndex = eyeIndex;
@@ -203,10 +235,6 @@ cbuffer AlphaTestRefCB : register(b11)
 #	if defined(CLOUD_RELIGHT) && defined(CLOUD_SHADOWS) && defined(TEX) && defined(CLOUDS)
 #		define CR_CLOUDS
 #		include "CloudRelight/CloudRelight.hlsli"
-#	endif
-
-#	if defined(PROCEDURAL_SUN)
-#		include "ProceduralSun/ProceduralSun.hlsli"
 #	endif
 
 #	if defined(EXP_HEIGHT_FOG)
@@ -268,15 +296,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 #		if defined(PROCEDURAL_SUN) && defined(TEX) && defined(DEFERRED) && !defined(DITHER)
-	bool effects11OwnsSun = false;
-#			if defined(EFFECTS11)
-	effects11OwnsSun = SharedData::enbSettings.EnableProceduralSun != 0;
-#			endif
-	bool proceduralSunActive = SharedData::proceduralSunSettings.enabled &&
-	                           !effects11OwnsSun &&
-	                           (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun) &&
-	                           (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
-	if (proceduralSunActive) {
+	if (IsProceduralSunActive()) {
 		float3 viewDirection = normalize(input.WorldPosition.xyz);
 		float cosTheta = clamp(dot(viewDirection, SharedData::SunDirection.xyz), -1.0f, 1.0f);
 		float3 limbDarkening;
