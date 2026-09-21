@@ -4375,23 +4375,23 @@ namespace SIE
 		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
 		std::lock_guard lock(activeShadersMutex);
 
-		auto& info = activeShaders[key];
-		if (info.key.empty()) {
-			// First time seeing this shader
+		const auto initializeInfo = [&](ActiveShaderInfo& info) {
 			info.key = key;
 			info.shaderType = shader.shaderType.get();
 			info.shaderClass = shaderClass;
 			info.descriptor = descriptor;
-
-			// Construct disk path. Unlike the HLSL source path (which uses originalShaderName for
-			// ImageSpace shaders), the compiled blob is always keyed on fxpFilename - see GetDiskPath's
-			// other call sites (AddCompletedShader, hlslRecord construction).
 			info.diskPath = SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
-		}
+		};
 
-		info.isActive = true;
-		info.drawCalls++;
-		info.lastUsed = std::chrono::steady_clock::now();
+		if (globals::state->IsDeveloperMode()) {
+			auto& info = activeShaders[key];
+			if (info.key.empty()) {
+				initializeInfo(info);
+			}
+			info.isActive = true;
+			info.drawCalls++;
+			info.lastUsed = std::chrono::steady_clock::now();
+		}
 
 		// Render thread only: BSShader::LoadShaders drives Get*Shader in bulk off-thread
 		// (Hooks.cpp BSShader_LoadShaders, TruePBR::GenerateShaderPermutations). Ingesting that
@@ -4399,10 +4399,9 @@ namespace SIE
 		if (activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0 &&
 			std::this_thread::get_id() == activeShaderCaptureThread.load(std::memory_order_relaxed)) {
 			const auto taskId = ShaderCompilationTask::MakeId(shaderClass, shader.shaderType.get(), descriptor);
-			auto [captured, wasAdded] = capturedShaders.try_emplace(taskId, info);
+			auto [captured, wasAdded] = capturedShaders.try_emplace(taskId);
 			if (wasAdded) {
-				captured->second.descriptor = descriptor;
-				captured->second.diskPath = SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
+				initializeInfo(captured->second);
 			}
 		}
 	}
