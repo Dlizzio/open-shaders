@@ -73,6 +73,7 @@ add_executable(cpp_tests
 	test_effectsourcecompatibility.cpp
 	test_versiongate.cpp
 	test_windfield.cpp
+	test_terrainvariation_mesh_rules.cpp
     # Stub I18n::Get so units-under-test that call T() (Subrect's DrawEditor)
     # link without pulling the translation loader into the test binary.
     i18n_stub.cpp
@@ -87,6 +88,7 @@ add_executable(cpp_tests
 	"${CMAKE_SOURCE_DIR}/src/Features/Effects11/EffectSourceCompatibility.cpp"
 	"${CMAKE_SOURCE_DIR}/src/Features/Wind/WindField.cpp"
 	"${CMAKE_SOURCE_DIR}/src/Features/Wind/TransientWindImpulse.cpp"
+	"${CMAKE_SOURCE_DIR}/src/Features/TerrainVariation/MeshRules.cpp"
 )
 
 # The plugin defines the float2/3/4 = SimpleMath aliases in its PCH, which the
