@@ -40,10 +40,6 @@ namespace SIE
 	void ShaderCache::EvictShader(const std::string& a_key, RE::BSShader::Type a_type, uint32_t a_descriptor,
 		ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob)
 	{
-		// Remove shader key from shaderMap. Scoped and released before compilationMutex is
-		// taken below - never nest these two mutexes (see CompilationSet::Add, which holds
-		// compilationMutex while calling GetCompletedShader, which takes mapMutex; the reverse
-		// nesting here would be a genuine AB-BA deadlock against a concurrent Add()).
 		{
 			std::unique_lock lockM{ mapMutex };
 			shaderMap.erase(a_key);
