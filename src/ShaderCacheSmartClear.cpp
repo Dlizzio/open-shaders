@@ -37,15 +37,9 @@ namespace SIE
 		}
 	}
 
-	void ShaderCache::EvictShader(const std::string& a_key, RE::BSShader::Type a_type, uint32_t a_descriptor,
-		ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob, bool a_evictSharedBytecode)
+	void ShaderCache::EvictShaderResources(RE::BSShader::Type a_type, uint32_t a_descriptor,
+		ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob)
 	{
-		// Release mapMutex before taking compilationMutex to avoid deadlocking with Complete().
-		if (a_evictSharedBytecode) {
-			std::unique_lock lockM{ mapMutex };
-			shaderMap.erase(a_key);
-		}
-
 		// Handle vertex, pixel, and compute shaders (each will lock)
 		switch (a_shaderClass) {
 		case SIE::ShaderClass::Vertex:
@@ -73,6 +67,18 @@ namespace SIE
 				logger::debug("Deleted {}", filePathString);
 			}  // If !removed and no error, the file didn't exist, which is fine.
 		}
+	}
+
+	void ShaderCache::EvictShader(const std::string& a_key, RE::BSShader::Type a_type, uint32_t a_descriptor,
+		ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob, bool a_evictSharedBytecode)
+	{
+		// Release mapMutex before taking compilationMutex to avoid deadlocking with Complete().
+		if (a_evictSharedBytecode) {
+			std::unique_lock lockM{ mapMutex };
+			shaderMap.erase(a_key);
+		}
+
+		EvictShaderResources(a_type, a_descriptor, a_shaderClass, a_diskPath, a_deleteDiskBlob);
 
 		logger::debug("Marking recompile for shader: {}", a_key);
 	}
@@ -237,14 +243,21 @@ namespace SIE
 			// would let a subsequent Get*Shader miss enqueue a second, duplicate compile for
 			// the same descriptor while the original is still running - two threads racing to
 			// D3DWriteBlobToFile the same disk path. Leave it; it isn't broken, just in flight.
+			//
+			// The Pending check and the shaderMap erase happen under one mapMutex
+			// acquisition so a ClaimCompilation racing in between can't have its fresh
+			// Pending claim erased out from under it.
+			bool evictSharedBytecode = false;
 			{
 				std::scoped_lock lockM{ mapMutex };
 				auto it = shaderMap.find(entry.key);
 				if (it != shaderMap.end() && it->second.status == ShaderCompilationTask::Status::Pending)
 					continue;
+				evictSharedBytecode = clearedBytecodeThisCaptureCycle.insert(entry.key).second;
+				if (evictSharedBytecode)
+					shaderMap.erase(entry.key);
 			}
-			const bool evictSharedBytecode = clearedBytecodeThisCaptureCycle.insert(entry.key).second;
-			EvictShader(entry.key, entry.shaderType, entry.descriptor, entry.shaderClass, entry.diskPath, IsDiskCache(), evictSharedBytecode);
+			EvictShaderResources(entry.shaderType, entry.descriptor, entry.shaderClass, entry.diskPath, IsDiskCache());
 			taskIds.insert(taskId);
 			clearedThisCaptureCycle.insert(taskId);
 			++evictedCount;

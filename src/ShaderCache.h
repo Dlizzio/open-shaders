@@ -1124,8 +1124,14 @@ namespace SIE
 
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
 
-		/** @brief Releases one runtime shader and optionally its disk blob and shared bytecode.
-		 *  Callers must Forget() the task id. */
+		/** @brief Releases one runtime shader and, unless a_deleteDiskBlob is false, deletes
+		 *  its disk blob. Does not touch shaderMap; callers own the shared bytecode entry
+		 *  and must Forget() the task id. */
+		void EvictShaderResources(RE::BSShader::Type a_type, uint32_t a_descriptor,
+			ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob = true);
+
+		/** @brief EvictShaderResources() plus, unless a_evictSharedBytecode is false, erasing
+		 *  the shared bytecode entry from shaderMap. Callers must Forget() the task id. */
 		void EvictShader(const std::string& a_key, RE::BSShader::Type a_type, uint32_t a_descriptor,
 			ShaderClass a_shaderClass, const std::wstring& a_diskPath, bool a_deleteDiskBlob = true, bool a_evictSharedBytecode = true);
 
