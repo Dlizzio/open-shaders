@@ -331,7 +331,8 @@ namespace SharedData
 		float fogIntensity;
 		float vlIntensity;
 		float sunGlareIntensity;
-		float2 padding;
+		float skyStaticBrightness;
+		float skyStaticTransparency;
 	};
 
 	struct WindSettings

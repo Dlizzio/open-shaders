@@ -105,6 +105,8 @@ struct CSUtility : Feature
 		float effectLightingMult = 1.0f;
 		float skyGammaOffset = 0.0f;
 		float cloudGammaOffset = 0.0f;
+		float skyStaticBrightness = 1.0f;
+		float skyStaticTransparency = 0.0f;
 		float fogGammaOffset = 0.0f;
 		float fogAlphaGammaOffset = 0.0f;
 		float fogIntensity = 1.0f;
@@ -171,7 +173,8 @@ struct CSUtility : Feature
 		float fogIntensity;
 		float vlIntensity;
 		float sunGlareIntensity;
-		float2 padding;
+		float skyStaticBrightness;
+		float skyStaticTransparency;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 	static_assert(sizeof(PerFrameData) == 160);

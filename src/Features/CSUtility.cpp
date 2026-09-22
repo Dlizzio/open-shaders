@@ -24,6 +24,8 @@ namespace
 	constexpr float kSkyBrightnessMax = 2.0f;
 	constexpr float kSkySaturationMin = 0.0f;
 	constexpr float kSkySaturationMax = 2.0f;
+	constexpr float kSkyStaticTransparencyMin = 0.0f;
+	constexpr float kSkyStaticTransparencyMax = 1.0f;
 	constexpr float kMultiplierMin = 0.0f;
 	constexpr float kMultiplierMax = 5.0f;
 	constexpr float kSceneBrightnessMin = 0.25f;
@@ -78,6 +80,8 @@ namespace
 		a_settings.effectLightingMult = Util::ClampFiniteOrDefault(a_settings.effectLightingMult, kMultiplierMin, kMultiplierMax, defaults.effectLightingMult);
 		a_settings.skyGammaOffset = Util::ClampFiniteOrDefault(a_settings.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, defaults.skyGammaOffset);
 		a_settings.cloudGammaOffset = Util::ClampFiniteOrDefault(a_settings.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax, defaults.cloudGammaOffset);
+		a_settings.skyStaticBrightness = Util::ClampFiniteOrDefault(a_settings.skyStaticBrightness, kSkyBrightnessMin, kSkyBrightnessMax, defaults.skyStaticBrightness);
+		a_settings.skyStaticTransparency = Util::ClampFiniteOrDefault(a_settings.skyStaticTransparency, kSkyStaticTransparencyMin, kSkyStaticTransparencyMax, defaults.skyStaticTransparency);
 		a_settings.fogGammaOffset = Util::ClampFiniteOrDefault(a_settings.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, defaults.fogGammaOffset);
 		a_settings.fogAlphaGammaOffset = Util::ClampFiniteOrDefault(a_settings.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, defaults.fogAlphaGammaOffset);
 		a_settings.fogIntensity = Util::ClampFiniteOrDefault(a_settings.fogIntensity, kMultiplierMin, kMultiplierMax, defaults.fogIntensity);
@@ -190,6 +194,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	effectLightingMult,
 	skyGammaOffset,
 	cloudGammaOffset,
+	skyStaticBrightness,
+	skyStaticTransparency,
 	fogGammaOffset,
 	fogAlphaGammaOffset,
 	fogIntensity,
@@ -216,6 +222,11 @@ void CSUtility::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("cloud_saturation"), "Cloud Saturation"), &settings.cloudSaturation, kSkySaturationMin, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			DrawGammaOffsetSlider(T(TKEY("sky_gamma_offset"), "Sky Gamma Offset"), settings.skyGammaOffset);
 			DrawGammaOffsetSlider(T(TKEY("cloud_gamma_offset"), "Cloud Gamma Offset"), settings.cloudGammaOffset);
+			ImGui::SliderFloat(T(TKEY("sky_static_brightness"), "Sky Static Brightness"), &settings.skyStaticBrightness, kSkyBrightnessMin, kSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat(T(TKEY("sky_static_transparency"), "Sky Static Transparency"), &settings.skyStaticTransparency, kSkyStaticTransparencyMin, kSkyStaticTransparencyMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextWrapped("%s", T(TKEY("sky_static_transparency_tooltip"), "Fades sky static meshes. Zero preserves their current visibility; one makes them fully transparent."));
+			}
 			DrawMultiplierSlider(T(TKEY("fog_intensity"), "Vanilla Fog Intensity"), settings.fogIntensity);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextWrapped("%s", T(TKEY("fog_intensity_tooltip"), "Scales vanilla distance fog opacity. Zero removes it; one preserves its current strength. Has no effect when Exponential Height Fog disables vanilla fog."));
@@ -380,6 +391,8 @@ void CSUtility::RestoreCurrentPageDefaultSettings()
 		settings.cloudSaturation = defaults.cloudSaturation;
 		settings.skyGammaOffset = defaults.skyGammaOffset;
 		settings.cloudGammaOffset = defaults.cloudGammaOffset;
+		settings.skyStaticBrightness = defaults.skyStaticBrightness;
+		settings.skyStaticTransparency = defaults.skyStaticTransparency;
 		settings.fogGammaOffset = defaults.fogGammaOffset;
 		settings.fogAlphaGammaOffset = defaults.fogAlphaGammaOffset;
 		settings.fogIntensity = defaults.fogIntensity;
@@ -420,7 +433,7 @@ void CSUtility::RestoreCurrentPageDefaultSettings()
 
 bool CSUtility::ReapplyCurrentPageOverrideSettings()
 {
-	static constexpr std::array<std::string_view, 12> atmosphereKeys{ "skyBrightness", "cloudBrightness", "skySaturation", "cloudSaturation", "skyGammaOffset", "cloudGammaOffset", "fogGammaOffset", "fogAlphaGammaOffset", "fogIntensity", "vlGammaOffset", "vlIntensity", "sunGlareIntensity" };
+	static constexpr std::array<std::string_view, 14> atmosphereKeys{ "skyBrightness", "cloudBrightness", "skySaturation", "cloudSaturation", "skyGammaOffset", "cloudGammaOffset", "skyStaticBrightness", "skyStaticTransparency", "fogGammaOffset", "fogAlphaGammaOffset", "fogIntensity", "vlGammaOffset", "vlIntensity", "sunGlareIntensity" };
 	static constexpr std::array<std::string_view, 2> waterKeys{ "water", "waterGammaOffset" };
 	static constexpr std::array<std::string_view, 12> multiplierKeys{
 		"ambientLightMult",
@@ -496,6 +509,8 @@ CSUtility::PerFrameData CSUtility::GetCommonBufferData() const
 	data.effectLightingMult = scaleMultiplier(sanitizedSettings.effectLightingMult, kSceneEffectWeight);
 	data.skyGammaOffset = sanitizedSettings.skyGammaOffset + gammaOffset * kSceneSkyGammaWeight;
 	data.cloudGammaOffset = sanitizedSettings.cloudGammaOffset + gammaOffset * kSceneSkyGammaWeight;
+	data.skyStaticBrightness = sanitizedSettings.skyStaticBrightness;
+	data.skyStaticTransparency = sanitizedSettings.skyStaticTransparency;
 	data.fogGammaOffset = sanitizedSettings.fogGammaOffset + gammaOffset * kSceneFogGammaWeight;
 	data.fogAlphaGammaOffset = sanitizedSettings.fogAlphaGammaOffset + gammaOffset * kSceneFogAlphaGammaWeight;
 	data.fogIntensity = sanitizedSettings.fogIntensity;
