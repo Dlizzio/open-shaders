@@ -2380,10 +2380,11 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (state->IsDeveloperMode()) {
-			// Track this shader as active
+		if (IsTrackingActiveShaders()) {
 			TrackActiveShader(ShaderClass::Vertex, shader, descriptor);
+		}
 
+		if (state->IsDeveloperMode()) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Vertex, shader, descriptor, true);
 			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -2428,10 +2429,11 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (state->IsDeveloperMode()) {
-			// Track this shader as active
+		if (IsTrackingActiveShaders()) {
 			TrackActiveShader(ShaderClass::Pixel, shader, descriptor);
+		}
 
+		if (state->IsDeveloperMode()) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true);
 			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -2472,10 +2474,11 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (state->IsDeveloperMode()) {
-			// Track this shader as active
+		if (IsTrackingActiveShaders()) {
 			TrackActiveShader(ShaderClass::Compute, shader, descriptor);
+		}
 
+		if (state->IsDeveloperMode()) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Compute, shader, descriptor, true);
 			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -4372,30 +4375,34 @@ namespace SIE
 		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
 		std::lock_guard lock(activeShadersMutex);
 
-		auto& info = activeShaders[key];
-		if (info.key.empty()) {
-			// First time seeing this shader
+		const auto initializeInfo = [&](ActiveShaderInfo& info) {
 			info.key = key;
 			info.shaderType = shader.shaderType.get();
 			info.shaderClass = shaderClass;
 			info.descriptor = descriptor;
-
-			// Construct disk path. Unlike the HLSL source path (which uses originalShaderName for
-			// ImageSpace shaders), the compiled blob is always keyed on fxpFilename - see GetDiskPath's
-			// other call sites (AddCompletedShader, hlslRecord construction).
 			info.diskPath = SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
-		}
+		};
 
-		info.isActive = true;
-		info.drawCalls++;
-		info.lastUsed = std::chrono::steady_clock::now();
+		if (globals::state->IsDeveloperMode()) {
+			auto& info = activeShaders[key];
+			if (info.key.empty()) {
+				initializeInfo(info);
+			}
+			info.isActive = true;
+			info.drawCalls++;
+			info.lastUsed = std::chrono::steady_clock::now();
+		}
 
 		// Render thread only: BSShader::LoadShaders drives Get*Shader in bulk off-thread
 		// (Hooks.cpp BSShader_LoadShaders, TruePBR::GenerateShaderPermutations). Ingesting that
 		// would balloon a scene-scoped capture into a near-full clear.
 		if (activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0 &&
 			std::this_thread::get_id() == activeShaderCaptureThread.load(std::memory_order_relaxed)) {
-			capturedShaders.try_emplace(key, info);  // first sighting wins; info is descriptor-complete
+			const auto taskId = ShaderCompilationTask::MakeId(shaderClass, shader.shaderType.get(), descriptor);
+			auto [captured, wasAdded] = capturedShaders.try_emplace(taskId);
+			if (wasAdded) {
+				initializeInfo(captured->second);
+			}
 		}
 	}
 
@@ -4740,7 +4747,8 @@ namespace SIE
 		std::unique_lock lock(compilationMutex);
 		auto inProgressIt = tasksInProgress.find(task);
 		auto processedIt = processedTasks.find(task);
-		if (inProgressIt == tasksInProgress.end() && processedIt == processedTasks.end() && !globals::shaderCache->GetCompletedShader(task)) {
+		// Shared bytecode still needs a runtime shader object for each descriptor.
+		if (inProgressIt == tasksInProgress.end() && processedIt == processedTasks.end()) {
 			LARGE_INTEGER now;
 			QueryPerformanceCounter(&now);
 			auto queuedTask = task;
