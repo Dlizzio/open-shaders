@@ -2765,6 +2765,7 @@
     "feature.upscaling.streamline_log_level_verbose": "",
     "feature.upscaling.streamline_logging": "Streamline日志记录",
     "feature.upscaling.streamline_logging_tooltip": "",
+    "feature.upscaling.tab_foveation": "中央凹渲染",
     "feature.upscaling.upscale_preset": "",
     "feature.upscaling.upscale_preset_ignored_render_scale": "",
     "feature.upscaling.upscaling_intermediates": "升频中间结果",

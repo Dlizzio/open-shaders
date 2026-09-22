@@ -2765,6 +2765,7 @@
     "feature.upscaling.streamline_log_level_verbose": "",
     "feature.upscaling.streamline_logging": "Журналирование Streamline",
     "feature.upscaling.streamline_logging_tooltip": "Журналирование Streamline управляет детальностью журналов бэкенда NVIDIA Streamline. Полезно для отладки проблем с DLSS/DLSS-G.",
+    "feature.upscaling.tab_foveation": "Фовеация",
     "feature.upscaling.upscale_preset": "Пресет апскейлинга",
     "feature.upscaling.upscale_preset_ignored_render_scale": "",
     "feature.upscaling.upscaling_intermediates": "",

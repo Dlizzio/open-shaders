@@ -481,6 +481,11 @@ public:
 	BlurResources GetBlurResources() const;
 
 private:
+	void DrawUpscalingSettings();
+	void DrawFrameGenerationSettings();
+	void DrawReflexSettings();
+	void DrawBackendDiagnostics();
+
 	// OpenComposite conflict guard: when the OpenComposite VR shim runs its own
 	// DLSS/FSR/DLAA upscaling, ours stands down to avoid double upscaling.
 	// Detection lives in VRDetection; this class owns the force-to-None policy.

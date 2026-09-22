@@ -2949,6 +2949,7 @@
     "feature.upscaling.streamline_log_level_verbose": "Verbose",
     "feature.upscaling.streamline_logging": "Streamline Logging",
     "feature.upscaling.streamline_logging_tooltip": "Verbosity of the NVIDIA Streamline backend logs. Useful for debugging issues with DLSS / DLSS-G.",
+    "feature.upscaling.tab_foveation": "Foveation",
     "feature.upscaling.upscale_preset": "Upscale Preset",
     "feature.upscaling.upscale_preset_ignored_render_scale": "The Upscale Preset is ignored while VR Render Scale is set. Move it back to Auto to use the preset again (restart required).",
     "feature.upscaling.upscaling_intermediates": "Upscaling Intermediates",
