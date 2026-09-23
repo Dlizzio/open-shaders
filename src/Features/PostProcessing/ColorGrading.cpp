@@ -1090,6 +1090,15 @@ void ColorGrading::CompileShaders()
 	curveNeedsUpdate = true;  // shader changed, curve must update
 }
 
+bool ColorGrading::IsReadyForTonemapping() const
+{
+	const auto& hdr = globals::features::hdrDisplay;
+	if (hdr.loaded && hdr.settings.enableHDR && !TonemapperInfo::GetTonemappers()[tonemapperType].supportsHDR)
+		return false;
+	std::lock_guard lock(shaderMutex);
+	return !recompileFlag && colorgradingPS && lutgenCS;
+}
+
 PostProcessFeature::Gamut ColorGrading::GetDisplayGamut() const
 {
 	const auto& hdr = globals::features::hdrDisplay;
@@ -1125,6 +1134,8 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		ClearShaderCache();
 
 	if (!AllShadersReady({ &colorgradingPS }) || !AllShadersReady({ &lutgenCS }) || !owner || !owner->GetFullscreenVS())
+		return;
+	if (settings.enableTonemap && owner->settings.DisableVanillaTonemapping && globals::state->GetTonemapOwner() != State::TonemapOwner::kPostProcessing)
 		return;
 
 	{

@@ -589,11 +589,14 @@ void HDRDisplay::LoadSettings(json& o_json)
 void HDRDisplay::RestoreDefaultSettings()
 {
 	bool hdrMonitor = DetectHDR();
+	std::lock_guard<std::mutex> lock(settingsMutex);
 	settings.enableHDR = hdrMonitor;
 	settings.hdrPaperWhite = 203;
 	settings.hdrPeakNits = 1000;
 	settings.hdrUIBrightness = 1.0f;
 	settings.dontShowHDRWarning = false;
+	UpdateHDRData();
+	UpdateSwapChainColorSpace();
 }
 
 void HDRDisplay::DataLoaded()

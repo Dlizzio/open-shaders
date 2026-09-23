@@ -157,12 +157,8 @@ struct ColorGrading : public PostProcessFeature
 	bool saveImagesFlag = false;
 	winrt::com_ptr<ID3D11PixelShader> colorgradingPS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> lutgenCS = nullptr;
-	/** Returns whether the current tonemapper has finished compiling both shader stages. */
-	bool IsReadyForTonemapping() const
-	{
-		std::lock_guard lock(shaderMutex);
-		return !recompileFlag && colorgradingPS && lutgenCS;
-	}
+	/** Returns whether both shader stages are ready for the active display mode. */
+	bool IsReadyForTonemapping() const;
 
 	winrt::com_ptr<ID3D11SamplerState> linearSampler = nullptr;
 
