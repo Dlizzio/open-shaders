@@ -325,6 +325,14 @@ namespace SharedData
 		float waterParallaxStrength;
 		float skySaturation;
 		uint waterParallaxQuality;
+		float cloudBrightness;
+		float cloudSaturation;
+		float cloudGammaOffset;
+		float fogIntensity;
+		float vlIntensity;
+		float sunGlareIntensity;
+		float skyStaticBrightness;
+		float skyStaticTransparency;
 	};
 
 	struct WindSettings

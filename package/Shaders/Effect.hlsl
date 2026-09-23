@@ -1042,14 +1042,27 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
-	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0)
+	const bool isSkyStatic = (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && lightingInfluence == 1.0;
+	if (isSkyStatic)
 		lightColor = GetLightingShadow(lightColor, input.WorldPosition.xyz, input.Position.xy, depth, eyeIndex, shadowVariance, screenNoise);
+#	else
+	const bool isSkyStatic = false;
 #	endif
 
 #	if defined(PROJECTED_UV) && !defined(TRUE_PBR)
 	lightColor = Color::EffectLightToGamma(
 		Color::EffectLight(lightColor) * Color::VanillaDiffuseColorMult());
 #	endif
+
+	[branch] if (isSkyStatic)
+	{
+		lightColor *= SharedData::csUtilitySettings.skyStaticBrightness;
+		if (SharedData::csUtilitySettings.skyStaticTransparency == 1.0)
+			discard;
+#	if !defined(ADDBLEND) && !defined(MULTBLEND)
+		alpha *= 1.0 - SharedData::csUtilitySettings.skyStaticTransparency;
+#	endif
+	}
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 	float fogFactor = Color::FogAlpha(input.FogParam.w);
@@ -1118,6 +1131,17 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 #	else
 	float3 blendedColor = lightColor.xyz;
+#	endif
+
+#	if defined(ADDBLEND) || defined(MULTBLEND)
+	[branch] if (isSkyStatic)
+	{
+#		if defined(ADDBLEND)
+		blendedColor *= 1.0 - SharedData::csUtilitySettings.skyStaticTransparency;
+#		else
+		blendedColor = lerp(blendedColor, 1.0.xxx, SharedData::csUtilitySettings.skyStaticTransparency);
+#		endif
+	}
 #	endif
 
 	float4 finalColor = float4(blendedColor, alpha);
