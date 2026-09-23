@@ -144,5 +144,4 @@ struct DoF : public PostProcessFeature
 	float debugDistance = 0.0f;
 	float debugFocusPlane = 0.0f;
 	uint currentRef = 0;
-
 };

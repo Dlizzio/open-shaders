@@ -1057,5 +1057,4 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 	cb = nullptr;
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetShader(nullptr, nullptr, 0);
-
 }

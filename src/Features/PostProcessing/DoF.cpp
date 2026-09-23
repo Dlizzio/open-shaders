@@ -387,7 +387,6 @@ void DoF::SetupResources()
 		texPreFocus = eastl::make_unique<Texture2D>(texDesc, "DoF::PreviousFocus");
 		texPreFocus->CreateSRV(srvDesc);
 		texPreFocus->CreateUAV(uavDesc);
-
 	}
 
 	// Bokeh shapes are loaded by PostProcessing::bokehResources (shared with LensFlare)

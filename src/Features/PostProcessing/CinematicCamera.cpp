@@ -4,8 +4,8 @@
 #include "I18n/I18n.h"
 #include "Util.h"
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 
 namespace CinematicCamera
 {
