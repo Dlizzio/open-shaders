@@ -36,10 +36,10 @@ HistogramAutoExposure::ExposureParameters HistogramAutoExposure::GetExposurePara
 			const float targetLuminance = 0.18f * exp2(parameters.CompensationEV);
 			const float minExposure = parameters.ExposureAtISO100 * cam->MinISO / 100.0f;
 			const float maxExposure = parameters.ExposureAtISO100 * cam->MaxISO / 100.0f;
-			parameters.LuminanceRange = { targetLuminance / maxExposure, targetLuminance / minExposure };
+			parameters.LuminanceRange = float2(targetLuminance / maxExposure, targetLuminance / minExposure);
 		} else {
 			parameters.CompensationEV = cam->ExposureDeltaEV;
-			parameters.LuminanceRange = { 0.18f, 0.18f };
+			parameters.LuminanceRange = float2(0.18f, 0.18f);
 		}
 	}
 	return parameters;
