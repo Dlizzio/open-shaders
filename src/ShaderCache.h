@@ -357,8 +357,8 @@ namespace SIE
 		 *  compile begins, so ETA and the "started" log reflect the actual first compile
 		 *  rather than when it finishes. Logs once per phase. */
 		void MarkPhaseStarted();
-		/** @brief Resets all task queues and counters for a fresh compilation pass. */
-		void Clear();
+		/** @brief Resets matrix work, optionally invalidating standalone jobs when their owners are also cleared. */
+		void Clear(bool a_includeStandalone = false);
 		/** @brief Atomically advances the generation counter without touching queues/counters.
 		 *  Call before ShaderCache::Clear()'s map-wipe locks so a worker's write-site check
 		 *  (see MakeAndAdd*Shader) sees the new value once it can observe the wipe. */
@@ -392,6 +392,7 @@ namespace SIE
 		std::atomic<uint64_t> completedPriorityWeight = 0;  // sum of (GetPriority()+1) for completed/failed tasks
 		std::atomic<uint32_t> heavyTasksInFlight = 0;       // number of dispatched heavy (>= kHeavyPriorityThreshold) tasks still running
 		std::atomic<uint64_t> generation = 0;               // bumped by Clear(); tags tasks so a post-Clear() Complete() can detect staleness
+		std::atomic<uint64_t> standaloneGeneration = 0;
 		std::mutex compilationMutex;
 
 		/** Per-task timing record stored for post-mortem analysis and developer UI. */

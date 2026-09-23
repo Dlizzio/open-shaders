@@ -2574,7 +2574,7 @@ namespace SIE
 			std::unique_lock lockH{ hlslMapMutex };
 			hlslToShaderMap.clear();
 		}
-		compilationSet.Clear();
+		compilationSet.Clear(true);
 		globals::deferred->ClearShaderCache();
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (feature->loaded) {
@@ -2862,7 +2862,7 @@ namespace SIE
 	{
 		std::scoped_lock lock(standaloneMutex);
 		return (compilationSet.totalTasks && compilationSet.completedTasks + compilationSet.failedTasks < compilationSet.totalTasks) ||
-		       (standaloneGeneration == compilationSet.generation.load(std::memory_order_acquire) && standaloneCompletedTasks + standaloneFailedTasks < standaloneTotalTasks);
+		       (standaloneGeneration == compilationSet.standaloneGeneration.load(std::memory_order_acquire) && standaloneCompletedTasks + standaloneFailedTasks < standaloneTotalTasks);
 	}
 
 	bool ShaderCache::IsGenerationStale(std::optional<uint64_t> a_taskGeneration) const
@@ -2877,18 +2877,15 @@ namespace SIE
 		}
 		ssource.request_stop();            // signals any legacy stop_token users
 		managementJthread.request_stop();  // stops management thread + in-flight compilations
-		compilationSet.Clear();
+		compilationSet.Clear(true);
 	}
 
 	void ShaderCache::CancelCompilation()
 	{
-		if (!IsCompiling())
-			return;
 		const auto remaining = compilationSet.totalTasks - compilationSet.completedTasks - compilationSet.failedTasks;
 		logger::info("Cancelling {} remaining shader compilation tasks (user-requested restore)", remaining);
-		// Doesn't wait for tasks already mid-D3DCompileFromFile (some take minutes) -- they run
-		// to completion but skip their disk write once IsGenerationStale() sees this bump.
-		compilationPool.purge();
+		// Let dispatched jobs release their slots; standalone jobs must still deliver their results.
+		// Cancelled matrix jobs drain as stale, and standalone disk writes reject the old generation.
 		compilationSet.Clear();
 	}
 
@@ -2958,8 +2955,9 @@ namespace SIE
 		                                                                                                                                 L".cso";
 		const std::filesystem::path srcPath{ sourcePath };
 		const auto srcPathStr = Util::WStringToString(sourcePath);
-		const bool useDiskCache = IsDiskCache();
-		const auto taskGeneration = compilationSet.generation.load(std::memory_order_acquire);
+		const bool useDiskCache = IsDiskCacheActive();
+		const auto taskGeneration = compilationSet.standaloneGeneration.load(std::memory_order_acquire);
+		const auto diskGeneration = compilationSet.generation.load(std::memory_order_acquire);
 		std::vector<std::pair<std::string, std::optional<std::string>>> ownedDefines;
 		for (const auto& [name, value] : defines) {
 			if (name && name[0])
@@ -3022,9 +3020,9 @@ namespace SIE
 		winrt::com_ptr<ID3D11Device> device;
 		device.copy_from(globals::d3d::device);
 		compilationSet.EnqueueAux([this, srcPath, srcPathStr, entryPoint = std::move(entryPoint), ownedDefines = std::move(ownedDefines),
-									  shaderClass, profile, flags, useDiskCache, taskGeneration, request, compileDigest, diskPath, manifestKey,
+									  shaderClass, profile, flags, useDiskCache, taskGeneration, diskGeneration, request, compileDigest, diskPath, manifestKey,
 									  device = std::move(device), onReady = std::move(onReady)]() mutable {
-			if (IsGenerationStale(taskGeneration))
+			if (taskGeneration != compilationSet.standaloneGeneration.load(std::memory_order_acquire))
 				return;
 			winrt::com_ptr<ID3D11DeviceChild> shader;
 			std::string error;
@@ -3085,13 +3083,16 @@ namespace SIE
 							if (errorBlob)
 								logger::debug("Shader logs for {}:{}:\n{}", srcPathStr, entryPoint, static_cast<const char*>(errorBlob->GetBufferPointer()));
 							createShader(shaderBlob.get());
-							if (shader && useDiskCache && !IsGenerationStale(taskGeneration)) {
-								std::error_code ec;
-								std::filesystem::create_directories(std::filesystem::path(diskPath).parent_path(), ec);
-								if (FAILED(D3DWriteBlobToFile(shaderBlob.get(), diskPath.c_str(), true))) {
-									logger::warn("Failed to save standalone shader to {}", Util::WStringToString(diskPath));
-								} else if (digest) {
-									RecordDigestAndMaybeFlush(GetShaderCacheManifest(), manifestKey, *digest);
+							if (shader && useDiskCache) {
+								std::scoped_lock lock(compilationSet.compilationMutex);
+								if (!IsGenerationStale(diskGeneration) && taskGeneration == compilationSet.standaloneGeneration.load(std::memory_order_acquire)) {
+									std::error_code ec;
+									std::filesystem::create_directories(std::filesystem::path(diskPath).parent_path(), ec);
+									if (FAILED(D3DWriteBlobToFile(shaderBlob.get(), diskPath.c_str(), true))) {
+										logger::warn("Failed to save standalone shader to {}", Util::WStringToString(diskPath));
+									} else if (digest) {
+										RecordDigestAndMaybeFlush(GetShaderCacheManifest(), manifestKey, *digest);
+									}
 								}
 							}
 						}
@@ -3103,7 +3104,7 @@ namespace SIE
 			bool batchComplete;
 			{
 				std::scoped_lock lock(standaloneMutex);
-				if (IsGenerationStale(taskGeneration) || standaloneGeneration != taskGeneration)
+				if (taskGeneration != compilationSet.standaloneGeneration.load(std::memory_order_acquire) || standaloneGeneration != taskGeneration)
 					return;
 				if (shader)
 					++standaloneCompletedTasks;
@@ -3117,8 +3118,11 @@ namespace SIE
 				logger::warn("Standalone {} shader compilation failed for {}:{}:\n{}", profile, srcPathStr, entryPoint, error);
 				RecordCompileFailure(manifestKey, srcPathStr, error);
 			}
-			if (batchComplete && useDiskCache)
-				GetShaderCacheManifest().Save();
+			if (batchComplete && useDiskCache) {
+				std::scoped_lock lock(compilationSet.compilationMutex);
+				if (!IsGenerationStale(diskGeneration))
+					GetShaderCacheManifest().Save();
+			}
 			onReady(shader.detach());
 		});
 	}
@@ -3645,10 +3649,9 @@ namespace SIE
 		CancelCompilation();
 
 		{
-			// Re-check IsCompiling() under the same lock the writers hold, closing
-			// the window where compilation could start between check and restore.
+			// Standalone jobs may finish in memory; generation checks block their disk writes.
 			std::scoped_lock lock{ compilationSet.compilationMutex };
-			if (IsCompiling()) {
+			if (compilationSet.completedTasks + compilationSet.failedTasks < compilationSet.totalTasks) {
 				logger::warn("Cannot restore previous shader cache while shader compilation is still running");
 				return false;
 			}
@@ -4039,12 +4042,12 @@ namespace SIE
 	uint64_t ShaderCache::GetCompletedTasks()
 	{
 		std::scoped_lock lock(standaloneMutex);
-		return compilationSet.completedTasks + (standaloneGeneration == compilationSet.generation.load(std::memory_order_acquire) ? standaloneCompletedTasks : 0);
+		return compilationSet.completedTasks + (standaloneGeneration == compilationSet.standaloneGeneration.load(std::memory_order_acquire) ? standaloneCompletedTasks : 0);
 	}
 	uint64_t ShaderCache::GetFailedTasks()
 	{
 		std::scoped_lock lock(standaloneMutex);
-		return compilationSet.failedTasks + (standaloneGeneration == compilationSet.generation.load(std::memory_order_acquire) ? standaloneFailedTasks : 0);
+		return compilationSet.failedTasks + (standaloneGeneration == compilationSet.standaloneGeneration.load(std::memory_order_acquire) ? standaloneFailedTasks : 0);
 	}
 
 	uint64_t ShaderCache::GetCurrentFailedCount()
@@ -4056,7 +4059,7 @@ namespace SIE
 				++count;
 			}
 		}
-		if (standaloneGeneration == compilationSet.generation.load(std::memory_order_acquire)) {
+		if (standaloneGeneration == compilationSet.standaloneGeneration.load(std::memory_order_acquire)) {
 			for (const auto& [key, result] : standaloneCompilations) {
 				if (result.status == ShaderCompilationTask::Status::Failed)
 					++count;
@@ -4088,7 +4091,7 @@ namespace SIE
 	uint64_t ShaderCache::GetTotalTasks()
 	{
 		std::scoped_lock lock(standaloneMutex);
-		return compilationSet.totalTasks + (standaloneGeneration == compilationSet.generation.load(std::memory_order_acquire) ? standaloneTotalTasks : 0);
+		return compilationSet.totalTasks + (standaloneGeneration == compilationSet.standaloneGeneration.load(std::memory_order_acquire) ? standaloneTotalTasks : 0);
 	}
 	uint64_t ShaderCache::GetDiskHitTasks()
 	{
@@ -4530,7 +4533,7 @@ namespace SIE
 	{
 		const SKSE::stl::scope_exit releaseSlot([this]() noexcept { compilationSet.ReleaseDispatchSlot(); });
 
-		if (stoken.stop_requested()) {
+		if (stoken.stop_requested() || IsGenerationStale(task.GetGeneration())) {
 			return;
 		}
 
@@ -4996,11 +4999,14 @@ namespace SIE
 		}
 	}
 
-	void CompilationSet::Clear()
+	void CompilationSet::Clear(bool a_includeStandalone)
 	{
 		std::scoped_lock lock(compilationMutex);
 		availableTasks.clear();
-		pendingAuxTasks.clear();
+		if (a_includeStandalone) {
+			standaloneGeneration.fetch_add(1, std::memory_order_release);
+			pendingAuxTasks.clear();
+		}
 		tasksInProgress.clear();
 		processedTasks.clear();
 		totalTasks = 0;
