@@ -200,8 +200,6 @@ struct PhysicalGlare : public PostProcessFeature
 	winrt::com_ptr<ID3D11ComputeShader> apertureCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> tearFilmCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> psfCS = nullptr;
-	// Resolution-specialised FFT shaders avoid launching inactive threads at
-	// 128/256/512 while retaining the 1024-thread path for the maximum size.
 	static constexpr uint FFT_VARIANT_COUNT = 4;
 	std::array<winrt::com_ptr<ID3D11ComputeShader>, FFT_VARIANT_COUNT> fftRowCS = {};
 	std::array<winrt::com_ptr<ID3D11ComputeShader>, FFT_VARIANT_COUNT> fftColCS = {};
@@ -274,15 +272,12 @@ struct PhysicalGlare : public PostProcessFeature
 
 	virtual void Draw(TextureInfo&) override;
 
-	virtual inline void Reset() override
-	{
-		psfDirty = true;
-		apertureDirty = true;
-	}
-
 private:
 	void DispatchFFT(ID3D11ComputeShader* shader, Texture2D* input, Texture2D* output, uint resolution);
-	void GeneratePSF();
-	bool NeedsPSFRegeneration() const;
-	bool NeedsApertureRegeneration() const;
+	void GeneratePSF(const Settings& a_effective);
+	bool NeedsPSFRegeneration(const Settings& a_effective) const;
+	bool NeedsApertureRegeneration(const Settings& a_effective) const;
+
+	/** Returns lens settings with the active Cinematic Camera aperture applied. */
+	[[nodiscard]] Settings GetEffectiveSettings() const;
 };
