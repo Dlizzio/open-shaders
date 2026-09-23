@@ -450,7 +450,9 @@ namespace SharedData
 		float4 vanillaFogNearColor;
 		float4 vanillaFogFarColor;
 		float fogLightingInfluence;
-		float3 pad1;
+		float distanceHazeMaxOpacity;
+		float distanceHazeStartDistance;
+		float distanceHazeFadeDistance;
 	};
 
 	struct TruePBRSettings
