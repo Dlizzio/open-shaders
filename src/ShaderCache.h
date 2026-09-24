@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <atomic>
 #include <deque>
 #include <efsw/efsw.hpp>
 #include <functional>
@@ -318,6 +319,8 @@ namespace SIE
 
 	class CompilationSet
 	{
+		friend class ShaderCache;
+
 	public:
 		LARGE_INTEGER lastReset;
 		std::atomic<int64_t> lastResetQpc{ 0 };  // Lock-free mirror of lastReset.QuadPart for GetLastResetQpc().
@@ -842,6 +845,8 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
+		/** @brief Updates compilation mode and wakes the dispatcher to recheck its capacity. */
+		void SetBackgroundCompilation(bool value);
 		// atomic: written from the menu/input thread (boot setting + Skip Compilation hotkey),
 		// read on the management/compile and render threads.
 		std::atomic<bool> backgroundCompilation = false;
