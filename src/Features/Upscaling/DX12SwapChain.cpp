@@ -684,6 +684,8 @@ void DX12SwapChain::SetColorSpace(bool enableHDR)
 
 void DX12SwapChain::ClearWrappedBuffers()
 {
+	globals::features::upscaling.frameGenerationPrepared = false;
+
 	if (!d3d11Context)
 		return;
 
