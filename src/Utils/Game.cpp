@@ -24,7 +24,6 @@ namespace
 			static REL::Relocation<void (*)(RE::ModelDBHandle::U_Entry*)> release{ REL::ID(15443) };
 			release(entry);
 		} else {
-			// SE/VR share one id space (unlike the AE branch above), so a bare id is correct.
 			using Reset = RE::ModelDBHandle* (*)(RE::ModelDBHandle*, RE::ModelDBHandle::U_Entry*);
 			static REL::Relocation<Reset> reset{ REL::ID(25746) };
 			reset(&a_handle, nullptr);
