@@ -71,6 +71,9 @@ struct VS_OUTPUT
 	float ClipDistance: SV_ClipDistance0;
 	float CullDistance: SV_CullDistance0;
 #endif  // VR
+#ifdef GRASS_LIGHTING
+	float3 AlphaPosition: TEXCOORD11;
+#endif
 };
 
 // Constant Buffers (Flat and VR)
@@ -206,6 +209,9 @@ VS_OUTPUT main(VS_INPUT input, uint instanceID : SV_InstanceID)
 #		else
 	float4 msPosition = GetMSPosition(input);
 #		endif
+#		ifdef GRASS_LIGHTING
+	vsout.AlphaPosition = msPosition.xyz;
+#		endif
 	msPosition.xyz += e0.xyz;
 
 	const float3 instanceRoot = input.InstanceData1.xyz + e0.xyz;
@@ -292,6 +298,9 @@ VS_OUTPUT main(VS_INPUT input)
 	float4 msPosition = GetMSPosition(input);
 #		endif
 
+#		ifdef GRASS_LIGHTING
+	vsout.AlphaPosition = msPosition.xyz;
+#		endif
 	float3 rootWorldPosition = mul(World[eyeIndex], float4(input.InstanceData1.xyz, 1.0)).xyz +
 	                           FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 	float3 previousRootWorldPosition = mul(PreviousWorld[eyeIndex], float4(input.InstanceData1.xyz, 1.0)).xyz +
@@ -407,6 +416,10 @@ struct PS_OUTPUT
 #endif
 
 #ifdef PSHADER
+#	ifdef GRASS_LIGHTING
+#		include "Common/GrassAlphaCoverage.hlsli"
+#	endif
+
 SamplerState SampBaseSampler : register(s0);
 SamplerState SampShadowMaskSampler : register(s1);
 #	if defined(GRASS_LIGHTING) && defined(TRUE_PBR)
@@ -436,6 +449,22 @@ cbuffer AlphaTestRefCB : register(b11)
 	float AlphaTestRefRS : packoffset(c0);
 }
 #	endif  // !VR
+
+void ApplyGrassAlphaTest(PS_INPUT input, float2 uv, float alpha)
+{
+#	ifdef GRASS_LIGHTING
+	[branch] if (SharedData::grassLightingSettings.EnableAlphaCoverage)
+	{
+		float mipLevel = TexBaseSampler.CalculateLevelOfDetail(SampBaseSampler, uv);
+		GrassAlphaCoverage::ApplyAlphaTest(input.AlphaPosition, alpha, AlphaTestRefRS, mipLevel);
+	}
+	else
+#	endif
+	{
+		if ((alpha - AlphaTestRefRS) < 0)
+			discard;
+	}
+}
 
 #	if defined(SCREEN_SPACE_SHADOWS)
 #		include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
@@ -514,8 +543,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float diffuseAlpha = input.Color.w * baseColor.w;
 #			endif
 #			if defined(RENDER_DEPTH) || defined(DO_ALPHA_TEST)
-	if ((diffuseAlpha - AlphaTestRefRS) < 0)
-		discard;
+	ApplyGrassAlphaTest(input, input.TexCoord.xy, diffuseAlpha);
 #			endif
 #			if defined(RENDER_DEPTH)
 #				ifdef GRASS_OPTIMIZATIONS
@@ -736,8 +764,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const float2 alphaUV = float2(input.TexCoord.x, input.TexCoord.y * (complex ? 0.5 : 1.0));
 	const float baseAlpha = TexBaseSampler.SampleBias(SampBaseSampler, alphaUV, SharedData::MipBias).w;
 	const float diffuseAlpha = input.Fade * baseAlpha;
-	if ((diffuseAlpha - AlphaTestRefRS) < 0)
-		discard;
+	ApplyGrassAlphaTest(input, alphaUV, diffuseAlpha);
 
 #				ifdef GRASS_OPTIMIZATIONS
 	// The optimized main-view pass uses the rasterizer's depth directly, with no extra interpolator.
@@ -756,9 +783,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #				if defined(DO_ALPHA_TEST)
 	float diffuseAlpha = input.Color.w * baseColor.w;
-	if ((diffuseAlpha - AlphaTestRefRS) < 0) {
-		discard;
-	}
+	ApplyGrassAlphaTest(input, float2(input.TexCoord.x, input.TexCoord.y * (complex ? 0.5 : 1.0)), diffuseAlpha);
 #				endif
 
 	baseColor.xyz = Color::Diffuse(baseColor.xyz);
@@ -1076,9 +1101,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(RENDER_DEPTH)
 	const float baseAlpha = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias).w;
 	const float diffuseAlpha = input.Fade * baseAlpha;
-	if ((diffuseAlpha - AlphaTestRefRS) < 0) {
-		discard;
-	}
+	ApplyGrassAlphaTest(input, input.TexCoord.xy, diffuseAlpha);
 
 #			ifdef GRASS_OPTIMIZATIONS
 	psout.PS.xyz = input.HPosition.zzz;
@@ -1090,8 +1113,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
 #			if defined(DO_ALPHA_TEST)
 	const float diffuseAlpha = input.Color.w * baseColor.w;
-	if ((diffuseAlpha - AlphaTestRefRS) < 0)
-		discard;
+	ApplyGrassAlphaTest(input, input.TexCoord.xy, diffuseAlpha);
 #			endif
 
 #			ifdef GRASS_OPTIMIZATIONS
