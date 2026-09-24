@@ -479,6 +479,7 @@ void PhysicalGlare::SetupResources()
 
 void PhysicalGlare::ClearShaderCache()
 {
+	outputReady = false;
 	BumpShaderGeneration();
 	{
 		std::lock_guard lock(shaderMutex);
@@ -1057,4 +1058,5 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 	cb = nullptr;
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetShader(nullptr, nullptr, 0);
+	outputReady = true;
 }

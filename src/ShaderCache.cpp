@@ -3054,7 +3054,7 @@ namespace SIE
 				} else {
 					std::optional<Util::ContentHash::Hash128> contentDigest;
 					if (useDiskCache)
-						contentDigest = GetShaderContentDigestTimed(srcPath, srcPath.parent_path(), *this);
+						contentDigest = GetShaderContentDigestTimed(srcPath, Util::PathHelpers::GetShadersPath(), *this);
 					const auto digest = contentDigest ? std::optional{ Util::ContentHash::CombineHashes(*contentDigest, compileDigest).ToHex() } : std::nullopt;
 					if (digest && std::filesystem::exists(diskPath)) {
 						if (const auto recorded = GetShaderCacheManifest().Get(manifestKey)) {

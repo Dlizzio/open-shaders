@@ -120,8 +120,9 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	const auto drawEnabled = [](const char* label, PostProcessFeature& feature) {
-		const bool automatic = feature.IsActive() != feature.enabled;
+	const auto drawEnabled = [this](const char* label, PostProcessFeature& feature) {
+		const bool automatic = feature.IsAutoEnabled() ||
+		                       (&feature == GetPipelineFeature<HistogramAutoExposure>(FeaturePipelineIndex::AutoExposure) && GetActivePhysicalCameraState());
 		bool enabled = feature.IsActive();
 		ImGui::BeginDisabled(automatic);
 		if (ImGui::Checkbox(label, &enabled))
