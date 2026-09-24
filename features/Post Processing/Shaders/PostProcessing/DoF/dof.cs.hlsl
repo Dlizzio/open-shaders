@@ -247,7 +247,7 @@ float4 GetShapeTap(float angle, float shapeRingDistance)
 	pointOffsetForShape.y *= -1.0f;
 	float2 shapeTapCoords = float2((shapeRingDistance * pointOffsetForShape) + 0.5f);  // shapeRingDistance is [0, 0.5] so no need to multiply with 0.5 again
 	float4 shapeTap = TexBokehShape.SampleLevel(LinearSampler, shapeTapCoords, 0);
-	shapeTap.a = dot(shapeTap.rgb, bokehLuminanceWeights);
+	shapeTap.a = Color::RGBToLuminance(shapeTap.rgb, bokehLuminanceWeights);
 	return shapeTap;
 }
 
@@ -743,7 +743,7 @@ AdaptiveBokehSample GetAdaptiveBokehSample(uint sampleIndex, float2 rotation)
 	[branch] if (BokehMode == 1)
 	{
 		float4 aperture = TexBokehShape.SampleLevel(LinearSampler, data.xy * 0.5f + 0.5f, 0);
-		float luma = max(dot(aperture.rgb, bokehLuminanceWeights), 0.0f);
+		float luma = max(Color::RGBToLuminance(aperture.rgb, bokehLuminanceWeights), 0.0f);
 		sample.coverage = sqrt(saturate(luma * aperture.a));
 		sample.tint = min(aperture.rgb / max(luma, 1e-4f), 4.0f);
 		sample.offset *= CustomShapeRadiusScale;
@@ -780,7 +780,7 @@ void GetAdaptiveBokehCenter(out float coverage, out float3 tint)
 	[branch] if (BokehMode == 1)
 	{
 		float4 aperture = TexBokehShape.SampleLevel(LinearSampler, (0.5f).xx, 0);
-		float luma = max(dot(aperture.rgb, bokehLuminanceWeights), 0.0f);
+		float luma = max(Color::RGBToLuminance(aperture.rgb, bokehLuminanceWeights), 0.0f);
 		coverage = sqrt(saturate(luma * aperture.a));
 		tint = min(aperture.rgb / max(luma, 1e-4f), 4.0f);
 	}

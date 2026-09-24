@@ -8,6 +8,11 @@
 #include "State.h"
 #include "Util.h"
 
+namespace
+{
+	constexpr float kMiddleGray = 0.18f;
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HistogramAutoExposure::Settings,
 	ExposureCompensation,
@@ -33,13 +38,13 @@ HistogramAutoExposure::ExposureParameters HistogramAutoExposure::GetExposurePara
 		parameters.ExposureAtISO100 = exp2(cam->ExposureDeltaEV) * 100.0f / cam->ISO;
 		if (cam->Exposure == CinematicCamera::ExposureMode::AutoISO) {
 			parameters.CompensationEV = cam->ExposureCompensationEV;
-			const float targetLuminance = 0.18f * exp2(parameters.CompensationEV);
+			const float targetLuminance = kMiddleGray * exp2(parameters.CompensationEV);
 			const float minExposure = parameters.ExposureAtISO100 * cam->MinISO / 100.0f;
 			const float maxExposure = parameters.ExposureAtISO100 * cam->MaxISO / 100.0f;
 			parameters.LuminanceRange = float2(targetLuminance / maxExposure, targetLuminance / minExposure);
 		} else {
 			parameters.CompensationEV = cam->ExposureDeltaEV;
-			parameters.LuminanceRange = float2(0.18f, 0.18f);
+			parameters.LuminanceRange = float2(kMiddleGray, kMiddleGray);
 		}
 	}
 	return parameters;
@@ -59,7 +64,7 @@ void HistogramAutoExposure::DrawCameraExposureReadout()
 			ImGui::TextDisabled("%s", T("feature.post_processing.cinematic_camera.metering", "Metering..."));
 			return;
 		}
-		const float requestedISO = 100.0f * 0.18f * exp2(parameters.CompensationEV) /
+		const float requestedISO = 100.0f * kMiddleGray * exp2(parameters.CompensationEV) /
 		                           (std::max(adaptationValue, 1e-5f) * parameters.ExposureAtISO100);
 		iso = std::clamp(requestedISO, cam->MinISO, cam->MaxISO);
 		ImGui::Text(T("feature.post_processing.cinematic_camera.auto_iso_readout", "Metered ISO: %.0f (range %.0f - %.0f)"), iso, cam->MinISO, cam->MaxISO);
@@ -128,7 +133,6 @@ void HistogramAutoExposure::DrawSettings()
 		constexpr int kHistogramBins = 256;
 		constexpr int kFirstLuminanceBin = 1;
 		constexpr int kLastLuminanceBin = kHistogramBins - 1;
-		constexpr float kMiddleGray = 0.18f;
 
 		const float adaptedLum = std::max(adaptationValue, 1e-5f);
 		const float adaptedEV100 = log2(adaptedLum) + 3.0f;

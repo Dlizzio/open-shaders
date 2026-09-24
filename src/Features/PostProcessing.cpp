@@ -718,7 +718,7 @@ void PostProcessing::SetupResources()
 	}
 
 	bokehResources.Setup();
-	cinematicCamera.focusResolver.RequestTDM();
+	Util::RequestTargetLockAPI();
 
 	ApplyPendingSettings();
 }
@@ -984,11 +984,7 @@ void PostProcessing::Prepass()
 		return;
 	}
 
-	const auto* graphicsState = globals::game::graphicsState;
-	const float eyeScale = globals::game::isVR ? 0.5f : 1.0f;
-	const float aspect = graphicsState && graphicsState->screenHeight > 0 ?
-	                         eyeScale * static_cast<float>(graphicsState->screenWidth) / static_cast<float>(graphicsState->screenHeight) :
-	                         16.0f / 9.0f;
+	const float aspect = Util::GetCameraAspectRatio();
 	const bool runnable = !bypass && !IsTonemapOwnedByEffects11() && fullscreenVS && copyPS && !globals::state->IsMainOrLoadingMenuOpen();
 	cinematicCamera.Update(runnable, aspect);
 

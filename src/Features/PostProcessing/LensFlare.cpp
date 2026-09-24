@@ -423,9 +423,8 @@ void LensFlare::ClearShaderCache()
 		std::lock_guard lock(shaderMutex);
 		Util::ClearShaders<ID3D11ComputeShader>({ thresholdCS, ghostHaloCS, blurDownCS, blurUpCS, mixCS,
 			fftMultiplyCS, bokehPrepareCS, fftThresholdCS, fftGhostComposeCS });
-		for (auto shaders : { &fftRowCS, &fftColCS, &fftRowInvCS, &fftColInvCS }) {
-			for (auto& shader : *shaders)
-				shader = nullptr;
+		for (uint i = 0; i < FFT_VARIANT_COUNT; ++i) {
+			Util::ClearShaders<ID3D11ComputeShader>({ fftRowCS[i], fftColCS[i], fftRowInvCS[i], fftColInvCS[i] });
 		}
 	}
 	bokehFFTDirty = true;

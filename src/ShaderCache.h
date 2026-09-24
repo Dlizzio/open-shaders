@@ -702,7 +702,8 @@ namespace SIE
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
-		/** Receives one owned shader reference or null on failure on a worker thread; must not throw. */
+		/** @brief Receives one owned shader reference or null on failure on a worker thread; must not throw.
+		 * The caller provides thread-safe storage and must attach or Release a non-null reference. */
 		using ComputeShaderReadyCallback = std::function<void(ID3D11ComputeShader*)>;
 
 		/** Selects the stage for a standalone shader compilation. */
@@ -716,7 +717,12 @@ namespace SIE
 		/** Receives an owned reference of the requested stage; otherwise follows ComputeShaderReadyCallback. */
 		using StandaloneShaderReadyCallback = std::function<void(ID3D11DeviceChild*)>;
 
-		/** Queues compilation with owned copies of its defines; canceled generations do not invoke onReady. */
+		/** @brief Queues a standalone shader on the compilation pool, loading valid disk-cached bytecode when available.
+		 * @param sourcePath HLSL source path under Data/Shaders.
+		 * @param entryPoint HLSL entry function name.
+		 * @param defines Macro name/value pairs copied before this call returns.
+		 * @param shaderClass Shader stage matching the callback's owned reference.
+		 * @param onReady Receives the result before task completion is published; invalidated generations skip delivery. */
 		void EnqueueStandaloneShaderCompile(
 			std::wstring sourcePath,
 			std::string entryPoint,
@@ -724,7 +730,7 @@ namespace SIE
 			StandaloneShaderClass shaderClass,
 			StandaloneShaderReadyCallback onReady);
 
-		/** Queues a compute shader through EnqueueStandaloneShaderCompile. */
+		/** @brief Queues a compute shader with the same path, define ownership and cancellation contract as EnqueueStandaloneShaderCompile. */
 		void EnqueueComputeShaderCompile(
 			std::wstring sourcePath,
 			std::string entryPoint,

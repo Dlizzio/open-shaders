@@ -77,12 +77,12 @@ float3 LiftGammaGain(float3 rgb, float4 lift, float4 gamma, float4 gain)
 	const float3 lumaWeights = sRGB_2_XYZ_MAT[1];
 	float4 liftt = 1.0 - pow(max(1.0 - lift, 0.0), log2(gain + 1.0));
 
-	float4 gammat = gamma.rgba - float4(0.0, 0.0, 0.0, dot(gamma.rgb, lumaWeights));
+	float4 gammat = gamma.rgba - float4(0.0, 0.0, 0.0, Color::RGBToLuminance(gamma.rgb, lumaWeights));
 	float4 gammatTemp = 1.0 + 4.0 * abs(gammat);
 	gammat = lerp(gammatTemp, 1.0 / gammatTemp, step(0.0, gammat));
 
 	float3 col = rgb;
-	float luma = dot(col, lumaWeights);
+	float luma = Color::RGBToLuminance(col, lumaWeights);
 
 	col = pow(max(col, 0.0), gammat.rgb);
 	col *= pow(abs(gain.rgb), gammat.rgb);
@@ -92,7 +92,7 @@ float3 LiftGammaGain(float3 rgb, float4 lift, float4 gamma, float4 gain)
 	luma *= pow(abs(gain.a), gammat.a);
 	luma = max(lerp(2.0 * liftt.a, 1.0, luma), 0.0);
 
-	col += luma - dot(col, lumaWeights);
+	col += luma - Color::RGBToLuminance(col, lumaWeights);
 
 	return col;
 }
@@ -155,7 +155,7 @@ float3 ShadowsMidtonesHighlights(float3 color, float3 shadowsGain, float3 midton
 	float3 shadowsOff, float3 midtonesOff, float3 highlightsOff,
 	float shadowBegin, float shadowEnd, float highlightBegin, float highlightEnd)
 {
-	float luma = dot(color, workingToXYZ[1].xyz);
+	float luma = Color::RGBToLuminance(color, workingToXYZ[1].xyz);
 
 	float shadowWeight = 1.0 - smoothstep(shadowBegin, shadowEnd, luma);
 	float highlightWeight = smoothstep(highlightBegin, highlightEnd, luma);
@@ -296,7 +296,7 @@ float HDRPeakForReferenceWhite(float referenceWhiteNits)
 float3 Reinhard(float3 val)
 {
 	val *= tonemapParams[0].x;
-	float luma = dot(val, sRGB_2_XYZ_MAT[1]);
+	float luma = Color::RGBToLuminance(val, sRGB_2_XYZ_MAT[1]);
 	float lumaOut = luma / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
 	val = saturate(val);
@@ -306,7 +306,7 @@ float3 Reinhard(float3 val)
 float3 ReinhardExt(float3 val)
 {
 	val *= tonemapParams[0].x;
-	float luma = dot(val, sRGB_2_XYZ_MAT[1]);
+	float luma = Color::RGBToLuminance(val, sRGB_2_XYZ_MAT[1]);
 	float lumaOut = luma * (1 + luma / (tonemapParams[0].y * tonemapParams[0].y)) / (1 + luma);
 	val = val / (luma + 1e-10) * lumaOut;
 	val = saturate(val);
@@ -496,7 +496,7 @@ float3 AgxMinimal(float3 val)
 
 	val = Agx(val);
 	val = ASC_CDL(val, tonemapParams[0].y, tonemapParams[0].z, tonemapParams[0].w);
-	val = lerp(dot(val, sRGB_2_XYZ_MAT[1]), val, tonemapParams[1].x);
+	val = Saturation(val, tonemapParams[1].x, sRGB_2_XYZ_MAT[1]);
 	val = AgxEotf(val);
 
 	return val;
@@ -586,7 +586,7 @@ float3 KajiyaTonemap(float3 col)
 	float3 desat_col = lerp(col, ycbcr.x, desat);
 
 	float tm_luma = KajiyaCurve(ycbcr.x);
-	float3 tm0 = col * max(tm_luma / max(dot(col, sRGB_2_XYZ_MAT[1]), 1e-5), 0);
+	float3 tm0 = col * max(tm_luma / max(Color::RGBToLuminance(col, sRGB_2_XYZ_MAT[1]), 1e-5), 0);
 	float final_mult = 0.97;
 	float3 tm1 = KajiyaCurve(desat_col);
 
@@ -843,7 +843,7 @@ float4 PSColorGrading(FullscreenTriangleVSOutput input) : SV_Target
 	uint2 pixel = (uint2)input.Position.xy;
 	// Game cinematic
 	float3 color = pow(abs(TexColor[pixel].xyz), inOutGamma.z) * cinematic.y;
-	color = lerp(dot(color, inputLuminance.xyz), color, cinematic.x);
+	color = Saturation(color, cinematic.x, inputLuminance.xyz);
 	color = LinearContrast(color, cinematic.z, 0.18);
 
 	// Apply LUT or direct Color Grading
@@ -855,7 +855,7 @@ float4 PSColorGrading(FullscreenTriangleVSOutput input) : SV_Target
 	color = pow(abs(color), inOutGamma.w);
 
 	// Game tint/fade colors are Rec.709, while HDR grading output is Rec.2020.
-	float luma = dot(color, enableHDR ? Rec2020_2_XYZ_MAT[1] : sRGB_2_XYZ_MAT[1]);
+	float luma = Color::RGBToLuminance(color, enableHDR ? Rec2020_2_XYZ_MAT[1] : sRGB_2_XYZ_MAT[1]);
 	float3 outputTint = enableHDR ? Color::BT709ToBT2020(tint.xyz) : tint.xyz;
 	color = lerp(color, luma * outputTint, tint.w);
 

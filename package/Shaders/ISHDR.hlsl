@@ -256,7 +256,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 	else
 	{
-		float maxCol = dot(inputColor, sRGB_2_XYZ_MAT[1]);
+		float maxCol = Color::RGBToLuminance(inputColor, sRGB_2_XYZ_MAT[1]);
 		float mappedMax = GetTonemapFactorReinhard(maxCol, isHDR).x;
 		float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
 		blendedColor = compressedHuePreserving;
@@ -268,7 +268,7 @@ PS_OUTPUT main(PS_INPUT input)
 		blendedColor += bloomContribution;
 	}
 
-	float blendedLuminance = dot(blendedColor, sRGB_2_XYZ_MAT[1]);
+	float blendedLuminance = Color::RGBToLuminance(blendedColor, sRGB_2_XYZ_MAT[1]);
 	float3 tintedColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
 	float3 contrastedColor = lerp(avgValue.x, tintedColor, Cinematic.z);
 
@@ -290,7 +290,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float peakWhiteRatio = max(hdrShared.z / paperWhiteNits, 1.0);  // peakNits / paperWhite
 
 		// reduce highlights
-		float y_in = dot(outputColor, sRGB_2_XYZ_MAT[1]);
+		float y_in = Color::RGBToLuminance(outputColor, sRGB_2_XYZ_MAT[1]);
 		float highlight_start = 1.f;
 		float y_in_normalized = y_in / highlight_start;
 		float y_out = (y_in_normalized > 1.0) ? pow(max(0.0, y_in_normalized), 0.85) : y_in_normalized;

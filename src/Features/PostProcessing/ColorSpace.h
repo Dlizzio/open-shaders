@@ -93,16 +93,17 @@ inline DirectX::SimpleMath::Matrix getWhiteAdaptedRGBMatrix(std::string_view in_
 	if (src.x == dst.x && src.y == dst.y)
 		return getRGBMatrix(in_space, out_space);
 
-	const Matrix cone{ DirectX::XMFLOAT3X3{
+	static const Matrix cone{ DirectX::XMFLOAT3X3{
 		0.8951f, 0.2664f, -0.1614f,
 		-0.7502f, 1.7135f, 0.0367f,
 		0.0389f, -0.0685f, 1.0296f } };
+	static const Matrix inverseCone = cone.Invert();
 	auto response = [&](DirectX::XMFLOAT2 xy, int row) {
 		return cone(row, 0) * xy.x / xy.y + cone(row, 1) + cone(row, 2) * (1.0f - xy.x - xy.y) / xy.y;
 	};
 	Matrix scale = Matrix::Identity;
 	for (int i = 0; i < 3; ++i)
 		scale(i, i) = response(dst, i) / response(src, i);
-	const Matrix adaptation = cone.Invert() * scale * cone;
+	const Matrix adaptation = inverseCone * scale * cone;
 	return getRGBMatrix("XYZ", out_space) * adaptation * getRGBMatrix(in_space, "XYZ");
 }

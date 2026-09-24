@@ -2351,7 +2351,7 @@ namespace SIE
 			                               relativePath.substr(0, sep) + ".hlsl";
 			auto [it, inserted] = shaderExists.try_emplace(source, false);
 			if (inserted)
-				it->second = std::filesystem::exists(std::filesystem::path(L"Data/Shaders") / source);
+				it->second = std::filesystem::exists(Util::PathHelpers::GetShadersPath() / source);
 			if (it->second)
 				return false;
 
@@ -3080,8 +3080,7 @@ namespace SIE
 						if (FAILED(result)) {
 							error = errorBlob ? std::string{ static_cast<const char*>(errorBlob->GetBufferPointer()), errorBlob->GetBufferSize() } : std::format("D3DCompileFromFile failed: 0x{:08X}", static_cast<uint32_t>(result));
 						} else {
-							if (errorBlob)
-								logger::debug("Shader logs for {}:{}:\n{}", srcPathStr, entryPoint, static_cast<const char*>(errorBlob->GetBufferPointer()));
+							Util::LogShaderCompileWarnings(errorBlob.get(), srcPathStr);
 							createShader(shaderBlob.get());
 							if (shader && useDiskCache) {
 								std::scoped_lock lock(compilationSet.compilationMutex);
@@ -3101,29 +3100,32 @@ namespace SIE
 			} catch (const std::exception& e) {
 				error = e.what();
 			}
+			if (taskGeneration != compilationSet.standaloneGeneration.load(std::memory_order_acquire))
+				return;
+			const bool succeeded = static_cast<bool>(shader);
+			if (!succeeded) {
+				logger::warn("Standalone {} shader compilation failed for {}:{}:\n{}", profile, srcPathStr, entryPoint, error);
+				RecordCompileFailure(manifestKey, srcPathStr, error);
+			}
+			onReady(shader.detach());
 			bool batchComplete;
 			{
 				std::scoped_lock lock(standaloneMutex);
 				if (taskGeneration != compilationSet.standaloneGeneration.load(std::memory_order_acquire) || standaloneGeneration != taskGeneration)
 					return;
-				if (shader)
+				if (succeeded)
 					++standaloneCompletedTasks;
 				else
 					++standaloneFailedTasks;
 				if (const auto it = standaloneCompilations.find(manifestKey); it != standaloneCompilations.end() && it->second.request == request)
-					it->second.status = shader ? ShaderCompilationTask::Status::Completed : ShaderCompilationTask::Status::Failed;
+					it->second.status = succeeded ? ShaderCompilationTask::Status::Completed : ShaderCompilationTask::Status::Failed;
 				batchComplete = standaloneCompletedTasks + standaloneFailedTasks == standaloneTotalTasks;
-			}
-			if (!shader) {
-				logger::warn("Standalone {} shader compilation failed for {}:{}:\n{}", profile, srcPathStr, entryPoint, error);
-				RecordCompileFailure(manifestKey, srcPathStr, error);
 			}
 			if (batchComplete && useDiskCache) {
 				std::scoped_lock lock(compilationSet.compilationMutex);
 				if (!IsGenerationStale(diskGeneration))
 					GetShaderCacheManifest().Save();
 			}
-			onReady(shader.detach());
 		});
 	}
 

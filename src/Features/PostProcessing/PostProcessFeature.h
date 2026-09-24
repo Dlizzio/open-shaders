@@ -47,7 +47,7 @@ struct PostProcessFeature : public std::enable_shared_from_this<PostProcessFeatu
 	};
 
 	/// Compile callbacks fire on the shader-cache pool while Draw() reads on the
-	/// render thread; guards every compute-shader com_ptr member below.
+	/// render thread; guards every shader com_ptr member below.
 	mutable std::mutex shaderMutex;
 
 	/// Bumped by ClearShaderCache; a compile callback started before the bump

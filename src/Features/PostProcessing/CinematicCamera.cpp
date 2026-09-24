@@ -3,6 +3,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Util.h"
+#include "Utils/MathUtils.h"
 
 #include <algorithm>
 #include <cmath>
@@ -53,97 +54,11 @@ namespace CinematicCamera
 	constexpr float kMaxFOVDeg = 150.0f;
 	constexpr float kFovEpsilon = 1e-3f;
 	constexpr float kAspectEpsilon = 1e-4f;
-	constexpr float kFallbackAspect = 16.0f / 9.0f;
-
-	bool FocusResolver::GetTargetLockEnabled()
-	{
-		return g_TDM && g_TDM->GetCurrentTarget();
-	}
-
-	bool FocusResolver::GetInDialogue()
-	{
-		const auto* topicManager = RE::MenuTopicManager::GetSingleton();
-		return topicManager && (topicManager->speaker || topicManager->lastSpeaker);
-	}
-
-	RE::NiPoint3 FocusResolver::GetCameraPos()
-	{
-		auto player = globals::game::player;
-		auto playerCamera = globals::game::playerCamera;
-		RE::NiPoint3 ret{};
-		if (!playerCamera || !player)
-			return ret;
-
-		const auto isVehicleOrBodyCamera = [&](const auto& runtimeData, RE::CameraState thirdPersonState, RE::CameraState mountState) {
-			return playerCamera->currentState == runtimeData.cameraStates[RE::CameraStates::kFirstPerson] ||
-			       playerCamera->currentState == runtimeData.cameraStates[thirdPersonState] ||
-			       playerCamera->currentState == runtimeData.cameraStates[mountState];
-		};
-		if (globals::game::isVR ?
-				isVehicleOrBodyCamera(*playerCamera->GetVRRuntimeData(), RE::CameraStates::kVRThirdPerson, RE::CameraStates::kVRMount) :
-				isVehicleOrBodyCamera(playerCamera->GetRuntimeData(), RE::CameraStates::kThirdPerson, RE::CameraStates::kMount)) {
-			RE::NiNode* root = playerCamera->cameraRoot.get();
-			if (root) {
-				ret.x = root->world.translate.x;
-				ret.y = root->world.translate.y;
-				ret.z = root->world.translate.z;
-			}
-		} else if (playerCamera->IsInFreeCameraMode()) {
-			auto freeCameraState = static_cast<RE::FreeCameraState*>(playerCamera->currentState.get());
-			ret = freeCameraState->translation;
-		} else {
-			RE::NiPoint3 playerPos = player->GetLookingAtLocation();
-
-			ret.z = playerPos.z;
-			ret.x = player->GetPositionX();
-			ret.y = player->GetPositionY();
-		}
-
-		return ret;
-	}
-
-	RE::NiPoint3 FocusResolver::GetReferenceFocusPosition(RE::TESObjectREFR* a_ref)
-	{
-		RE::NiPoint3 targetPosition = a_ref->GetPosition();
-		if (a_ref->GetFormType() == RE::FormType::ActorCharacter) {
-			auto head = a_ref->GetNodeByName("NPC Head [Head]");
-			if (head)
-				targetPosition = head->world.translate;
-		}
-		return targetPosition;
-	}
-
-	float FocusResolver::GetDistanceToReference(RE::TESObjectREFR* a_ref)
-	{
-		auto* camera = RE::Main::WorldRootCamera();
-		RE::NiPoint3 cameraPosition = camera ? camera->world.translate : GetCameraPos();
-		return cameraPosition.GetDistance(GetReferenceFocusPosition(a_ref));
-	}
-
-	bool FocusResolver::GetReferenceFocusCoord(RE::TESObjectREFR* a_ref, float2& a_focusCoord)
-	{
-		auto* camera = RE::Main::WorldRootCamera();
-		if (!camera || globals::game::isVR)
-			return false;
-
-		float screenX = 0.0f;
-		float screenY = 0.0f;
-		float screenZ = 0.0f;
-		if (!camera->WorldPtToScreenPt3(GetReferenceFocusPosition(a_ref), screenX, screenY, screenZ, 1e-5f) ||
-			!std::isfinite(screenX) || !std::isfinite(screenY) || screenZ <= 0.0f ||
-			screenX < 0.0f || screenX > 1.0f || screenY < 0.0f || screenY > 1.0f) {
-			return false;
-		}
-
-		// Engine projection uses bottom-left coordinates; depth sampling uses top-left.
-		a_focusCoord = float2(screenX, 1.0f - screenY);
-		return true;
-	}
 
 	RE::TESObjectREFR* FocusResolver::FindTarget(bool a_allowConsoleSelection, uint& a_currentRef)
 	{
 		RE::TESObjectREFR* target = nullptr;
-		const auto consoleRef = RE::Console::GetSelectedRef();
+		const auto consoleRef = Util::GetSelectedConsoleReference();
 		if (a_allowConsoleSelection) {
 			if (consoleRef && !consoleRef->IsDisabled() && !consoleRef->IsDeleted() && consoleRef->Is3DLoaded()) {
 				a_currentRef = consoleRef->formID;
@@ -153,16 +68,12 @@ namespace CinematicCamera
 			}
 		}
 
-		if (GetTargetLockEnabled()) {
-			target = g_TDM->GetCurrentTarget().get().get();
+		if (const auto targetLock = Util::GetTargetLockTarget()) {
+			target = targetLock.get().get();
 		}
 
-		if (GetInDialogue()) {
-			if (RE::MenuTopicManager::GetSingleton()->speaker) {
-				target = RE::MenuTopicManager::GetSingleton()->speaker.get().get();
-			} else {
-				target = RE::MenuTopicManager::GetSingleton()->lastSpeaker.get().get();
-			}
+		if (const auto dialogueTarget = Util::GetDialogueTarget()) {
+			target = dialogueTarget.get().get();
 		}
 
 		return target;
@@ -183,10 +94,10 @@ namespace CinematicCamera
 			return result;
 		}
 
-		const float distanceGameUnits = GetDistanceToReference(target);
+		const float distanceGameUnits = Util::GetCameraDistanceToReference(target);
 		result.hasTarget = true;
 		result.distanceM = Util::Units::GameUnitsToMeters(distanceGameUnits);
-		result.projected = GetReferenceFocusCoord(target, result.focusCoord);
+		result.projected = Util::GetReferenceFocusCoord(target, result.focusCoord);
 
 		hasValidHistory = true;
 		historyProjected = result.projected;
@@ -213,11 +124,6 @@ namespace CinematicCamera
 		ValidateSettings();
 	}
 
-	static float ClampCameraValue(float value, float minimum, float maximum, float fallback)
-	{
-		return std::clamp(std::isfinite(value) ? value : fallback, minimum, maximum);
-	}
-
 	void Controller::ValidateSettings()
 	{
 		auto& fb = settings.Filmback;
@@ -233,8 +139,8 @@ namespace CinematicCamera
 			fb.SensorHeightMM = 15.7f;
 			break;
 		case FilmbackPreset::Custom:
-			fb.SensorWidthMM = ClampCameraValue(fb.SensorWidthMM, 1.0f, 100.0f, 36.0f);
-			fb.SensorHeightMM = ClampCameraValue(fb.SensorHeightMM, 1.0f, 100.0f, 24.0f);
+			fb.SensorWidthMM = Util::ClampFinite(fb.SensorWidthMM, 1.0f, 100.0f, 36.0f);
+			fb.SensorHeightMM = Util::ClampFinite(fb.SensorHeightMM, 1.0f, 100.0f, 24.0f);
 			break;
 		case FilmbackPreset::FullFrame:
 		default:
@@ -244,27 +150,27 @@ namespace CinematicCamera
 		}
 
 		auto& lens = settings.Lens;
-		lens.FocalLengthMM = ClampCameraValue(lens.FocalLengthMM, 1.0f, 300.0f, 50.0f);
-		lens.FNumber = ClampCameraValue(lens.FNumber, 0.7f, 32.0f, 2.8f);
+		lens.FocalLengthMM = Util::ClampFinite(lens.FocalLengthMM, 1.0f, 300.0f, 50.0f);
+		lens.FNumber = Util::ClampFinite(lens.FNumber, 0.7f, 32.0f, 2.8f);
 		lens.ApertureBladeCount = std::clamp(lens.ApertureBladeCount, 4, 10);
-		lens.ApertureBladeRotationDeg = ClampCameraValue(lens.ApertureBladeRotationDeg, 0.0f, 360.0f, 0.0f);
-		lens.ApertureRoundness = ClampCameraValue(lens.ApertureRoundness, 0.0f, 1.0f, 0.5f);
+		lens.ApertureBladeRotationDeg = Util::ClampFinite(lens.ApertureBladeRotationDeg, 0.0f, 360.0f, 0.0f);
+		lens.ApertureRoundness = Util::ClampFinite(lens.ApertureRoundness, 0.0f, 1.0f, 0.5f);
 
 		auto& focus = settings.Focus;
 		focus.Mode = std::clamp(focus.Mode, (int)FocusMode::Manual, (int)FocusMode::Target);
-		focus.ManualDistanceM = ClampCameraValue(focus.ManualDistanceM, 0.01f, 10000.0f, 10.0f);
-		focus.ScreenPointUV.x = ClampCameraValue(focus.ScreenPointUV.x, 0.0f, 1.0f, 0.5f);
-		focus.ScreenPointUV.y = ClampCameraValue(focus.ScreenPointUV.y, 0.0f, 1.0f, 0.5f);
-		focus.TransitionSpeed = ClampCameraValue(focus.TransitionSpeed, 0.1f, 1.0f, 0.5f);
+		focus.ManualDistanceM = Util::ClampFinite(focus.ManualDistanceM, 0.01f, 10000.0f, 10.0f);
+		focus.ScreenPointUV.x = Util::ClampFinite(focus.ScreenPointUV.x, 0.0f, 1.0f, 0.5f);
+		focus.ScreenPointUV.y = Util::ClampFinite(focus.ScreenPointUV.y, 0.0f, 1.0f, 0.5f);
+		focus.TransitionSpeed = Util::ClampFinite(focus.TransitionSpeed, 0.1f, 1.0f, 0.5f);
 
 		auto& exp = settings.Exposure;
 		exp.Mode = std::clamp(exp.Mode, (int)ExposureMode::AutoISO, (int)ExposureMode::Manual);
-		exp.ISO = ClampCameraValue(exp.ISO, 25.0f, 12800.0f, 100.0f);
-		exp.MinISO = ClampCameraValue(exp.MinISO, 25.0f, 12800.0f, 25.0f);
-		exp.MaxISO = ClampCameraValue(exp.MaxISO, exp.MinISO, 12800.0f, 12800.0f);
-		exp.FrameRate = ClampCameraValue(exp.FrameRate, 1.0f, 240.0f, 24.0f);
-		exp.ShutterAngleDeg = ClampCameraValue(exp.ShutterAngleDeg, 1.0f, 360.0f, 180.0f);
-		exp.ExposureCompensationEV = ClampCameraValue(exp.ExposureCompensationEV, -5.0f, 5.0f, 0.0f);
+		exp.ISO = Util::ClampFinite(exp.ISO, 25.0f, 12800.0f, 100.0f);
+		exp.MinISO = Util::ClampFinite(exp.MinISO, 25.0f, 12800.0f, 25.0f);
+		exp.MaxISO = Util::ClampFinite(exp.MaxISO, exp.MinISO, 12800.0f, 12800.0f);
+		exp.FrameRate = Util::ClampFinite(exp.FrameRate, 1.0f, 240.0f, 24.0f);
+		exp.ShutterAngleDeg = Util::ClampFinite(exp.ShutterAngleDeg, 1.0f, 360.0f, 180.0f);
+		exp.ExposureCompensationEV = Util::ClampFinite(exp.ExposureCompensationEV, -5.0f, 5.0f, 0.0f);
 	}
 
 	PhysicalCameraState Controller::BuildState(float viewportAspect) const
@@ -323,10 +229,9 @@ namespace CinematicCamera
 	{
 		if (!settings.Enabled || !runnable) {
 			if (!globals::game::isVR && (fovState == FovState::Applied || fovState == FovState::ExternallyModified)) {
-				if (auto playerCamera = globals::game::playerCamera) {
-					float& worldFOV = playerCamera->GetRuntimeData2().worldFOV;
-					if (std::abs(worldFOV - lastAppliedFOV) < kFovEpsilon)
-						worldFOV = restoreFOV;
+				if (auto* worldFOV = Util::GetWorldFOV()) {
+					if (std::abs(*worldFOV - lastAppliedFOV) < kFovEpsilon)
+						*worldFOV = restoreFOV;
 				}
 			}
 			fovState = settings.Enabled ? FovState::Suspended : FovState::Inactive;
@@ -337,12 +242,11 @@ namespace CinematicCamera
 		const bool resumed = fovState != FovState::Applied && fovState != FovState::ExternallyModified;
 
 		ValidateSettings();
-		viewportAspect = std::isfinite(viewportAspect) && viewportAspect > 0.0f ? viewportAspect : kFallbackAspect;
+		viewportAspect = std::isfinite(viewportAspect) && viewportAspect > 0.0f ? viewportAspect : Util::kFallbackCameraAspect;
 		PhysicalCameraState s = BuildState(viewportAspect);
 		if (s.Valid) {
 			activeState = s;
 			stateValid = true;
-			++stateRevision;
 		} else if (!stateValid) {
 			fovState = FovState::Invalid;
 			return;
@@ -362,13 +266,13 @@ namespace CinematicCamera
 			return;
 		}
 
-		auto playerCamera = globals::game::playerCamera;
-		if (!playerCamera) {
+		auto* cameraFOV = Util::GetWorldFOV();
+		if (!cameraFOV) {
 			fovState = FovState::Unavailable;
 			fovWritePending = true;
 			return;
 		}
-		float& worldFOV = playerCamera->GetRuntimeData2().worldFOV;
+		float& worldFOV = *cameraFOV;
 
 		const float target = std::clamp(activeState.HorizontalFOVDeg, kMinFOVDeg, kMaxFOVDeg);
 
@@ -393,21 +297,6 @@ namespace CinematicCamera
 		lastAppliedAspect = viewportAspect;
 		fovWritePending = false;
 		fovState = FovState::Applied;
-	}
-
-	const char* Controller::GetFilmbackPresetName() const
-	{
-		switch ((FilmbackPreset)settings.Filmback.Preset) {
-		case FilmbackPreset::Super35:
-			return T("feature.post_processing.cinematic_camera.preset_super_35", "Super 35");
-		case FilmbackPreset::APSC:
-			return T("feature.post_processing.cinematic_camera.preset_aps_c", "APS-C");
-		case FilmbackPreset::Custom:
-			return T("feature.post_processing.cinematic_camera.custom", "Custom");
-		case FilmbackPreset::FullFrame:
-		default:
-			return T("feature.post_processing.cinematic_camera.preset_full_frame", "Full Frame");
-		}
 	}
 
 	const char* Controller::GetFovStateText() const

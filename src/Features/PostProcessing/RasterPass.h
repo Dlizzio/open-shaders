@@ -1,8 +1,9 @@
 #pragma once
 
+#include "Utils/D3D.h"
+
 #include <d3d11.h>
 
-#include <array>
 #include <initializer_list>
 
 struct ID3D11DeviceContext;
@@ -18,7 +19,7 @@ namespace PostProcessingRaster
 		explicit RasterPass(ID3D11DeviceContext* a_context);
 
 		/** Restores saved pipeline state and releases its references. */
-		~RasterPass();
+		~RasterPass() = default;
 
 		RasterPass(const RasterPass&) = delete;
 		RasterPass& operator=(const RasterPass&) = delete;
@@ -38,30 +39,9 @@ namespace PostProcessingRaster
 	private:
 		static constexpr UINT kPSSRVCount = 6;
 		static constexpr UINT kPSCBCount = 7;
-		static constexpr UINT kPSSamplerCount = 1;
 		static constexpr UINT kSharedCBStart = 5;
 
 		ID3D11DeviceContext* context;
-
-		ID3D11RenderTargetView* savedRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-		ID3D11DepthStencilView* savedDSV = nullptr;
-		ID3D11BlendState* savedBlendState = nullptr;
-		FLOAT savedBlendFactor[4] = {};
-		UINT savedSampleMask = 0;
-		ID3D11DepthStencilState* savedDepthStencilState = nullptr;
-		UINT savedStencilRef = 0;
-		ID3D11RasterizerState* savedRasterizerState = nullptr;
-		UINT savedViewportCount = 0;
-		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> savedViewports = {};
-		D3D11_PRIMITIVE_TOPOLOGY savedTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
-		ID3D11InputLayout* savedInputLayout = nullptr;
-		ID3D11VertexShader* savedVS = nullptr;
-		ID3D11HullShader* savedHS = nullptr;
-		ID3D11DomainShader* savedDS = nullptr;
-		ID3D11GeometryShader* savedGS = nullptr;
-		ID3D11PixelShader* savedPS = nullptr;
-		std::array<ID3D11ShaderResourceView*, kPSSRVCount> savedPSSRVs = {};
-		std::array<ID3D11Buffer*, kPSCBCount> savedPSCBs = {};
-		std::array<ID3D11SamplerState*, kPSSamplerCount> savedPSSamplers = {};
+		Util::FullscreenPassScope savedState;
 	};
 }

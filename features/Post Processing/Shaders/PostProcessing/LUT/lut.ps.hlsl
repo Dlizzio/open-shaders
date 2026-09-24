@@ -47,7 +47,7 @@ float4 main(FullscreenTriangleVSOutput input) : SV_Target
 	{
 		float3 luminanceWeights = InputGamut == GamutACEScg ? AP1_RGB2Y : InputGamut == GamutRec2020 ? Rec2020_2_XYZ_MAT[1] :
 		                                                                                               sRGB_2_XYZ_MAT[1];
-		float luma = dot(color, luminanceWeights);
+		float luma = Color::RGBToLuminance(color, luminanceWeights);
 		float pxCoord = (luma - InputMin.x) / (InputMax.x - InputMin.x) * (dims.x - 1);
 		int px0 = clamp(int(pxCoord), 0, dims.x - 1);
 		int px1 = min(px0 + 1, dims.x - 1);

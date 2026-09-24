@@ -200,6 +200,7 @@ struct PhysicalGlare : public PostProcessFeature
 	winrt::com_ptr<ID3D11ComputeShader> apertureCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> tearFilmCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> psfCS = nullptr;
+	// Resolution-specialised FFT shaders avoid launching inactive threads at smaller sizes.
 	static constexpr uint FFT_VARIANT_COUNT = 4;
 	std::array<winrt::com_ptr<ID3D11ComputeShader>, FFT_VARIANT_COUNT> fftRowCS = {};
 	std::array<winrt::com_ptr<ID3D11ComputeShader>, FFT_VARIANT_COUNT> fftColCS = {};

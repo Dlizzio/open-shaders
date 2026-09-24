@@ -111,9 +111,9 @@ float3 Gamma(float3 col, float3 gamma, float3 black_pivot, float3 white_pivot)
 	return col;
 }
 
-float3 Saturation(float3 col, float sat)
+float3 Saturation(float3 col, float sat, float3 luminanceWeights)
 {
-	float luma = Color::RGBToLuminance(col);
+	float luma = Color::RGBToLuminance(col, luminanceWeights);
 	return lerp(luma, col, sat);
 }
 

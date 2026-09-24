@@ -1,4 +1,4 @@
-#include "Common/ColorSpaces.hlsli"
+#include "Common/Color.hlsli"
 #include "PostProcessing/fullscreen.hlsli"
 
 static const uint GamutACEScg = 1;
@@ -27,6 +27,6 @@ float4 main(FullscreenTriangleVSOutput input) : SV_Target
 			color.rgb = mul(XYZ_2_Rec2020_MAT, mul(sRGB_2_XYZ_MAT, color.rgb));
 	}
 	if (gamma != 1.0)
-		color.rgb = sign(color.rgb) * pow(abs(color.rgb), gamma);
+		color.rgb = Color::SignedPow(color.rgb, gamma);
 	return color;
 }

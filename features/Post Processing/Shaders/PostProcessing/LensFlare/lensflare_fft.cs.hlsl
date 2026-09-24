@@ -6,9 +6,9 @@
 //
 // Shaders:
 //   CS_FFT           — Cooley-Tukey radix-2 FFT (row/col, forward/inverse via defines)
-//   CS_Multiply      — Frequency-domain complex multiply (scene �: bokeh kernel)
-//   CSBokehPrepare   — Sample bokeh texture → zero-padded N�:N RG32F with FFT-shift
-//   CSFFTThreshold   — Convert half-res threshold to N�:N RG32F for FFT input
+//   CS_Multiply      — Frequency-domain complex multiply (scene × bokeh kernel)
+//   CSBokehPrepare   — Sample bokeh texture → zero-padded N×N RG32F with FFT-shift
+//   CSFFTThreshold   — Convert half-res threshold to N×N RG32F for FFT input
 //   CSFFTGhostCompose — IFFT result → multi-scale ghost sampling + halo + tint
 
 #include "PostProcessing/common.hlsli"
@@ -181,7 +181,7 @@ float2 Twiddle(uint k, uint N)
 
 	// ============================================================
 	// CS_Multiply — Frequency-domain complex multiplication
-	// scene_FFT �: bokeh_FFT, normalized by DC component
+	// scene_FFT × bokeh_FFT, normalized by DC component
 	// Dispatch: ((N+7)/8, (N+7)/8, 1)
 	// ============================================================
 
@@ -205,7 +205,7 @@ float2 Twiddle(uint k, uint N)
 }
 
 // ============================================================
-// CSBokehPrepare — Generate procedural aperture shape into N�:N RG32F
+// CSBokehPrepare — Generate procedural aperture shape into N×N RG32F
 // Creates an N-polygon aperture (like Physical Glare) with soft edges,
 // zero-pads, and FFT-shifts (center-to-corner).
 // u0 = RG32F output (real = aperture transmittance, imag = 0)
@@ -262,7 +262,7 @@ float2 Twiddle(uint k, uint N)
 }
 
 	// ============================================================
-	// CSFFTThreshold — Convert half-res threshold → N�:N RG32F
+	// CSFFTThreshold — Convert half-res threshold → N×N RG32F
 	// Centers the threshold image in the FFT buffer with zero padding
 	// t0 = threshold texture (RGBA float), s0 = sampler
 	// u0 = RG32F output (real = luminance, imag = 0)

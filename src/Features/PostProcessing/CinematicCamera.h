@@ -1,8 +1,5 @@
 #pragma once
 
-#define TDM_API_COMMONLIB
-#include "TDM/TrueDirectionalMovementAPI.h"
-
 namespace CinematicCamera
 {
 	constexpr float kMotionBlurReferenceScale = 300.0f;
@@ -116,27 +113,6 @@ namespace CinematicCamera
 
 	struct FocusResolver
 	{
-		TDM_API::IVTDM2* g_TDM = nullptr;
-
-		/** @brief Requests the optional TDM target API. */
-		void RequestTDM()
-		{
-			g_TDM = reinterpret_cast<TDM_API::IVTDM2*>(TDM_API::RequestPluginAPI(TDM_API::InterfaceVersion::V2));
-		}
-
-		/** @brief Returns whether TDM has a target lock. */
-		bool GetTargetLockEnabled();
-		/** @brief Returns whether dialogue supplies a focus target. */
-		bool GetInDialogue();
-		/** @brief Gets the camera position using runtime-specific camera states. */
-		RE::NiPoint3 GetCameraPos();
-		/** @brief Returns the target head or reference position. */
-		RE::NiPoint3 GetReferenceFocusPosition(RE::TESObjectREFR* a_ref);
-		/** @brief Returns camera-to-target distance in game units. */
-		float GetDistanceToReference(RE::TESObjectREFR* a_ref);
-		/** @brief Projects a flat-runtime target into depth texture coordinates. */
-		bool GetReferenceFocusCoord(RE::TESObjectREFR* a_ref, float2& a_focusCoord);
-
 		/** @brief Resolves dialogue, TDM and console targets in priority order. */
 		RE::TESObjectREFR* FindTarget(bool a_allowConsoleSelection, uint& a_currentRef);
 
@@ -166,7 +142,6 @@ namespace CinematicCamera
 
 		PhysicalCameraState activeState{};
 		bool stateValid = false;
-		uint stateRevision = 0;
 
 		enum class FovState
 		{
@@ -192,8 +167,6 @@ namespace CinematicCamera
 		/** @brief Returns active physical parameters or null while suspended. */
 		[[nodiscard]] const PhysicalCameraState* GetState() const { return stateValid ? &activeState : nullptr; }
 
-		/** @brief Returns the localized filmback name. */
-		[[nodiscard]] const char* GetFilmbackPresetName() const;
 		/** @brief Returns the localized projection ownership status. */
 		[[nodiscard]] const char* GetFovStateText() const;
 

@@ -1139,6 +1139,7 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		return;
 
 	{
+		// Debug curve readback stays outside the grading pass's profiled GPU cost.
 		CS_GPU_PASS("PostProcessing::ColorGrading");
 
 		auto& pp = globals::features::postProcessing;

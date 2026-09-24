@@ -521,11 +521,11 @@ void DoF::Draw(TextureInfo& inout_tex)
 		if (!target)
 			return;
 
-		targetFocusDistanceGame = resolver->GetDistanceToReference(target);
+		targetFocusDistanceGame = Util::GetCameraDistanceToReference(target);
 		debugDistance = targetFocusDistanceGame;
 		nearBlur = settings.NearPlaneMaxBlur;
 		focusLen = settings.targetFocusFocalLength;
-		if (resolver->GetReferenceFocusCoord(target, focusCoord)) {
+		if (Util::GetReferenceFocusCoord(target, focusCoord)) {
 			// Visible-surface depth avoids focusing behind the target face.
 			autoFocus = true;
 		} else {
