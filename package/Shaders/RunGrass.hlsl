@@ -209,10 +209,10 @@ VS_OUTPUT main(VS_INPUT input, uint instanceID : SV_InstanceID)
 #		else
 	float4 msPosition = GetMSPosition(input);
 #		endif
+	msPosition.xyz += e0.xyz;
 #		ifdef GRASS_LIGHTING
 	vsout.AlphaPosition = msPosition.xyz;
 #		endif
-	msPosition.xyz += e0.xyz;
 
 	const float3 instanceRoot = input.InstanceData1.xyz + e0.xyz;
 	float3 bendAxis, previousBendAxis;
