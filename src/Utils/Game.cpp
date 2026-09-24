@@ -24,8 +24,10 @@ namespace
 			static REL::Relocation<void (*)(RE::ModelDBHandle::U_Entry*)> release{ REL::ID(15443) };
 			release(entry);
 		} else {
+			// SE/VR share one id space; 25746 requires VR Address Library >= 0.269.0
+			// (alandtse/skyrim_vr_address_library#226, see the Load() version gate below).
 			using Reset = RE::ModelDBHandle* (*)(RE::ModelDBHandle*, RE::ModelDBHandle::U_Entry*);
-			static REL::Relocation<Reset> reset{ REL::VariantID(25746, 0, 0x3C8B50) };
+			static REL::Relocation<Reset> reset{ REL::ID(25746) };
 			reset(&a_handle, nullptr);
 		}
 	}
