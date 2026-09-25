@@ -1792,7 +1792,9 @@ namespace SIE
 			auto diskPath = GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
 			ID3DBlob* shaderBlob = nullptr;
 
-			if (useDiskCache && std::filesystem::exists(diskPath)) {
+			// A failed filesystem probe is a cache miss, not a failed compilation task.
+			std::error_code diskCacheProbeError;
+			if (useDiskCache && std::filesystem::exists(diskPath, diskCacheProbeError)) {
 				// Determine whether the disk-cached shader is still valid.
 				bool diskCacheOutdated = false;
 
@@ -3193,6 +3195,16 @@ namespace SIE
 	void ShaderCache::SetSkipUnchangedShaders(bool value)
 	{
 		isSkipUnchangedShaders = value;
+	}
+
+	void ShaderCache::SetBackgroundCompilation(bool value)
+	{
+		{
+			// Serialize with WaitTake's predicate check and transition into wait.
+			std::scoped_lock lock{ compilationSet.compilationMutex };
+			backgroundCompilation = value;
+		}
+		compilationSet.conditionVariable.notify_one();
 	}
 
 	static const std::filesystem::path& DiskCachePath()
