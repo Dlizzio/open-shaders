@@ -18,13 +18,17 @@ foreach(
   ffx_frameinterpolation_x64
   ffx_opticalflow_x64
 )
-  set_target_properties(
-    ${_ffx_lib}
-    PROPERTIES
-    ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/ffx_sdk"
-    ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/ffx_sdk"
-    ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/ffx_sdk"
-  )
+  # ffx_frameinterpolation_x64/ffx_opticalflow_x64 only exist when FFX_FI/FFX_OF are
+  # ON (Linux-ClangCL leaves them OFF), so guard on the target actually existing.
+  if(TARGET ${_ffx_lib})
+    set_target_properties(
+      ${_ffx_lib}
+      PROPERTIES
+      ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/ffx_sdk"
+      ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/ffx_sdk"
+      ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/ffx_sdk"
+    )
+  endif()
 endforeach()
 
 # Upstream bug: the FFX dx11 backend's compile_shaders() leaks literal
