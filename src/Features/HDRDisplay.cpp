@@ -589,11 +589,14 @@ void HDRDisplay::LoadSettings(json& o_json)
 void HDRDisplay::RestoreDefaultSettings()
 {
 	bool hdrMonitor = DetectHDR();
+	std::lock_guard<std::mutex> lock(settingsMutex);
 	settings.enableHDR = hdrMonitor;
 	settings.hdrPaperWhite = 203;
 	settings.hdrPeakNits = 1000;
 	settings.hdrUIBrightness = 1.0f;
 	settings.dontShowHDRWarning = false;
+	UpdateHDRData();
+	UpdateSwapChainColorSpace();
 }
 
 void HDRDisplay::DataLoaded()
@@ -1639,7 +1642,7 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 
 	// Linear Lighting keeps the pipeline linear throughout.
 	// Without it, ISHDR gamma-encodes its output even in HDR mode.
-	bool isSceneLinear = globals::features::linearLighting.settings.enableLinearLighting;
+	bool isSceneLinear = globals::features::linearLighting.IsLinearLightingActive();
 
 	// Use user-specified peak brightness for highlights compression
 	float effectivePeakNits = static_cast<float>(settings.hdrPeakNits);
