@@ -5,6 +5,7 @@
 #include "Deferred.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
+#include "RenderDoc.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -605,17 +606,20 @@ void Upscaling::DrawUpscalingSettings()
 	upscaleModes.push_back(dlssLabel);
 
 	// Determine available modes
+	const bool renderDocActive = globals::features::renderDoc.IsAvailable();
 	bool featureDLSS = streamline.featureDLSS;
-	bool featureFSR = true;  // FSR is always available
+	bool featureFSR = !renderDocActive;
 
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	uint32_t availableModes = 1;  // Start with TAA
 	if (featureFSR)
 		availableModes = 2;  // Add FSR
-	if (featureDLSS)
+	if (featureDLSS && !renderDocActive)
 		availableModes = 3;  // Add DLSS if available
-	else
+	if (!featureDLSS)
 		currentUpscaleMode = &settings.upscaleMethodNoDLSS;
+
+	*currentUpscaleMode = std::min(availableModes, *currentUpscaleMode);
 
 	// Dropdown for method selection
 	std::vector<const char*> modeLabels;
@@ -632,8 +636,6 @@ void Upscaling::DrawUpscalingSettings()
 		else
 			ImGui::TextUnformatted(T(TKEY("method_tooltip"), "Selects the upscaling backend."));
 	}
-
-	*currentUpscaleMode = std::min(availableModes, *currentUpscaleMode);
 
 	if (openCompositeBlocksUpscaling) {
 		if (openCompositeBlocker.configPath.empty())
@@ -1329,8 +1331,13 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	if (globals::game::isVR && GetOpenCompositeUpscalingBlocker().active)
 		return UpscaleMethod::kNONE;
 
+	if (globals::features::renderDoc.IsAvailable()) {
+		const auto method = static_cast<UpscaleMethod>(streamline.featureDLSS ? settings.upscaleMethod : settings.upscaleMethodNoDLSS);
+		return method == UpscaleMethod::kNONE ? UpscaleMethod::kNONE : UpscaleMethod::kTAA;
+	}
+
 	// PerfMode sizes the engine RTs at boot for a testTexture-redirecting upscaler. Keep the
-	// boot-latched method while DLSS is available; if DLSS drops out (RenderDoc / no-DLSS GPU)
+	// boot-latched method while DLSS is available; if DLSS drops out (no-DLSS GPU)
 	// fall to FSR — the only other redirecting method — never a live or non-redirecting choice
 	// that would desync the fixed RT sizing.
 	if (globals::features::upscaling.perfMode.IsHookActive())
