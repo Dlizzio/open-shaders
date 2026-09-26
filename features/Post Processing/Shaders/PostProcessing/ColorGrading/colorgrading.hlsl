@@ -160,11 +160,14 @@ float3 ShadowsMidtonesHighlights(float3 color, float3 shadowsGain, float3 midton
 
 	float shadowWeight = 1.0 - smoothstep(shadowBegin, shadowEnd, luma);
 	float3 graded;
-	[branch] if (any(highlightsGain < midtonesGain) || any(highlightsOff < midtonesOff)) {
+	[branch] if (any(highlightsGain < midtonesGain) || any(highlightsOff < midtonesOff))
+	{
 		graded = Highlights::Apply(color, luma, midtonesGain, highlightsGain,
 			midtonesOff, highlightsOff, highlightBegin, highlightEnd);
 		graded += shadowWeight * (color * (shadowsGain - midtonesGain) + shadowsOff - midtonesOff);
-	} else {
+	}
+	else
+	{
 		float highlightWeight = smoothstep(highlightBegin, highlightEnd, luma);
 		float midtoneWeight = 1.0 - shadowWeight - highlightWeight;
 

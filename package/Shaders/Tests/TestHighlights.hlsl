@@ -1,5 +1,5 @@
-#include "/Shaders/PostProcessing/ColorGrading/Include/Highlights.hlsli"
 #include "/Shaders/Common/ColorSpaces.hlsli"
+#include "/Shaders/PostProcessing/ColorGrading/Include/Highlights.hlsli"
 #include "/Test/STF/ShaderTestFramework.hlsli"
 
 namespace TestConstants
@@ -9,8 +9,7 @@ namespace TestConstants
 }
 
 /// @tags color, highlights, hdr, regression
-[numthreads(1, 1, 1)] void TestHighlightCompressionPreservesHDRHeadroom()
-{
+[numthreads(1, 1, 1)] void TestHighlightCompressionPreservesHDRHeadroom() {
 	float3 tint = float3(1.5f, 1.0f, 0.25f);
 	tint /= dot(tint, Rec2020_2_XYZ_MAT[1]);
 	float3 previous = 0.0f;
@@ -26,8 +25,8 @@ namespace TestConstants
 	ASSERT(IsTrue, all(previous > 1.0f));
 }
 
-/// @tags color, highlights, regression
-[numthreads(1, 1, 1)] void TestReducedHighlightsPreserveBrightnessOrder()
+	/// @tags color, highlights, regression
+	[numthreads(1, 1, 1)] void TestReducedHighlightsPreserveBrightnessOrder()
 {
 	float3 highlightsGain = float3(0.0f, 0.446f, 0.9f);
 	float3 previous = 0.0f;
@@ -41,8 +40,7 @@ namespace TestConstants
 }
 
 /// @tags color, highlights, regression
-[numthreads(1, 1, 1)] void TestHighlightGainPreservesNeutralAndBoostedControls()
-{
+[numthreads(1, 1, 1)] void TestHighlightGainPreservesNeutralAndBoostedControls() {
 	for (uint i = 0; i <= TestConstants::RAMP_STEPS; ++i) {
 		float luma = 4.0f * i / TestConstants::RAMP_STEPS;
 		float3 neutral = Highlights::Apply(luma, luma, 1.0f, 1.0f, 0.0f, 0.0f, 0.55f, 1.0f);
@@ -53,8 +51,8 @@ namespace TestConstants
 	}
 }
 
-/// @tags color, highlights, regression
-[numthreads(1, 1, 1)] void TestHighlightGainPreservesMidtonesAndHDRSlope()
+	/// @tags color, highlights, regression
+	[numthreads(1, 1, 1)] void TestHighlightGainPreservesMidtonesAndHDRSlope()
 {
 	float3 midtonesGain = float3(0.5f, 1.0f, 1.5f);
 	float3 highlightsGain = float3(0.1f, 0.446f, 0.9f);
@@ -67,8 +65,7 @@ namespace TestConstants
 }
 
 /// @tags color, highlights, robustness
-[numthreads(1, 1, 1)] void TestHighlightGainHandlesNarrowRanges()
-{
+[numthreads(1, 1, 1)] void TestHighlightGainHandlesNarrowRanges() {
 	float3 previous = 0.0f;
 	for (uint i = 0; i <= TestConstants::RAMP_STEPS; ++i) {
 		float luma = 2.0f * i / TestConstants::RAMP_STEPS;
@@ -79,8 +76,8 @@ namespace TestConstants
 	}
 }
 
-/// @tags color, highlights, regression
-[numthreads(1, 1, 1)] void TestNegativeOffsetsPreserveBrightnessOrderWithGain()
+	/// @tags color, highlights, regression
+	[numthreads(1, 1, 1)] void TestNegativeOffsetsPreserveBrightnessOrderWithGain()
 {
 	float3 highlightsGain = float3(0.0f, 0.446f, 2.0f);
 	float3 tint = float3(1.5f, 1.0f, 0.25f);
@@ -99,8 +96,7 @@ namespace TestConstants
 }
 
 /// @tags color, highlights, regression
-[numthreads(1, 1, 1)] void TestHighlightOffsetsPreserveMidtonesAndPositiveControls()
-{
+[numthreads(1, 1, 1)] void TestHighlightOffsetsPreserveMidtonesAndPositiveControls() {
 	float3 offset = float3(0.1f, 0.25f, 0.5f);
 	ASSERT(IsTrue, all(Highlights::Apply(0.55f, 0.55f, 1.0f, 0.446f, 0.0f, -0.5f, 0.55f, 1.0f) == 0.55f));
 	for (uint i = 0; i <= TestConstants::RAMP_STEPS; ++i) {
