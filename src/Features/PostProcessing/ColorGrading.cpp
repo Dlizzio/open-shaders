@@ -916,7 +916,6 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled, Gamut inputGamut)
 
 void ColorGrading::SetupResources()
 {
-	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 	auto context = globals::d3d::context;
 
@@ -929,10 +928,7 @@ void ColorGrading::SetupResources()
 
 	logger::debug("Creating 2D textures...");
 	{
-		auto gameTexMainCopy = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY];
-
-		D3D11_TEXTURE2D_DESC texDesc;
-		gameTexMainCopy.texture->GetDesc(Util::AsW32(&texDesc));
+		auto texDesc = owner->GetPipelineTextureDesc();
 
 		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
