@@ -482,10 +482,11 @@ namespace Util {
 GUARD;
 GUARD_BEGIN
 GUARD_END
-bool BeginSearchableCombo(const char* id, const char* preview, ImGuiComboFlags flags, const void*) { return ImGui::BeginCombo(id, preview, flags); }
+bool BeginSearchableCombo(const char* id, const char* preview, ImGuiComboFlags flags, const void*, int, float*) { return ImGui::BeginCombo(id, preview, flags); }
 bool SearchableComboMatches(const std::string&) { return true; }
 void EndSearchableCombo() { ImGui::EndCombo(); }
 }
+float* GetPickerScrollPosition(const char*) { static float scrollY = 0; return &scrollY; }
 EDITOR
 void check(bool condition, const char* message) {
     if (!condition) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
