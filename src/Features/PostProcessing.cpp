@@ -642,9 +642,11 @@ void PostProcessing::CompileCopyShaders()
 void PostProcessing::ClearShaderCache()
 {
 	CompileCopyShaders();
-	for (auto& pipe : pipeline) {
-		if (pipe)
-			pipe->ClearShaderCache();
+	for (size_t i = 0; i < pipeline.size(); ++i) {
+		if (pipeline[i])
+			pipeline[i]->ClearShaderCache();
+		if (alternatePipeline.effects[i] && alternatePipeline.effects[i] != pipeline[i])
+			alternatePipeline.effects[i]->ClearShaderCache();
 	}
 }
 
@@ -654,6 +656,8 @@ void PostProcessing::SetupResources()
 	postProcessingOutput = nullptr;
 	json activeSettings;
 	SaveActiveSettings(activeSettings);
+	alternatePipeline = {};
+	D3D11_TEXTURE2D_DESC engineDesc{};
 
 	try {
 		{
@@ -666,6 +670,7 @@ void PostProcessing::SetupResources()
 			D3D11_TEXTURE2D_DESC texMainCopyDesc;
 			gameTexMain.texture->GetDesc(Util::AsW32(&texMainDesc));
 			gameTexMainCopy.texture->GetDesc(Util::AsW32(&texMainCopyDesc));
+			engineDesc = texMainCopyDesc;
 			pipelineTextureDesc = texMainCopyDesc;
 			inputProvider = Feature::FindLoadedFeature([&](Feature* feature) {
 				const auto input = feature->GetPostProcessingInput();
@@ -705,21 +710,7 @@ void PostProcessing::SetupResources()
 		}
 
 		{
-			auto desc = pipelineTextureDesc;
-			desc.MipLevels = 1;
-			desc.MiscFlags = 0;
-			desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-			texInput = std::make_unique<Texture2D>(desc, "PostProcessing::Linear Input");
-			texInput->CreateSRV({ .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
-			texInput->CreateRTV({ .Format = desc.Format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
 			copyCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<CopyCB>(), "PostProcessing::Copy Constants");
-			texOutput = nullptr;
-			if (inputProvider) {
-				texOutput = std::make_unique<Texture2D>(desc, "PostProcessing::Output");
-				texOutput->CreateSRV({ .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
-				texOutput->CreateRTV({ .Format = desc.Format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
-			}
 			D3D11_SAMPLER_DESC samplerDesc{};
 			samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 			samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -732,28 +723,12 @@ void PostProcessing::SetupResources()
 
 		CompileCopyShaders();
 
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_shared<LocalExposure>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] = std::make_shared<HistogramAutoExposure>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] = std::make_shared<ColorGrading>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)] = std::make_shared<LUT>();
-
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_shared<MotionBlur>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_shared<DoF>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_shared<PhysicalGlare>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_shared<CODBloom>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_shared<LensFlare>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_shared<Composite>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_shared<Vignette>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_shared<Camera>();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_shared<Border>();
-
-		RestorePipelineDefaultEnablement();
-
-		for (auto& pipe : pipeline) {
-			if (pipe) {
-				pipe->owner = this;
-				pipe->SetupResources();
-			}
+		CreatePipelineResources(false);
+		if (pipelineTextureDesc.Width != engineDesc.Width || pipelineTextureDesc.Height != engineDesc.Height) {
+			SwapPipelineResources();
+			pipelineTextureDesc = engineDesc;
+			CreatePipelineResources(true);
+			SwapPipelineResources();
 		}
 
 		bokehResources.Setup();
@@ -771,6 +746,7 @@ void PostProcessing::SetupResources()
 			pendingSettings = std::move(activeSettings);
 		}
 		pipeline.fill(nullptr);
+		alternatePipeline = {};
 		texCopyMain = nullptr;
 		texCopyMainCopy = nullptr;
 		texInput = nullptr;
@@ -781,6 +757,81 @@ void PostProcessing::SetupResources()
 		copyPS = nullptr;
 		logger::error("Post Processing resource setup failed; using the game pipeline: {}", e.what());
 	}
+}
+
+void PostProcessing::CreatePipelineResources(bool fallback)
+{
+	auto desc = pipelineTextureDesc;
+	desc.MipLevels = 1;
+	desc.MiscFlags = 0;
+	desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+	texInput = std::make_unique<Texture2D>(desc, "PostProcessing::Linear Input");
+	texInput->CreateSRV({ .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
+	texInput->CreateRTV({ .Format = desc.Format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
+	texOutput = nullptr;
+	if (inputProvider && !fallback) {
+		texOutput = std::make_unique<Texture2D>(desc, "PostProcessing::Output");
+		texOutput->CreateSRV({ .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
+		texOutput->CreateRTV({ .Format = desc.Format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
+	}
+
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_shared<LocalExposure>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] = fallback ? alternatePipeline.effects[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] : std::make_shared<HistogramAutoExposure>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] = fallback ? alternatePipeline.effects[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] : std::make_shared<ColorGrading>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)] = std::make_shared<LUT>();
+
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_shared<MotionBlur>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_shared<DoF>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_shared<PhysicalGlare>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_shared<CODBloom>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_shared<LensFlare>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_shared<Composite>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_shared<Vignette>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_shared<Camera>();
+	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_shared<Border>();
+
+	RestorePipelineDefaultEnablement();
+
+	for (size_t i = 0; i < pipeline.size(); ++i) {
+		auto& pipe = pipeline[i];
+		if (pipe && (!fallback || pipe != alternatePipeline.effects[i])) {
+			pipe->owner = this;
+			pipe->SetupResources();
+		}
+	}
+}
+
+void PostProcessing::SwapPipelineResources()
+{
+	pipeline.swap(alternatePipeline.effects);
+	texInput.swap(alternatePipeline.input);
+	texOutput.swap(alternatePipeline.output);
+	std::swap(pipelineTextureDesc, alternatePipeline.desc);
+}
+
+bool PostProcessing::SelectPipelineResources(ID3D11Texture2D* texture)
+{
+	D3D11_TEXTURE2D_DESC desc;
+	texture->GetDesc(&desc);
+	if (desc.Width == pipelineTextureDesc.Width && desc.Height == pipelineTextureDesc.Height)
+		return true;
+	if (desc.Width != alternatePipeline.desc.Width || desc.Height != alternatePipeline.desc.Height)
+		return false;
+
+	for (size_t i = 0; i < pipeline.size(); ++i) {
+		auto& current = pipeline[i];
+		auto& next = alternatePipeline.effects[i];
+		if (current && next && current != next) {
+			json featureSettings;
+			current->SaveSettings(featureSettings);
+			next->LoadSettings(featureSettings);
+			next->enabled = current->enabled;
+			next->Reset();
+		}
+	}
+	SwapPipelineResources();
+	return true;
 }
 
 void PostProcessing::Reset()
@@ -948,6 +999,8 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_o
 	const bool hasInput = input.texture && input.srv;
 	if (hasInput)
 		lastTexColor = { input.texture, input.srv };
+	if (!SelectPipelineResources(lastTexColor.tex))
+		return;
 	BeginLinearProcessing(lastTexColor, !inMainLoadingMenu);
 	auto gameTexMainAlt = useMainCopy ? gameTexMainRT : gameTexMainCopyRT;
 

@@ -23,6 +23,10 @@ class PostProcessingLifecycleTests(unittest.TestCase):
             "bool PostProcessing::ApplyPendingSettings(",
             "void PostProcessing::RestorePipelineDefaultEnablement(",
             "void PostProcessing::SetupResources(",
+            "void PostProcessing::ClearShaderCache(",
+            "void PostProcessing::CreatePipelineResources(",
+            "void PostProcessing::SwapPipelineResources(",
+            "bool PostProcessing::SelectPipelineResources(",
             "void PostProcessing::Reset(",
         ))
         source = r'''
@@ -40,7 +44,7 @@ template<class... T> void debug(T&&...) {}
 template<class... T> void warn(T&&...) {}
 template<class... T> void error(T&&...) {}
 }
-enum class SetupFailure { None, Texture, Sampler, Effect };
+enum class SetupFailure { None, Texture, Sampler, Effect, FallbackTexture, FallbackEffect };
 SetupFailure setupFailure = SetupFailure::None;
 namespace DX {
 struct com_exception : std::runtime_error { com_exception() : std::runtime_error("Injected Direct3D failure") {} };
@@ -53,11 +57,19 @@ struct D3D11_SHADER_RESOURCE_VIEW_DESC { int Format, ViewDimension; struct { int
 constexpr int D3D11_BIND_RENDER_TARGET = 1, D3D11_BIND_SHADER_RESOURCE = 2;
 constexpr int D3D11_RTV_DIMENSION_TEXTURE2D = 1, D3D11_SRV_DIMENSION_TEXTURE2D = 1;
 constexpr int DXGI_FORMAT_R16G16B16A16_FLOAT = 2;
-struct Resource { void GetDesc(D3D11_TEXTURE2D_DESC* desc) { *desc = {}; } } resource;
+struct ID3D11Texture2D {
+    D3D11_TEXTURE2D_DESC desc;
+    void GetDesc(D3D11_TEXTURE2D_DESC* result) { *result = desc; }
+};
+using Resource = ID3D11Texture2D;
+Resource resource;
+int textureAllocations = 0;
 struct Texture2D {
     D3D11_TEXTURE2D_DESC desc;
     Texture2D(D3D11_TEXTURE2D_DESC value, const char* name) : desc(value) {
-        if (setupFailure == SetupFailure::Texture && std::string(name) == "PostProcessing::Output")
+        ++textureAllocations;
+        if ((setupFailure == SetupFailure::Texture && std::string(name) == "PostProcessing::Output") ||
+            (setupFailure == SetupFailure::FallbackTexture && value.Width == 1920 && std::string(name) == "PostProcessing::Linear Input"))
             throw DX::com_exception{};
     }
     void CreateRTV(D3D11_RENDER_TARGET_VIEW_DESC) {}
@@ -101,16 +113,20 @@ template<class T> T* AsW32(T* value) { return value; }
 void RequestTargetLockAPI() {}
 void SetResourceName(Sampler*, const char*) {}
 }
+struct PostProcessing;
 struct Effect {
     virtual ~Effect() = default;
     virtual std::string GetType() const = 0;
     bool enabled = true;
-    void* owner = nullptr;
+    PostProcessing* owner = nullptr;
+    D3D11_TEXTURE2D_DESC outputDesc;
+    int setupCalls = 0, shaderClears = 0;
     json settings = {{"currentTonemapper", "GT7"}, {"strength", 1.0}};
     bool IsAutoEnabled() const { return false; }
     void LoadSettings(json& value) { settings = value; }
     void SaveSettings(json& value) { value = settings; }
-    void SetupResources() { if (setupFailure == SetupFailure::Effect) throw DX::com_exception{}; }
+    void SetupResources();
+    void ClearShaderCache() { ++shaderClears; }
     void Reset() {}
 };
 struct PostProcessing : Feature {
@@ -142,8 +158,23 @@ struct PostProcessing : Feature {
     void SaveActiveSettings(json&);
     bool ApplyPendingSettings();
     void SetupResources();
+    void ClearShaderCache();
+    void CreatePipelineResources(bool);
+    void SwapPipelineResources();
+    bool SelectPipelineResources(ID3D11Texture2D*);
+    struct PipelineResources {
+        decltype(pipeline) effects;
+        std::unique_ptr<Texture2D> input, output;
+        D3D11_TEXTURE2D_DESC desc{.Width = 0, .Height = 0};
+    } alternatePipeline;
     void Reset();
 };
+void Effect::SetupResources() {
+    ++setupCalls;
+    outputDesc = owner->pipelineTextureDesc;
+    if (setupFailure == SetupFailure::Effect || (setupFailure == SetupFailure::FallbackEffect && outputDesc.Width == 1920))
+        throw DX::com_exception{};
+}
 template<PostProcessing::FeaturePipelineIndex Index> struct PipelineEffect : Effect {
     std::string GetType() const override { return std::to_string(static_cast<int>(Index)); }
 };
@@ -208,7 +239,40 @@ int main() {
     check(pp.texInput->desc.Width == 2880 && pp.texOutput->desc.Width == 2880,
           "Input decoding and output conversion use the replacement resolution");
     check(pp.texCopyMain->desc.Width == 1920, "Engine copy fallback retains the engine resolution");
-    for (auto failure : {SetupFailure::Texture, SetupFailure::Sampler, SetupFailure::Effect}) {
+    const int allocationsBeforeSwitch = textureAllocations;
+    auto fullInput = pp.texInput.get();
+    auto fullBloom = pp.pipeline[bloomIndex];
+    auto sharedGrading = pp.pipeline[gradingIndex];
+    auto sharedExposure = pp.pipeline[static_cast<size_t>(PostProcessing::FeaturePipelineIndex::AutoExposure)];
+    check(pp.SelectPipelineResources(&resource), "Fallback selects matching cached resources");
+    check(pp.texInput->desc.Width == 1920 && pp.pipelineTextureDesc.Width == 1920 && !pp.texOutput,
+          "Fallback input and effect resolution remain at engine size");
+    check(pp.pipeline[gradingIndex] == sharedGrading &&
+          pp.pipeline[static_cast<size_t>(PostProcessing::FeaturePipelineIndex::AutoExposure)] == sharedExposure,
+          "Resolution switches preserve tonemapper shaders and exposure history");
+    for (size_t i = 0; i < pp.pipeline.size(); ++i) {
+        if (pp.pipeline[i] != pp.alternatePipeline.effects[i])
+            check(pp.pipeline[i]->outputDesc.Width == 1920 && pp.pipeline[i]->outputDesc.Height == 1080,
+                  "Fallback effect setup uses engine dimensions");
+        check(pp.pipeline[i]->setupCalls == 1, "Shared effects are initialized once");
+    }
+    check(pp.pipeline[bloomIndex] != fullBloom && pp.pipeline[bloomIndex]->settings == fullBloom->settings,
+          "Fallback has separate effect targets with the active settings");
+    pp.pipeline[bloomIndex]->settings["strength"] = 0.6;
+    auto fallbackInput = pp.texInput.get();
+    check(pp.SelectPipelineResources(&resource) && pp.texInput.get() == fallbackInput,
+          "Stable fallback reuses its resources");
+    Resource display{{.Width = 2880, .Height = 1620}};
+    check(pp.SelectPipelineResources(&display) && pp.texInput.get() == fullInput && pp.pipeline[bloomIndex] == fullBloom,
+          "Returning to provider input reuses display-sized resources");
+    check(pp.pipeline[bloomIndex]->settings["strength"] == 0.6, "Edits survive resolution switches");
+    check(textureAllocations == allocationsBeforeSwitch, "Resolution switches do not allocate textures");
+    pp.ClearShaderCache();
+    for (size_t i = 0; i < pp.pipeline.size(); ++i) {
+        check(pp.pipeline[i]->shaderClears == 1 && pp.alternatePipeline.effects[i]->shaderClears == 1,
+              "Shader reload reaches both resolutions without recompiling shared effects twice");
+    }
+    for (auto failure : {SetupFailure::Texture, SetupFailure::Sampler, SetupFailure::Effect, SetupFailure::FallbackTexture, SetupFailure::FallbackEffect}) {
         for (bool queuedUpdate : {false, true}) {
             json expected;
             pp.SaveSettings(expected);
@@ -225,6 +289,9 @@ int main() {
                   "Failed setup releases partial resources");
             for (auto& effect : pp.pipeline)
                 check(!effect, "Failed setup releases partial effects");
+            for (auto& effect : pp.alternatePipeline.effects)
+                check(!effect, "Failed setup releases cached effects");
+            check(!pp.alternatePipeline.input && !pp.alternatePipeline.output, "Failed setup releases cached textures");
             check(!pp.ApplyPendingSettings(), "Unavailable effects cannot consume saved settings");
             json saved;
             pp.SaveSettings(saved);
@@ -358,26 +425,66 @@ int main() {
         source = source.replace("TONEMAP", braced(implementation, "void PerfMode::RenderTonemapWithSwap("))
         self.compile_and_run(source)
 
-    def test_pipeline_preserves_display_resolution_and_disabled_effects(self):
+    def test_pipeline_preserves_input_resolution_without_resampling(self):
         implementation = (ROOT / "src/Features/PostProcessing.cpp").read_text(encoding="utf-8")
         header = (ROOT / "src/Features/PostProcessing.h").read_text(encoding="utf-8")
+        methods = "\n".join(braced(implementation, declaration) for declaration in (
+            "void PostProcessing::PreProcess(",
+            "void PostProcessing::BeginLinearProcessing(",
+            "void PostProcessing::DrawCopy(",
+            "void PostProcessing::CopyToRenderTarget(",
+            "void PostProcessing::SwapPipelineResources(",
+            "bool PostProcessing::SelectPipelineResources(",
+            "bool PostProcessing::WantsTonemapOwnership(",
+        ))
         source = r'''
 #include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <utility>
 #define CS_GPU_PASS(name)
-struct ID3D11Texture2D { unsigned width, height; };
+using json = int;
+void check(bool value, const char* message) {
+    if (!value) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
+}
+struct D3D11_TEXTURE2D_DESC { unsigned Width = 0, Height = 0, Format = 1; };
+struct ID3D11Texture2D {
+    D3D11_TEXTURE2D_DESC desc;
+    void GetDesc(D3D11_TEXTURE2D_DESC* result) { *result = desc; }
+};
 struct ID3D11ShaderResourceView { ID3D11Texture2D* texture; };
-template<class T> struct View { T* value; T* get() const { return value; } };
-struct Texture2D { View<ID3D11ShaderResourceView> srv; };
-namespace Util { template<class T> T* AsReal(T* value) { return value; } }
+struct ID3D11RenderTargetView { ID3D11Texture2D* texture; };
+struct ID3D11SamplerState {} sampler;
+struct ID3D11Buffer {} buffer;
+template<class T> struct View {
+    T* value = nullptr;
+    T* get() const { return value; }
+    explicit operator bool() const { return value != nullptr; }
+};
+struct Texture2D {
+    D3D11_TEXTURE2D_DESC desc;
+    ID3D11Texture2D storage;
+    ID3D11ShaderResourceView srvStorage;
+    ID3D11RenderTargetView rtvStorage;
+    View<ID3D11Texture2D> resource;
+    View<ID3D11ShaderResourceView> srv;
+    View<ID3D11RenderTargetView> rtv;
+    Texture2D(unsigned width, unsigned height) : desc{width, height}, storage{desc},
+        srvStorage{&storage}, rtvStorage{&storage}, resource{&storage}, srv{&srvStorage}, rtv{&rtvStorage} {}
+};
+namespace Util {
+template<class T> T* AsReal(T* value) { return value; }
+template<class T> T* AsW32(T* value) { return value; }
+}
 namespace RE {
 using RENDER_TARGET = int;
 namespace RENDER_TARGETS { enum { kMAIN, kMAIN_COPY }; }
-namespace BSGraphics { struct ShaderFlags { enum { DIRTY_RENDERTARGET }; }; }
+namespace BSGraphics {
+struct ShaderFlags { enum { DIRTY_RENDERTARGET }; };
+struct RenderTargetData { ID3D11Texture2D* texture; ID3D11ShaderResourceView* SRV; };
 }
-struct Target { ID3D11Texture2D* texture; ID3D11ShaderResourceView* SRV; };
+}
 struct State {
     enum class TonemapOwner { kPostProcessing, kEffects11, kVanilla } owner = TonemapOwner::kPostProcessing;
     bool menu = false;
@@ -385,11 +492,17 @@ struct State {
     TonemapOwner GetTonemapOwner() { return owner; }
     void SetOutputRenderTarget(int) {}
 };
+unsigned resample = 0;
+int copies = 0, rasterDraws = 0, resamples = 0;
+struct ConstantBuffer {
+    template<class T> void Update(const T& data) { resample = data.resample; }
+    ID3D11Buffer* CB() { return &buffer; }
+};
 namespace globals {
 State storage; auto* state = &storage;
 namespace game {
 struct Renderer {
-    struct Data { std::array<Target, 2> renderTargets; } data;
+    struct Data { std::array<RE::BSGraphics::RenderTargetData, 2> renderTargets; } data;
     Data& GetRuntimeData() { return data; }
 } rendererStorage;
 auto* renderer = &rendererStorage;
@@ -397,7 +510,19 @@ struct Flags { void set(int) {} } flags;
 auto* stateUpdateFlags = &flags;
 }
 namespace d3d {
-struct Context { void OMSetRenderTargets(int, void*, void*) {} } storage;
+struct Context {
+    ID3D11ShaderResourceView* input = nullptr;
+    ID3D11RenderTargetView* output = nullptr;
+    void OMSetRenderTargets(int, void*, void*) {}
+    void PSSetConstantBuffers(int, int, ID3D11Buffer**) {}
+    void PSSetSamplers(int, int, ID3D11SamplerState**) {}
+    void PSSetShaderResources(int, int, ID3D11ShaderResourceView** srv) { input = *srv; }
+    void CopySubresourceRegion(ID3D11Texture2D* dst, int, int, int, int, ID3D11Texture2D* src, int, void*) {
+        check(dst->desc.Width == src->desc.Width && dst->desc.Height == src->desc.Height,
+              "Raw copies require matching dimensions");
+        ++copies;
+    }
+} storage;
 auto* context = &storage;
 }
 namespace features {
@@ -409,16 +534,41 @@ struct LinearLighting {
 } linearLighting;
 }
 }
+namespace PostProcessingRaster {
+struct RasterPass {
+    globals::d3d::Context* context;
+    RasterPass(globals::d3d::Context* value) : context(value) {}
+    void SetTargets(std::initializer_list<ID3D11RenderTargetView*> targets, float width, float height) {
+        context->output = *targets.begin();
+        check(width == context->output->texture->desc.Width && height == context->output->texture->desc.Height,
+              "Copy viewport matches its target");
+    }
+    void SetShaders(int*, int*) {}
+    void Draw() {
+        const auto& src = context->input->texture->desc;
+        const auto& dst = context->output->texture->desc;
+        check(bool(resample) == (src.Width != dst.Width || src.Height != dst.Height),
+              "Copy constants reflect actual source and target dimensions");
+        ++rasterDraws;
+        resamples += resample != 0;
+    }
+};
+}
 struct PostProcessFeature {
     enum class Gamut { Rec709, ACEScg, Rec2020 };
     struct TextureInfo { ID3D11Texture2D* tex; ID3D11ShaderResourceView* srv; Gamut gamut = Gamut::Rec709; };
     bool enabled = true;
+    int settings = 1;
+    std::unique_ptr<Texture2D> output;
     bool IsAutoEnabled() { return false; }
     void UpdateAutoEnabled() {}
     bool IsActive() { return enabled; }
     bool DrawAfterColorGrading() { return false; }
     bool DisableInMainLoadingMenu() { return false; }
     bool DrawBeforeUpscaling() { return false; }
+    void SaveSettings(json& value) { value = settings; }
+    void LoadSettings(json value) { settings = value; }
+    void Reset() {}
 };
 struct ColorGrading : PostProcessFeature {
     struct Settings { bool enableTonemap = true; } settings;
@@ -433,84 +583,107 @@ struct Feature {
 struct PostProcessing : Feature {
     using Gamut = PostProcessFeature::Gamut;
     enum class FeaturePipelineIndex { ColorGrading };
-    struct CopyCB { Gamut inputGamut = Gamut::Rec709, outputGamut = Gamut::Rec709; float gamma = 1; };
+    struct CopyCB { Gamut inputGamut = Gamut::Rec709, outputGamut = Gamut::Rec709; float gamma = 1; unsigned resample = 0; };
     static constexpr float kLegacySceneGamma = 1.6f;
-    bool bypass = false, fullscreenVS = true, copyPS = true, isrefraction = false;
-    bool resourcesReady = true;
+    bool bypass = false, isrefraction = false, resourcesReady = true;
+    int shader = 0;
+    View<int> fullscreenVS{&shader}, copyPS{&shader};
+    View<ID3D11SamplerState> copySampler{&sampler};
+    std::unique_ptr<ConstantBuffer> copyCB = std::make_unique<ConstantBuffer>();
     PIPELINE_READY
     struct Settings { int DisableVanillaTonemapping = 1; } settings;
     bool WantsTonemapOwnership() const;
     Feature* inputProvider = nullptr;
     ID3D11ShaderResourceView* postProcessingOutput = nullptr;
-    std::unique_ptr<Texture2D> texCopyMain, texCopyMainCopy, texOutput;
+    std::unique_ptr<Texture2D> texCopyMain, texCopyMainCopy, texInput, texOutput;
     std::array<std::shared_ptr<PostProcessFeature>, 2> pipeline;
+    D3D11_TEXTURE2D_DESC pipelineTextureDesc{2880, 1620};
+    struct PipelineResources {
+        decltype(pipeline) effects;
+        std::unique_ptr<Texture2D> input, output;
+        D3D11_TEXTURE2D_DESC desc{1920, 1080};
+    } alternatePipeline;
     ColorGrading grading;
-    ID3D11Texture2D* seenInput = nullptr;
-    int draws = 0, copies = 0, conversions = 0;
+    int draws = 0;
     bool IsTonemapOwnedByEffects11() { return globals::state->owner == State::TonemapOwner::kEffects11; }
     template<class T> const T* GetPipelineFeature(FeaturePipelineIndex) const { return &grading; }
-    void BeginLinearProcessing(PostProcessFeature::TextureInfo& input, bool = true) { seenInput = input.tex; }
-    void DrawFeature(PostProcessFeature&, PostProcessFeature::TextureInfo&) { ++draws; }
-    void CopyToRenderTarget(Target&, Texture2D*, ID3D11Texture2D*, ID3D11ShaderResourceView*, const CopyCB&) { ++copies; }
-    void DrawCopy(Texture2D&, ID3D11Texture2D*, ID3D11ShaderResourceView*, CopyCB) { ++conversions; }
+    void DrawFeature(PostProcessFeature& effect, PostProcessFeature::TextureInfo& input) {
+        check(effect.enabled, "Disabled effects never draw");
+        check(effect.output->desc.Width == input.tex->desc.Width && effect.output->desc.Height == input.tex->desc.Height,
+              "Effects consume and produce the same resolution");
+        check(effect.output->desc.Width == pipelineTextureDesc.Width, "Effects match the active pipeline descriptor");
+        input.tex = effect.output->resource.get();
+        input.srv = effect.output->srv.get();
+        ++draws;
+    }
+    void BeginLinearProcessing(PostProcessFeature::TextureInfo&, bool = true);
+    void CopyToRenderTarget(RE::BSGraphics::RenderTargetData&, Texture2D*, ID3D11Texture2D*, ID3D11ShaderResourceView*, const CopyCB&);
+    void DrawCopy(Texture2D&, ID3D11Texture2D*, ID3D11ShaderResourceView*, CopyCB);
+    bool SelectPipelineResources(ID3D11Texture2D*);
+    void SwapPipelineResources();
     void PreProcess(int, int);
 };
-PIPELINE
-TONEMAP_OWNERSHIP
-void check(bool value, const char* message) {
-    if (!value) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
-}
+METHODS
 int main() {
-    ID3D11Texture2D render{1920, 1080}, display{2880, 1620}, converted{2880, 1620};
-    ID3D11ShaderResourceView renderSRV{&render}, displaySRV{&display}, convertedSRV{&converted};
-    globals::game::renderer->data.renderTargets = {{{&render, &renderSRV}, {&render, &renderSRV}}};
+    Texture2D render(1920, 1080), renderCopy(1920, 1080), display(2880, 1620);
+    globals::game::renderer->data.renderTargets = {{{render.resource.get(), render.srv.get()}, {renderCopy.resource.get(), renderCopy.srv.get()}}};
     Feature provider;
-    provider.input = {&display, &displaySRV};
     PostProcessing pp;
     pp.inputProvider = &provider;
-    pp.texOutput = std::make_unique<Texture2D>(Texture2D{{&convertedSRV}});
-    pp.pipeline[0] = std::make_shared<PostProcessFeature>();
-    pp.pipeline[1] = std::make_shared<PostProcessFeature>();
-    pp.pipeline[1]->enabled = false;
-    for (bool refraction : {false, true}) {
-        pp.isrefraction = refraction;
-        pp.PreProcess(refraction ? RE::RENDER_TARGETS::kMAIN_COPY : RE::RENDER_TARGETS::kMAIN, 0);
-        check(pp.seenInput == &display, "Effects consume the reconstructed display image, including refraction");
-        check(pp.postProcessingOutput == &displaySRV, "Tonemap receives the display-sized output");
-        check(pp.copies == 0 && pp.conversions == 0, "Completed output never passes through reduced engine targets");
+    pp.texInput = std::make_unique<Texture2D>(2880, 1620);
+    pp.texOutput = std::make_unique<Texture2D>(2880, 1620);
+    pp.alternatePipeline.input = std::make_unique<Texture2D>(1920, 1080);
+    pp.texCopyMain = std::make_unique<Texture2D>(1920, 1080);
+    for (auto* effects : {&pp.pipeline, &pp.alternatePipeline.effects}) {
+        const bool full = effects == &pp.pipeline;
+        for (auto& effect : *effects) {
+            effect = std::make_shared<PostProcessFeature>();
+            effect->output = std::make_unique<Texture2D>(full ? 2880 : 1920, full ? 1620 : 1080);
+        }
+        (*effects)[1]->enabled = false;
     }
-    check(pp.draws == 2, "Disabled effects never draw");
-    globals::state->owner = State::TonemapOwner::kVanilla;
-    globals::features::linearLighting.active = false;
-    pp.PreProcess(0, 0);
-    check(pp.postProcessingOutput == &convertedSRV && pp.conversions == 1 && pp.copies == 0,
-          "Vanilla tonemap encoding stays at display resolution");
-    provider.input = {};
-    pp.PreProcess(0, 0);
-    check(pp.seenInput == &render && pp.copies == 2 && !pp.postProcessingOutput,
-          "Inactive replacement input uses the engine path without publishing a reduced scene");
-    provider.input = {&display, &displaySRV};
-    pp.PreProcess(0, 0);
+    for (bool providerActive : {true, false, false, true})
+    for (bool linear : {true, false})
+    for (bool menu : {false, true})
+    for (bool refraction : {false, true})
+    for (auto owner : {State::TonemapOwner::kPostProcessing, State::TonemapOwner::kVanilla}) {
+        provider.input = providerActive ? Feature::PostProcessingInput{display.resource.get(), display.srv.get()} : Feature::PostProcessingInput{};
+        globals::features::linearLighting.active = linear;
+        globals::state->owner = owner;
+        globals::state->menu = menu;
+        pp.isrefraction = refraction;
+        pp.draws = copies = rasterDraws = resamples = 0;
+        pp.PreProcess(refraction ? RE::RENDER_TARGETS::kMAIN_COPY : RE::RENDER_TARGETS::kMAIN, 0);
+        check(resamples == 0, "Neither provider nor fallback processing resamples the scene");
+        check(pp.draws == 1, "Only the enabled effect draws");
+        check(pp.pipelineTextureDesc.Width == (providerActive ? 2880u : 1920u), "Pipeline follows the actual input");
+        if (providerActive) {
+            check(pp.postProcessingOutput && pp.postProcessingOutput->texture->desc.Width == 2880,
+                  "Provider publishes full-resolution output");
+            check(copies == 0, "Provider output avoids engine target copies");
+        } else {
+            check(!pp.postProcessingOutput && copies == 2, "Fallback uses only engine-sized targets");
+        }
+    }
     pp.bypass = true;
+    pp.postProcessingOutput = display.srv.get();
     pp.PreProcess(0, 0);
-    check(!pp.postProcessingOutput, "Bypass cannot expose stale processed output");
+    check(!pp.postProcessingOutput, "Bypass cannot publish stale output");
     pp.bypass = false;
     const auto drawsBeforeFailure = pp.draws;
     for (bool shadersReady : {false, true}) {
         pp.resourcesReady = false;
-        pp.fullscreenVS = pp.copyPS = shadersReady;
-        pp.postProcessingOutput = &displaySRV;
+        pp.fullscreenVS.value = pp.copyPS.value = shadersReady ? &pp.shader : nullptr;
+        pp.postProcessingOutput = display.srv.get();
         pp.PreProcess(0, 0);
         check(!pp.postProcessingOutput && pp.draws == drawsBeforeFailure,
-              "Recompiling shaders cannot enable a pipeline with failed resource setup");
+              "Shader recompilation cannot enable a pipeline with failed resource setup");
         check(!pp.WantsTonemapOwnership(), "Failed setup leaves tonemapping to the game pipeline");
     }
 }
 '''
         source = source.replace("PIPELINE_READY", braced(header, "bool IsPipelineReady("))
-        source = source.replace("PIPELINE", braced(implementation, "void PostProcessing::PreProcess("))
-        source = source.replace("TONEMAP_OWNERSHIP", braced(implementation, "bool PostProcessing::WantsTonemapOwnership("))
-        self.compile_and_run(source)
+        self.compile_and_run(source.replace("METHODS", methods))
 
 
 if __name__ == "__main__":

@@ -237,6 +237,16 @@ struct PostProcessing : Feature
 	};
 
 private:
+	struct PipelineResources
+	{
+		decltype(pipeline) effects;
+		std::unique_ptr<Texture2D> input;
+		std::unique_ptr<Texture2D> output;
+		D3D11_TEXTURE2D_DESC desc{};
+	} alternatePipeline;
+	void CreatePipelineResources(bool fallback);
+	void SwapPipelineResources();
+	bool SelectPipelineResources(ID3D11Texture2D* texture);
 	bool resourcesReady = false;
 	bool IsPipelineReady() const { return resourcesReady && fullscreenVS && copyPS; }
 	Feature* inputProvider = nullptr;

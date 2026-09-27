@@ -951,6 +951,17 @@ void ColorGrading::SetupResources()
 		texColor = std::make_unique<Texture2D>(texDesc, "Post Processing Color Grading Output");
 		texColor->CreateSRV(srvDesc);
 		texColor->CreateRTV(rtvDesc);
+		D3D11_TEXTURE2D_DESC engineDesc;
+		globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY].texture->GetDesc(Util::AsW32(&engineDesc));
+		texColorAlternate = nullptr;
+		if (texDesc.Width != engineDesc.Width || texDesc.Height != engineDesc.Height) {
+			auto fallbackDesc = texDesc;
+			fallbackDesc.Width = engineDesc.Width;
+			fallbackDesc.Height = engineDesc.Height;
+			texColorAlternate = std::make_unique<Texture2D>(fallbackDesc, "PostProcessing::Color Grading Fallback");
+			texColorAlternate->CreateSRV(srvDesc);
+			texColorAlternate->CreateRTV(rtvDesc);
+		}
 
 		D3D11_TEXTURE3D_DESC lutTexDesc = {
 			.Width = LUTDim,
@@ -1104,6 +1115,9 @@ PostProcessFeature::Gamut ColorGrading::GetDisplayGamut() const
 void ColorGrading::Draw(TextureInfo& inout_tex)
 {
 	auto context = globals::d3d::context;
+	const auto desc = owner->GetPipelineTextureDesc();
+	if (texColorAlternate && (texColor->desc.Width != desc.Width || texColor->desc.Height != desc.Height))
+		texColor.swap(texColorAlternate);
 
 	// Auto-switch to an HDR-capable tonemapper if current one doesn't support HDR.
 	// This runs every frame so the switch happens immediately when HDR is toggled,
