@@ -272,6 +272,8 @@ public:
 	virtual void Load() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
+	/** @brief Exposes the display-sized scene to post-processing through the shared feature contract. */
+	PostProcessingInput GetPostProcessingInput() const override;
 
 	UpscaleMethod GetUpscaleMethod() const;
 	FrameGenMethod GetFrameGenMethod() const;
