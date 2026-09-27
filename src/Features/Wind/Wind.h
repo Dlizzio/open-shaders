@@ -275,6 +275,7 @@ private:
 	void DrawTreeMeshRuleControls();
 	void DrawTreeMeshRulesTable();
 	void ResetGrassWindSettings();
+	void DrawGrassTransientSettings();
 	void DrawGrassWindSettings();
 	void SetupGrassWindResources();
 	void SetupTreeWindResources();
