@@ -107,7 +107,7 @@ static const float SunGlareOcclusionRadius = 0.02;
 float GetSunGlareVisibility(uint eyeIndex)
 {
 	if (SharedData::InInterior || SharedData::HideSky || SharedData::InMapMenu ||
-	    (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))
+		(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))
 		return 1.0;
 
 	float4 sunPosition = mul(FrameBuffer::CameraViewProj[eyeIndex], float4(SharedData::SunDirection.xyz, 0.0));
@@ -115,7 +115,8 @@ float GetSunGlareVisibility(uint eyeIndex)
 		return 1.0;
 	float2 sunUV = sunPosition.xy / sunPosition.w * float2(0.5, -0.5) + 0.5;
 	float visibility = 0.0;
-	[unroll] for (uint i = 0; i < SunGlareOcclusionSampleCount; ++i) {
+	[unroll] for (uint i = 0; i < SunGlareOcclusionSampleCount; ++i)
+	{
 		float2 sampleUV = sunUV + Random::PoissonSampleOffsets16[i] * SunGlareOcclusionRadius;
 		if (any(sampleUV <= 0.0) || any(sampleUV >= 1.0))
 			visibility += 1.0;
