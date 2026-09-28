@@ -517,7 +517,7 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 	if (shadowUpdateIdx == 0) {
 		float3 dirLightDir = currentSunDirection;
 		if (const auto celestialDirection = globals::features::skySync.GetCelestialLightDirection())
-			dirLightDir = { -celestialDirection->x, -celestialDirection->y, -celestialDirection->z };
+			dirLightDir = float3{ -celestialDirection->x, -celestialDirection->y, -celestialDirection->z };
 		else if (dirLightDir.z > 0)
 			dirLightDir = -dirLightDir;
 
