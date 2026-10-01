@@ -28,10 +28,12 @@ struct LinearLighting : Feature
 	{
 		uint enableLinearLighting = false;
 		uint enableACEScg = false;
+		float authoredColorGamma = 2.2f;
 
 		// Lighting multipliers
 		float ambientMult = 0.32f;
 		float vanillaDiffuseColorMult = 1.5f;
+		float vanillaSpecularResponseMult = 0.5f;
 	} settings;
 
 	struct alignas(16) PerFrameData
@@ -42,7 +44,8 @@ struct LinearLighting : Feature
 		float dirLightMult;
 		float authoredColorGamma;
 		float vanillaDiffuseColorMult;
-		float pad0[2];
+		float vanillaSpecularResponseMult;
+		float pad0;
 		RE::NiColor effectLightingColor;
 		float ambientMult;
 		RE::NiColor skyStaticsColor;
@@ -72,6 +75,7 @@ struct LinearLighting : Feature
 	RE::NiColor skyStaticsColor{ 1.0f, 1.0f, 1.0f };
 	RE::NiColor weatherEffectLightingSource{};
 	RE::NiColor weatherSkyStaticsSource{};
+	float weatherAuthoredColorGamma = 0.0f;
 	bool weatherLightingColorsInitialized = false;
 
 	/** @brief Draws the Linear Lighting controls and lighting multipliers. */
@@ -113,9 +117,10 @@ struct LinearLighting : Feature
 	/**
 	 * @brief Decodes an authored Skyrim color into linear sRGB.
 	 * @param inColor The input color in gamma space.
+	 * @param authoredColorGamma The exponent used to decode the authored color.
 	 * @return The color converted to linear space.
 	 */
-	static RE::NiColor DecodeAuthoredColor(RE::NiColor inColor);
+	static RE::NiColor DecodeAuthoredColor(RE::NiColor inColor, float authoredColorGamma);
 
 	/**
 	 * @brief Uploads emissive and projected material data during lighting geometry setup.

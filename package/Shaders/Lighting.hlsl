@@ -1753,7 +1753,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	lodLandColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
 #		endif
 
-	lodLandColor.xyz = Color::AuthoredColor(lodLandColor.xyz) * Color::VanillaDiffuseColorMult();
+	lodLandColor.xyz = Color::VanillaDiffuse(lodLandColor.xyz);
 #		if defined(LOD_BLENDING)
 	lodLandColor.xyz = pow(abs(lodLandColor.xyz), SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
 #		endif  // LOD_BLENDING
@@ -2682,6 +2682,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 diffuseColor = 0.0.xxx;
 	float3 specularColor = 0.0.xxx;
 	float3 transmissionColor = 0.0.xxx;
+	float wetnessSpecularCoverage = 0.0f;
+#	if defined(WETNESS_EFFECTS)
+	wetnessSpecularCoverage = saturate(wetnessGlossinessSpecular);
+#		if defined(CHARACTER_RAIN_SURFACE)
+	float characterReflectionWeight = 0.0f;
+	[branch] if (characterCoatMask > 0.0f)
+		characterReflectionWeight = CharacterRainSpots::GetCoatWeight(characterCoatMask, characterCoatIntensity);
+	wetnessSpecularCoverage = max(wetnessSpecularCoverage, characterReflectionWeight);
+#		endif
+#	elif defined(SIMPLE_TREE_WETNESS)
+	wetnessSpecularCoverage = treeWetness;
+#	endif
+	const float vanillaSpecularResponseMult = Color::VanillaSpecularResponseMult(wetnessSpecularCoverage);
 
 	float3 lightsDiffuseColor = 0.0.xxx;
 	float3 coatLightsDiffuseColor = 0.0.xxx;
@@ -2710,6 +2723,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float2 uvOriginal_ddx = ddx(uvOriginal);
 	float2 uvOriginal_ddy = ddy(uvOriginal);
 	EvaluateLighting(dirLightContext, material, tbnTr, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, dirLightOutput);
+	dirLightOutput.specular *= vanillaSpecularResponseMult;
 #	if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1)
 		EvaluateWetnessLighting(wetnessNormal, dirLightContext, waterRoughnessSpecular, dirLightOutput);
@@ -2780,6 +2794,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 #			endif
 		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, pointLightOutput);
+		pointLightOutput.specular *= vanillaSpecularResponseMult;
 #			if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1)
 			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
@@ -2986,6 +3001,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 #			endif
 		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, pointLightOutput);
+		pointLightOutput.specular *= vanillaSpecularResponseMult;
 #			if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1)
 			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
@@ -3266,7 +3282,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(VANILLA_FRESNEL)
 		if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion))
 #		endif
-			specularColor += envColor * Color::IrradianceToLinear(diffuseColor);
+			specularColor += envColor * Color::IrradianceToLinear(diffuseColor) * vanillaSpecularResponseMult;
 	indirectLobeWeights.diffuse += envColor;
 #	endif
 
@@ -3298,6 +3314,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	specularColor *= Color::PBRLightingScale;
 	indirectLobeWeights.diffuse *= Color::PBRLightingScale;
 #	endif
+
+	indirectLobeWeights.specular *= vanillaSpecularResponseMult;
 
 	float3 outputAlbedo = indirectLobeWeights.diffuse * vertexColor.xyz;
 
@@ -3558,7 +3576,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// One deferred lobe approximates the coat; filtered edges retain the underlying material response.
 	[branch] if (characterCoatMask > 0.0f)
 	{
-		float characterReflectionWeight = CharacterRainSpots::GetCoatWeight(characterCoatMask, characterCoatIntensity);
 		material.Roughness = lerp(material.Roughness, min(material.Roughness, characterSpotRoughness), characterReflectionWeight);
 		screenSpaceNormal = normalize(lerp(screenSpaceNormal,
 			FrameBuffer::WorldToView(characterSpotSurfaceNormal, false, eyeIndex), characterReflectionWeight));

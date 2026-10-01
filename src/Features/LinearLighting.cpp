@@ -14,6 +14,7 @@
 #endif
 #include "Globals.h"
 #include "Utils/Game.h"
+#include "Utils/MathUtils.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,14 +27,22 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
 	enableACEScg,
+	authoredColorGamma,
 	ambientMult,
-	vanillaDiffuseColorMult)
+	vanillaDiffuseColorMult,
+	vanillaSpecularResponseMult)
 
 namespace
 {
-	constexpr float kAuthoredColorGamma = 1.8f;
+	constexpr float kAuthoredColorGammaMin = 0.1f;
+	constexpr float kAuthoredColorGammaMax = 3.0f;
 	constexpr float kMultiplierMin = 0.0f;
 	constexpr float kMultiplierMax = 5.0f;
+
+	float ClampAuthoredColorGamma(float a_value)
+	{
+		return Util::ClampFiniteOrDefault(a_value, kAuthoredColorGammaMin, kAuthoredColorGammaMax, LinearLighting::Settings{}.authoredColorGamma);
+	}
 
 	float ClampFiniteOrDefault(float a_value, float a_default)
 	{
@@ -45,8 +54,10 @@ namespace
 	void SanitizeSettings(LinearLighting::Settings& a_settings)
 	{
 		const LinearLighting::Settings defaults{};
+		a_settings.authoredColorGamma = ClampAuthoredColorGamma(a_settings.authoredColorGamma);
 		a_settings.ambientMult = ClampFiniteOrDefault(a_settings.ambientMult, defaults.ambientMult);
 		a_settings.vanillaDiffuseColorMult = ClampFiniteOrDefault(a_settings.vanillaDiffuseColorMult, defaults.vanillaDiffuseColorMult);
+		a_settings.vanillaSpecularResponseMult = ClampFiniteOrDefault(a_settings.vanillaSpecularResponseMult, defaults.vanillaSpecularResponseMult);
 	}
 }
 
@@ -71,7 +82,9 @@ void LinearLighting::DrawSettings()
 							  "Requires Linear Lighting and Post Processing enabled.\n"
 							  "All sRGB-gamut textures and colors will be converted to ACEScg during shading."));
 
+	ImGui::SliderFloat(T(TKEY("authored_color_gamma"), "Authored Color Gamma"), &settings.authoredColorGamma, kAuthoredColorGammaMin, kAuthoredColorGammaMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat(T(TKEY("vanilla_diffuse_color_multiplier"), "Vanilla Diffuse Color Multiplier"), &settings.vanillaDiffuseColorMult, kMultiplierMin, kMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T(TKEY("vanilla_specular_response"), "Vanilla Specular Response"), &settings.vanillaSpecularResponseMult, kMultiplierMin, kMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat(T(TKEY("ambient_multiplier"), "Ambient Multiplier"), &settings.ambientMult, kMultiplierMin, kMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 }
 
@@ -290,13 +303,14 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.enableACEScg = settings.enableACEScg && data.enableLinearLighting && globals::features::postProcessing.loaded;
 	data.isDirLightLinear = isDirLightLinear;
 	data.dirLightMult = dirLightMult;
-	data.authoredColorGamma = kAuthoredColorGamma;
 
 	Settings sanitizedSettings = settings;
 	SanitizeSettings(sanitizedSettings);
+	data.authoredColorGamma = sanitizedSettings.authoredColorGamma;
 	data.vanillaDiffuseColorMult = sanitizedSettings.vanillaDiffuseColorMult;
+	data.vanillaSpecularResponseMult = sanitizedSettings.vanillaSpecularResponseMult;
 	data.ambientMult = sanitizedSettings.ambientMult;
-	if (data.enableLinearLighting && !weatherLightingColorsInitialized)
+	if (data.enableLinearLighting && (!weatherLightingColorsInitialized || data.authoredColorGamma != weatherAuthoredColorGamma))
 		OnWeatherColorsUpdated(globals::game::sky);
 	data.effectLightingColor = effectLightingColor;
 	data.skyStaticsColor = skyStaticsColor;
@@ -308,6 +322,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 		if (enb.enableEffect) {
 			data.ambientMult = 1.0f;
 			data.vanillaDiffuseColorMult = 1.0f;
+			data.vanillaSpecularResponseMult = 1.0f;
 			data.dirLightMult = 1.0f;
 		}
 	}
@@ -340,24 +355,27 @@ void LinearLighting::OnWeatherColorsUpdated(RE::Sky* a_sky)
 		a_sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kEffectLighting)];
 	const auto skyStaticsSource =
 		a_sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kSkyStatics)];
+	const float authoredColorGamma = ClampAuthoredColorGamma(settings.authoredColorGamma);
 	if (weatherLightingColorsInitialized &&
+		authoredColorGamma == weatherAuthoredColorGamma &&
 		effectLightingSource == weatherEffectLightingSource &&
 		skyStaticsSource == weatherSkyStaticsSource)
 		return;
 
 	weatherEffectLightingSource = effectLightingSource;
 	weatherSkyStaticsSource = skyStaticsSource;
-	effectLightingColor = DecodeAuthoredColor(effectLightingSource);
-	skyStaticsColor = DecodeAuthoredColor(skyStaticsSource);
+	weatherAuthoredColorGamma = authoredColorGamma;
+	effectLightingColor = DecodeAuthoredColor(effectLightingSource, authoredColorGamma);
+	skyStaticsColor = DecodeAuthoredColor(skyStaticsSource, authoredColorGamma);
 	weatherLightingColorsInitialized = true;
 }
 
-RE::NiColor LinearLighting::DecodeAuthoredColor(RE::NiColor inColor)
+RE::NiColor LinearLighting::DecodeAuthoredColor(RE::NiColor inColor, float authoredColorGamma)
 {
 	RE::NiColor outColor;
-	outColor.red = std::pow(inColor.red, kAuthoredColorGamma);
-	outColor.green = std::pow(inColor.green, kAuthoredColorGamma);
-	outColor.blue = std::pow(inColor.blue, kAuthoredColorGamma);
+	outColor.red = std::pow(inColor.red, authoredColorGamma);
+	outColor.green = std::pow(inColor.green, authoredColorGamma);
+	outColor.blue = std::pow(inColor.blue, authoredColorGamma);
 	return outColor;
 }
 

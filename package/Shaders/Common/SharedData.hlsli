@@ -355,7 +355,8 @@ namespace SharedData
 		float dirLightMult;
 		float authoredColorGamma;
 		float vanillaDiffuseColorMult;
-		float2 pad0;
+		float vanillaSpecularResponseMult;
+		float pad0;
 		float3 effectLightingColor;
 		float ambientMult;
 		float3 skyStaticsColor;

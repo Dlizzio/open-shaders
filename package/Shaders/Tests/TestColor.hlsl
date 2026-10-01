@@ -157,6 +157,52 @@
 }
 
 /// @tags color, lighting
+[numthreads(1, 1, 1)] void TestVanillaDiffuseReflectanceBounds() {
+	const float multipliers[6] = { 0.0f, 0.5f, 1.0f, 1.5f, 3.0f, 5.0f };
+	const float tolerance = 0.00001f;
+	for (int m = 0; m < 6; m++) {
+		float previous = 0.0f;
+		for (int i = 0; i <= 64; i++) {
+			float albedo = float(i) / 64.0f;
+			float3 result = Color::CompensateVanillaDiffuse(albedo.xxx, multipliers[m]);
+			ASSERT(IsTrue, all(result >= 0.0f) && all(result <= 1.0f + tolerance));
+			ASSERT(IsTrue, result.r >= previous - tolerance);
+			ASSERT(IsTrue, all(abs(result - result.r) < tolerance));
+			if (multipliers[m] <= 1.0f)
+				ASSERT(IsTrue, all(abs(result - albedo * multipliers[m]) < tolerance));
+			else {
+				ASSERT(IsTrue, result.r >= albedo - tolerance);
+				if (i == 64)
+					ASSERT(IsTrue, abs(result.r - 1.0f) < tolerance);
+			}
+			previous = result.r;
+		}
+	}
+}
+
+/// @tags color, lighting
+[numthreads(1, 1, 1)] void TestVanillaDiffuseShoulderContinuityAndHue() {
+	const float multipliers[3] = { 1.5f, 3.0f, 5.0f };
+	const float tolerance = 0.00001f;
+	const float step = 0.0001f;
+	const float3 color = float3(0.1f, 0.4f, 0.8f);
+	for (int m = 0; m < 3; m++) {
+		float multiplier = multipliers[m];
+		float knee = Color::VanillaDiffuseShoulderStart / multiplier;
+		float left = Color::CompensateVanillaDiffuse((knee - step).xxx, multiplier).r;
+		float center = Color::CompensateVanillaDiffuse(knee.xxx, multiplier).r;
+		float right = Color::CompensateVanillaDiffuse((knee + step).xxx, multiplier).r;
+		ASSERT(IsTrue, abs(center - Color::VanillaDiffuseShoulderStart) < tolerance);
+		ASSERT(IsTrue, abs((right - center) / step - (center - left) / step) < 0.02f);
+		ASSERT(IsTrue, all(abs(Color::CompensateVanillaDiffuse(0.05f.xxx, multiplier) - 0.05f * multiplier) < tolerance));
+		float3 result = Color::CompensateVanillaDiffuse(color, multiplier);
+		ASSERT(IsTrue, all(abs(result * color.b - color * result.b) < tolerance));
+		ASSERT(IsTrue, all(abs(Color::CompensateVanillaDiffuse(float3(2.0f, 1.0f, 0.5f), multiplier) - float3(2.0f, 1.0f, 0.5f)) < tolerance));
+	}
+	ASSERT(IsTrue, all(abs(Color::CompensateVanillaDiffuse(color, 1.00001f) - color) < tolerance));
+}
+
+/// @tags color, lighting
 [numthreads(1, 1, 1)] void TestDiffuseAndLight() {
 	float3 color = float3(0.5, 0.3, 0.7);
 

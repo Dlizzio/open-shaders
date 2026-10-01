@@ -41,6 +41,7 @@ namespace Color
 	static const uint MaxVanillaPointLightFlags = 8;
 	static const float MinAdjustedGamma = 0.1;
 	static const float MaxAdjustedGamma = 3.0;
+	static const float VanillaDiffuseShoulderStart = 0.5;
 
 	// Copyright 2019 Google LLC.
 	// SPDX-License-Identifier: Apache-2.0
@@ -171,6 +172,21 @@ namespace Color
 		return sign(color) * pow(abs(color), exponent);
 	}
 
+	/** @brief Applies diffuse gain with a hue-preserving shoulder anchored at unit reflectance. */
+	float3 CompensateVanillaDiffuse(float3 linearColor, float multiplier)
+	{
+		float peak = saturate(max(linearColor.r, max(linearColor.g, linearColor.b)));
+		float boostedPeak = peak * multiplier;
+		float gain = multiplier;
+		if (multiplier > 1.0 && boostedPeak > VanillaDiffuseShoulderStart) {
+			float shoulderRange = boostedPeak - VanillaDiffuseShoulderStart;
+			float compression = (multiplier - 1.0) / ((1.0 - VanillaDiffuseShoulderStart) * (multiplier - VanillaDiffuseShoulderStart));
+			float compensatedPeak = VanillaDiffuseShoulderStart + shoulderRange / (1.0 + compression * shoulderRange);
+			gain = compensatedPeak / peak;
+		}
+		return linearColor * gain;
+	}
+
 	float3 GammaToLinearSafe(float3 color)
 	{
 		return SignedPow(color, 2.2);
@@ -284,6 +300,12 @@ namespace Color
 		return ENABLE_LL ? GamutTransform(color) : color;
 	}
 
+	/** @brief Decodes and compensates authored vanilla albedo before converting to the working gamut. */
+	float3 VanillaDiffuse(float3 color)
+	{
+		return ENABLE_LL ? GamutTransform(CompensateVanillaDiffuse(AuthoredGammaToLinear(color), SharedData::linearLightingSettings.vanillaDiffuseColorMult)) : color;
+	}
+
 	float3 Diffuse(float3 color)
 	{
 #	if defined(EFFECTS11)
@@ -294,7 +316,7 @@ namespace Color
 		// TRUE_PBR: input is already linear sRGB; gamut-convert only
 		return ENABLE_LL ? GamutTransform(color) : LinearToSrgb(color);
 #	else
-		return AuthoredColor(color) * (ENABLE_LL ? SharedData::linearLightingSettings.vanillaDiffuseColorMult : 1.0);
+		return VanillaDiffuse(color);
 #	endif
 	}
 
@@ -513,6 +535,16 @@ namespace Color
 	float VanillaDiffuseColorMult()
 	{
 		return ENABLE_LL ? SharedData::linearLightingSettings.vanillaDiffuseColorMult : 1.0f;
+	}
+
+	/** @brief Applies vanilla specular compensation only to the dry portion of a surface. */
+	float VanillaSpecularResponseMult(float wetnessCoverage = 0.0f)
+	{
+#	if defined(TRUE_PBR)
+		return 1.0f;
+#	else
+		return ENABLE_LL ? lerp(SharedData::linearLightingSettings.vanillaSpecularResponseMult, 1.0f, saturate(wetnessCoverage)) : 1.0f;
+#	endif
 	}
 #else
 	const static float PBRLightingScale = 1.0;
