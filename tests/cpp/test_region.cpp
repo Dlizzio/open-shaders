@@ -666,6 +666,44 @@ TEST_CASE("BoundsFromUV feeds PixelRegionFromBounds the same rect in pixels", "[
 	REQUIRE(fullFrame.h == kHeight);
 }
 
+TEST_CASE("SubrectFromUV truncates a UV rect to pixels", "[region][uv]")
+{
+	struct Case
+	{
+		UVRegion uv;
+		uint32_t width, height;
+		PixelRegion expected;
+	};
+	const std::array<Case, 9> cases{ {
+		{ { 0.25f, 0.25f, 0.25f, 0.25f }, 1080, 1200, { 270, 300, 270, 300 } },
+		{ { 0.25f, 0.25f, 0.25f, 0.25f }, 2064, 2208, { 516, 552, 516, 552 } },
+		{ { 0.0f, 1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f }, 1080, 1200, { 0, 400, 360, 400 } },
+		{ { 0.499f, 0.499f, 0.499f, 0.499f }, 2064, 2208, { 1029, 1101, 1029, 1101 } },
+		{ { 0.999f, 0.999f, 0.999f, 0.999f }, 1080, 1200, { 1078, 1198, 1078, 1198 } },
+		{ { 0.0005f, 0.0005f, 0.0005f, 0.0005f }, 1080, 1200, { 0, 0, 1, 1 } },
+		{ { 0.0005f, 0.0005f, 0.0005f, 0.0005f }, 2064, 2208, { 1, 1, 1, 1 } },
+		{ { 0.5f, 0.0f, 0.5f, 1.0f }, 2064, 2208, { 1032, 0, 1032, 2208 } },
+		{ { 0.1f, 0.2f, 0.3f, 0.7f }, 2064, 2208, { 206, 441, 619, 1545 } },
+	} };
+
+	for (const auto& testCase : cases) {
+		const auto actual = Util::Region::SubrectFromUV(testCase.uv, testCase.width, testCase.height);
+		REQUIRE(actual.x == testCase.expected.x);
+		REQUIRE(actual.y == testCase.expected.y);
+		REQUIRE(actual.w == testCase.expected.w);
+		REQUIRE(actual.h == testCase.expected.h);
+	}
+}
+
+TEST_CASE("SubrectFromUV returns the whole eye extent for a full-frame UV", "[region][uv]")
+{
+	const auto region = Util::Region::SubrectFromUV(UVRegion{}, 2064, 2208);
+	REQUIRE(region.x == 0u);
+	REQUIRE(region.y == 0u);
+	REQUIRE(region.w == 2064u);
+	REQUIRE(region.h == 2208u);
+}
+
 TEST_CASE("Intersect is the overlap of two crops", "[region][clip]")
 {
 	const auto overlap = Util::Region::Intersect(PixelRegion{ 0, 0, 100, 100 }, PixelRegion{ 50, 50, 100, 100 });
