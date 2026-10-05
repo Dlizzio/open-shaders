@@ -615,6 +615,7 @@
     "feature.effects11.preset_flag_off": "关闭",
     "feature.effects11.preset_flag_on": "开启",
     "feature.effects11.preset_flag_removed": "关闭（当前已启用）",
+    "feature.effects11.preset_game_root": "游戏根目录",
     "feature.effects11.preset_location": "预设位置",
     "feature.effects11.preset_missing": "（缺失） ",
     "feature.effects11.preset_none_selected": "（未选择）",

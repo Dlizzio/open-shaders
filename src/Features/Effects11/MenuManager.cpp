@@ -99,7 +99,8 @@ bool MenuManager::RenderPresetSelector()
 									 "No ENB preset found (checked game root, Data, and Data subfolders)."));
 		ImGui::PopStyleColor();
 	} else {
-		const std::string previewLabel = active ? active->label : (effects11.settings.presetLocation.empty() ? T("feature.effects11.preset_none_selected", "(none selected)") : T("feature.effects11.preset_missing", "(missing) ") + effects11.settings.presetLocation);
+		const std::string savedLocationLabel = effects11.settings.presetLocation == "." ? T("feature.effects11.preset_game_root", "Game root") : effects11.settings.presetLocation;
+		const std::string previewLabel = active ? active->label : (effects11.settings.presetLocation.empty() ? T("feature.effects11.preset_none_selected", "(none selected)") : T("feature.effects11.preset_missing", "(missing) ") + savedLocationLabel);
 		if (ImGui::BeginCombo(T("feature.effects11.preset_location", "Preset location"), previewLabel.c_str())) {
 			for (const auto& loc : locations) {
 				const bool isSelected = active && active->root == loc.root;

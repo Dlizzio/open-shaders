@@ -817,6 +817,7 @@
     "feature.effects11.preset_flag_off": "off",
     "feature.effects11.preset_flag_on": "on",
     "feature.effects11.preset_flag_removed": "off (active has it on)",
+    "feature.effects11.preset_game_root": "Game root",
     "feature.effects11.preset_location": "Preset location",
     "feature.effects11.preset_missing": "(missing) ",
     "feature.effects11.preset_none_selected": "(none selected)",

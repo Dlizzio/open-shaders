@@ -479,7 +479,6 @@ void Effects11Editor::DrawToolbar()
 	bool enabled = settingManager.GetValue<bool>(useEffectID);
 	if (ImGui::Checkbox(T(TKEY("enable_effects"), "Enable Effects 11"), &enabled)) {
 		settingManager.SetValue<bool>(useEffectID, enabled);
-		dirty = true;
 	}
 	{
 		const auto tip = I18n::GetSingleton()->Format(TKEY("enable_effects_tip"),
@@ -502,7 +501,7 @@ void Effects11Editor::DrawToolbar()
 	Util::AddTooltip(T(TKEY("shader_panel_tip"), "Show or hide the panel with the .fx shader parameters."));
 
 	const char* saveLabel = T(TKEY("save"), "Save");
-	if (dirty ? Util::SuccessButton(saveLabel) : ImGui::Button(saveLabel))
+	if (HasUnsavedChanges() ? Util::SuccessButton(saveLabel) : ImGui::Button(saveLabel))
 		Save();
 	Util::AddTooltip(T(TKEY("save_tip"), "Write every change to enbseries.ini, the weather files and the shader .ini files.\nShortcut: Ctrl+S"));
 
@@ -519,10 +518,11 @@ void Effects11Editor::DrawToolbar()
 		"Recompile the .fx files and reload everything from disk.\n"
 		"Use this after changing a compile-time option or editing a shader file."));
 
-	const char* stateText = dirty ? T(TKEY("unsaved_changes"), "Unsaved changes") : T(TKEY("all_saved"), "All changes saved");
+	const bool hasUnsavedChanges = HasUnsavedChanges();
+	const char* stateText = hasUnsavedChanges ? T(TKEY("unsaved_changes"), "Unsaved changes") : T(TKEY("all_saved"), "All changes saved");
 	SameLineIfFits(ImGui::CalcTextSize(stateText).x);
 	ImGui::AlignTextToFramePadding();
-	if (dirty)
+	if (hasUnsavedChanges)
 		Util::Text::Warning("%s", stateText);
 	else
 		Util::TextUnformattedDisabled(stateText);
@@ -1402,6 +1402,14 @@ int Effects11Editor::CountHiddenPeriodParameters() const
 
 // Actions
 
+bool Effects11Editor::HasUnsavedChanges() const
+{
+	if (dirty)
+		return true;
+	const auto* useEffect = SettingManager::GetSingleton().GetSettingInfo("UseEffect", "GLOBAL");
+	return useEffect && !(useEffect->currentValue == useEffect->lastSavedValue);
+}
+
 void Effects11Editor::Save()
 {
 	if (!EffectManager::GetSingleton().IsPresetLoaded())
@@ -1446,7 +1454,7 @@ void Effects11Editor::ReloadShaders()
 
 void Effects11Editor::RequestAction(PendingAction a_action)
 {
-	if (dirty) {
+	if (HasUnsavedChanges()) {
 		pendingAction = a_action;
 		return;
 	}
@@ -1546,7 +1554,6 @@ void Effects11Editor::DrawLauncher()
 	ImGui::BeginDisabled(!presetLoaded);
 	if (ImGui::Checkbox(T(TKEY("enable_effects"), "Enable Effects 11"), &enabled)) {
 		settingManager.SetValue<bool>(useEffectID, enabled);
-		dirty = true;
 	}
 	ImGui::EndDisabled();
 	{
@@ -1555,7 +1562,7 @@ void Effects11Editor::DrawLauncher()
 			"Master switch for the whole preset.\nHotkey: {key}");
 		Util::AddTooltip(tip.c_str(), ImGuiHoveredFlags_AllowWhenDisabled);
 	}
-	if (dirty) {
+	if (HasUnsavedChanges()) {
 		SameLineIfFits(ImGui::CalcTextSize(T(TKEY("unsaved_changes"), "Unsaved changes")).x);
 		ImGui::AlignTextToFramePadding();
 		Util::Text::Warning("%s", T(TKEY("unsaved_changes"), "Unsaved changes"));

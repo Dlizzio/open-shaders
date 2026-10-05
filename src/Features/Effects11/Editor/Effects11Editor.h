@@ -84,6 +84,7 @@ private:
 	int CountHiddenPeriodParameters() const;
 
 	// Actions
+	bool HasUnsavedChanges() const;
 	void RefreshPresetPaths();
 	void Save();
 	void Revert();
