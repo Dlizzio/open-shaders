@@ -17,16 +17,28 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
+	EnableSkylighting,
 	MaxZenith,
 	MinDiffuseVisibility,
 	MinSpecularVisibility,
 	ProbeGridQuality,
-	ProbeArrayWorldSizeCells)
+	ProbeArrayWorldSizeCells,
+	EnableIncrementalProbeUpdates,
+	StableSliceCount,
+	EnableReducedUpdateFrequency,
+	OcclusionUpdateInterval,
+	ProbeUpdateInterval)
 
 void Skylighting::LoadSettings(json& o_json)
 {
+	const bool wasEnabled = settings.EnableSkylighting;
 	settings = o_json;
+	if (settings.EnableSkylighting != wasEnabled)
+		queuedResetSkylighting = true;
 	settings.MaxZenith = Util::ClampFinite(settings.MaxZenith, 0.0f, std::numbers::pi_v<float> / 2.0f, Settings{}.MaxZenith);
+	settings.OcclusionUpdateInterval = std::clamp(settings.OcclusionUpdateInterval, 1u, 32u);
+	settings.ProbeUpdateInterval = std::clamp(settings.ProbeUpdateInterval, settings.OcclusionUpdateInterval, 32u);
+	settings.StableSliceCount = std::clamp(settings.StableSliceCount, 1u, 128u);
 	settings.ProbeGridQuality = std::min(settings.ProbeGridQuality, 2u);
 	settings.ProbeArrayWorldSizeCells = Util::ClampFinite(settings.ProbeArrayWorldSizeCells, Settings::kMinProbeFieldSizeCells, Settings::kMaxProbeFieldSizeCells, Settings{}.ProbeArrayWorldSizeCells);
 }
@@ -38,7 +50,10 @@ void Skylighting::SaveSettings(json& o_json)
 
 void Skylighting::RestoreDefaultSettings()
 {
+	if (!settings.EnableSkylighting)
+		queuedResetSkylighting = true;
 	settings = {};
+	ResetSkylighting();
 }
 
 void Skylighting::ResetSkylighting()
@@ -74,26 +89,90 @@ void Skylighting::ClearProbes()
 	context->ClearUnorderedAccessViewFloat(texShadowVisibility->uav.get(), clrf);
 
 	probeDataReady = false;
+	sliceCursor = 0;
+	sliceCaptureMask = 0;
+	forcedFullUpdateFrames = probeHistoryWarmupFrames;
+	lastProbeUpdateCapture = static_cast<uint>(-1);
+	lastProbeUpdateFrame = static_cast<uint>(-1);
+	occlusionCaptureCorner = 0;
+	nextOcclusionCorner = 0;
 	lastOcclusionRenderFrame = static_cast<uint>(-1);
 }
 
 void Skylighting::DrawSettings()
 {
-	ImGui::Text("%s", T(TKEY("min_visibility_desc"), "Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections."));
+	if (ImGui::Checkbox(T(TKEY("enabled"), "Enable Skylighting"), &settings.EnableSkylighting))
+		queuedResetSkylighting = true;
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enables skylighting captures and probe updates. Turning it back on rebuilds the lighting history."));
+
 	ImGui::SliderFloat(T(TKEY("diffuse_min_visibility"), "Diffuse Min Visibility"), &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("diffuse_min_visibility_tooltip"), "Sets the minimum diffuse skylight visibility. Lower values darken surfaces sheltered from the sky."));
 	ImGui::SliderFloat(T(TKEY("specular_min_visibility"), "Specular Min Visibility"), &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("specular_min_visibility_tooltip"), "Sets the minimum sky contribution to reflections. Lower values darken reflections in sheltered areas."));
 	ImGui::SliderFloat(T(TKEY("probe_field_width"), "Probe Field Width (Cells)"), &settings.ProbeArrayWorldSizeCells, Settings::kMinProbeFieldSizeCells, Settings::kMaxProbeFieldSizeCells, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("probe_field_width_desc"), "Extends skylighting coverage without adding probes. Larger fields reduce spatial detail and rebuild the probe history."));
+		ImGui::Text("%s", T(TKEY("probe_field_width_desc"), "Wider fields cover more ground but reduce spatial detail and increase capture cost. Changes rebuild probe history."));
 
-	const char* gridNames[] = {
-		T(TKEY("probe_grid_low"), "128 x 128 x 64"),
-		T(TKEY("probe_grid_medium"), "192 x 192 x 96"),
-		T(TKEY("probe_grid_high"), "256 x 256 x 128")
-	};
-	int selectedGrid = static_cast<int>(settings.ProbeGridQuality);
-	if (ImGui::Combo(T(TKEY("probe_grid"), "Probe Grid"), &selectedGrid, gridNames, 3))
-		settings.ProbeGridQuality = static_cast<uint>(selectedGrid);
+	const bool performanceOptionsOpen = ImGui::TreeNodeEx(T(TKEY("performance_options"), "Performance Options"), ImGuiTreeNodeFlags_None);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("performance_options_tooltip"), "Start with update frequency, then slice count and grid size to trade lighting responsiveness and detail for speed."));
+	if (performanceOptionsOpen) {
+		if (ImGui::Checkbox(T(TKEY("reduced_frequency"), "Reduced Update Frequency"), &settings.EnableReducedUpdateFrequency))
+			ResetSkylighting();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("reduced_frequency_tooltip"), "Allows longer capture and probe intervals while stationary. Increase an interval above 1 for savings; movement and rebuilds bypass the delays."));
+		{
+			auto cadenceGuard = Util::DisableGuard(!settings.EnableReducedUpdateFrequency);
+			int captureInterval = static_cast<int>(settings.OcclusionUpdateInterval);
+			int probeInterval = static_cast<int>(settings.ProbeUpdateInterval);
+			bool cadenceChanged = ImGui::SliderInt(T(TKEY("capture_interval"), "Occlusion Capture Interval"), &captureInterval, 1, 32, "%d frames", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("capture_interval_tooltip"), "Minimum frames between captures while stationary. Higher values reduce work but slow lighting refresh. Requires Reduced Update Frequency."));
+			{
+				auto probeIntervalGuard = Util::DisableGuard(settings.EnableIncrementalProbeUpdates);
+				cadenceChanged |= ImGui::SliderInt(T(TKEY("probe_interval"), "Full-grid Probe Interval"), &probeInterval, captureInterval, 32, "%d frames", ImGuiSliderFlags_AlwaysClamp);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("probe_interval_tooltip"), "Minimum frames between full-grid updates; fresh captures can delay updates further. Requires Reduced Update Frequency with Incremental Probe Updates off."));
+			}
+			if (cadenceChanged) {
+				settings.OcclusionUpdateInterval = static_cast<uint>(captureInterval);
+				settings.ProbeUpdateInterval = static_cast<uint>(std::max(captureInterval, probeInterval));
+				ResetSkylighting();
+			}
+		}
+
+		if (ImGui::Checkbox(T(TKEY("incremental_updates"), "Incremental Probe Updates"), &settings.EnableIncrementalProbeUpdates))
+			ResetSkylighting();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("incremental_updates_tooltip"), "Updates part of the probe grid per capture while stationary. Movement and rebuilds update the full grid."));
+		{
+			auto sliceGuard = Util::DisableGuard(!settings.EnableIncrementalProbeUpdates);
+			const auto maxSliceCount = GetProbeArrayDims(settings.ProbeGridQuality)[2];
+			int sliceCount = static_cast<int>(std::clamp(settings.StableSliceCount, 1u, maxSliceCount));
+			if (ImGui::SliderInt(T(TKEY("slice_count"), "Probe Slices per Update"), &sliceCount, 1, static_cast<int>(maxSliceCount), "%d", ImGuiSliderFlags_AlwaysClamp)) {
+				settings.StableSliceCount = static_cast<uint>(sliceCount);
+				ResetSkylighting();
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("incremental_tooltip"), "Lower counts reduce update work but slow field refresh. Capped at the selected grid depth; requires Incremental Probe Updates."));
+		}
+
+		const char* gridNames[] = {
+			T(TKEY("probe_grid_low"), "128 x 128 x 64"),
+			T(TKEY("probe_grid_medium"), "192 x 192 x 96"),
+			T(TKEY("probe_grid_high"), "256 x 256 x 128")
+		};
+		int selectedGrid = static_cast<int>(settings.ProbeGridQuality);
+		if (ImGui::Combo(T(TKEY("probe_grid"), "Probe Grid"), &selectedGrid, gridNames, 3))
+			settings.ProbeGridQuality = static_cast<uint>(selectedGrid);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("probe_grid_tooltip"), "Smaller grids reduce update work and memory use but lower spatial detail. Changing the grid rebuilds probe history."));
+
+		ImGui::TreePop();
+	}
 
 	ImGui::Separator();
 
@@ -101,11 +180,11 @@ void Skylighting::DrawSettings()
 		ResetSkylighting();
 
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("rebuild_tooltip"), "Changes below require rebuilding, a loading screen, or moving away from the current location to apply."));
+		ImGui::Text("%s", T(TKEY("rebuild_tooltip"), "Clears and rebuilds skylighting history. Use after changing Max Zenith Angle to apply it throughout the field."));
 
 	ImGui::SliderAngle(T(TKEY("max_zenith"), "Max Zenith Angle"), &settings.MaxZenith, 0, 90);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("max_zenith_tooltip"), "Smaller angles creates more focused top-down shadow."));
+		ImGui::Text("%s", T(TKEY("max_zenith_tooltip"), "Smaller angles focus shadows more directly overhead. Use Rebuild Skylighting after changing this value."));
 }
 
 void Skylighting::SetupResources()
@@ -274,6 +353,17 @@ namespace
 	}
 }
 
+float3 Skylighting::GetProbeCellSize() const
+{
+	return { occlusionDistance / probeArrayDims[0], occlusionDistance / probeArrayDims[1], occlusionDistance * .5f / probeArrayDims[2] };
+}
+
+float3 Skylighting::GetProbeCell(float3 eyePosition) const
+{
+	const auto cellID = eyePosition / GetProbeCellSize();
+	return { round(cellID.x), round(cellID.y), round(cellID.z) };
+}
+
 Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 {
 	ApplyProbeGrid();
@@ -287,16 +377,28 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	auto eyePosNI = Util::GetEyePosition(0);
 	auto eyePos = float3{ eyePosNI.x, eyePosNI.y, eyePosNI.z };
 
-	float3 cellSize = {
-		occlusionDistance / probeArrayDims[0],
-		occlusionDistance / probeArrayDims[1],
-		occlusionDistance * .5f / probeArrayDims[2]
-	};
-	auto cellID = eyePos / cellSize;
-	cellID = float3{ round(cellID.x), round(cellID.y), round(cellID.z) };
+	const auto cellSize = GetProbeCellSize();
+	const auto cellID = GetProbeCell(eyePos);
 	auto cellOrigin = cellID * cellSize;
 	float3 cellIDDiff = previousProbeCell - cellID;
 	pendingProbeCell = cellID;
+	const uint sliceCount = settings.EnableIncrementalProbeUpdates ? std::clamp(settings.StableSliceCount, 1u, probeArrayDims[2]) : 0u;
+	if (activeSliceCount != sliceCount) {
+		activeSliceCount = sliceCount;
+		sliceCursor = 0;
+		sliceCaptureMask = 0;
+	}
+	if (cellIDDiff.x != 0 || cellIDDiff.y != 0 || cellIDDiff.z != 0) {
+		forcedFullUpdateFrames = std::max(forcedFullUpdateFrames, 4u);
+		sliceCursor = 0;
+		sliceCaptureMask = 0;
+	}
+	dispatchSliceStart = 0;
+	dispatchSliceCount = probeArrayDims[2];
+	if (settings.EnableIncrementalProbeUpdates && forcedFullUpdateFrames == 0) {
+		dispatchSliceStart = sliceCursor;
+		dispatchSliceCount = std::min(sliceCount, probeArrayDims[2] - sliceCursor);
+	}
 
 	return {
 		.OcclusionViewProj = OcclusionTransform,
@@ -312,7 +414,10 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 		.ProbeDataReady = probeDataReady && HasProbeResources() && !queuedResetSkylighting.load(),
 		.ShadowDataAvailable = HasShadowData(),
 		.ArrayDims = { probeArrayDims[0], probeArrayDims[1], probeArrayDims[2] },
-		.ProbeArrayWorldSize = occlusionDistance
+		.ProbeArrayWorldSize = occlusionDistance,
+		.Enabled = settings.EnableSkylighting,
+		.SliceStart = dispatchSliceStart,
+		.SliceCount = dispatchSliceCount
 	};
 }
 
@@ -339,6 +444,14 @@ bool Skylighting::HasShadowData() const
 
 void Skylighting::Prepass()
 {
+	if (!settings.EnableSkylighting) {
+		ID3D11ShaderResourceView* nullProbe = nullptr;
+		globals::d3d::context->PSSetShaderResources(50, 1, &nullProbe);
+		globals::d3d::context->PSSetShaderResources(53, 1, &nullProbe);
+		globals::state->UpdateFeatureData(true);
+		return;
+	}
+
 	if (globals::state->isMapMenuOpen || !HasProbeResources())
 		return;
 
@@ -367,15 +480,17 @@ void Skylighting::Prepass()
 	if (interior)
 		RenderOcclusion();
 
-	if (interior || !probeDataReady)
-		globals::state->UpdateFeatureData(true);
+	globals::state->UpdateFeatureData(true);
 
 	auto* updateShader = interior ? occlusionOnlyProbeUpdateCompute.get() : probeUpdateCompute.get();
 	if (!updateShader || !comparisonSampler) {
 		probeDataReady = false;
 		globals::state->UpdateFeatureData(true);
 	}
-	if (updateShader && comparisonSampler && lastOcclusionRenderFrame == globals::state->frameCount) {
+	const uint probeInterval = std::max(settings.OcclusionUpdateInterval, settings.ProbeUpdateInterval);
+	const bool probeUpdateDue = !settings.EnableReducedUpdateFrequency || forcedFullUpdateFrames > 0 ||
+	                            settings.EnableIncrementalProbeUpdates || globals::state->frameCount - lastProbeUpdateFrame >= probeInterval;
+	if (updateShader && comparisonSampler && probeUpdateDue && lastOcclusionRenderFrame == globals::state->frameCount && lastProbeUpdateCapture != frameCount) {
 		CS_GPU_PASS_SELECT(interior, "Skylighting::InteriorProbeUpdate", "Skylighting::ProbeUpdate");
 
 		auto renderer = globals::game::renderer;
@@ -405,7 +520,20 @@ void Skylighting::Prepass()
 			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 			context->CSSetShader(updateShader, nullptr, 0);
-			context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, probeArrayDims[2]);
+			context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, dispatchSliceCount);
+			lastProbeUpdateCapture = frameCount;
+			lastProbeUpdateFrame = globals::state->frameCount;
+			if (forcedFullUpdateFrames > 0 || settings.EnableIncrementalProbeUpdates) {
+				sliceCaptureMask |= 1u << occlusionCaptureCorner;
+				if (sliceCaptureMask == 0xFu) {
+					if (forcedFullUpdateFrames > 0)
+						forcedFullUpdateFrames -= std::min(forcedFullUpdateFrames, 4u);
+					else
+						sliceCursor = (dispatchSliceStart + dispatchSliceCount) % probeArrayDims[2];
+					sliceCaptureMask = 0;
+				}
+			}
+			nextOcclusionCorner = (occlusionCaptureCorner + 1u) % 4;
 			previousProbeCell = pendingProbeCell;
 			if (!probeDataReady) {
 				probeDataReady = true;
@@ -550,6 +678,8 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 	[[maybe_unused]] RE::BSGraphics::BSShaderAccumulator* accumulator)
 {
 	auto& skylighting = globals::features::skylighting;
+	if (!skylighting.settings.EnableSkylighting)
+		return func(property, geometry, renderMode, accumulator);
 
 	auto batch = accumulator->GetRuntimeData().batchRenderer;
 	batch->geometryGroups[14]->flags &= ~1;
@@ -639,7 +769,7 @@ void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a
 	auto& skylighting = globals::features::skylighting;
 
 	if (skylighting.inOcclusion) {
-		uint corner = skylighting.frameCount % 4;
+		uint corner = skylighting.occlusionCaptureCorner;
 
 		float frustumSize = a_frustum->fTop;
 
@@ -657,7 +787,7 @@ void Skylighting::SetViewFrustumVR::thunk(RE::NiCamera* a_camera, RE::NiFrustum*
 	auto& skylighting = globals::features::skylighting;
 
 	if (skylighting.inOcclusion) {
-		uint corner = skylighting.frameCount % 4;
+		uint corner = skylighting.occlusionCaptureCorner;
 
 		float frustumSize = a_frustum->fTop;
 
@@ -703,7 +833,7 @@ void Skylighting::RenderOcclusion()
 		}
 	}
 
-	if (!HasProbeResources())
+	if (!settings.EnableSkylighting || !HasProbeResources())
 		return;
 
 	if (queuedResetSkylighting.exchange(false))
@@ -718,7 +848,15 @@ void Skylighting::RenderOcclusion()
 		ClearProbes();
 	}
 
+	const auto eyePosition = Util::GetEyePosition(0);
+	const auto cellID = GetProbeCell({ eyePosition.x, eyePosition.y, eyePosition.z });
+	const bool cellMoved = cellID.x != previousProbeCell.x || cellID.y != previousProbeCell.y || cellID.z != previousProbeCell.z;
+	if (settings.EnableReducedUpdateFrequency && forcedFullUpdateFrames == 0 && !cellMoved &&
+		globals::state->frameCount - lastOcclusionRenderFrame < settings.OcclusionUpdateInterval)
+		return;
+
 	CS_GPU_PASS("Skylighting::SkylightingMask");
+	occlusionCaptureCorner = nextOcclusionCorner;
 	++frameCount;
 
 	auto& precipitationTarget = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];

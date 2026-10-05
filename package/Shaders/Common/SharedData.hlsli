@@ -197,6 +197,13 @@ namespace SharedData
 		uint ShadowDataAvailable;
 		uint3 ArrayDims;
 		float ProbeArrayWorldSize;
+
+		uint Enabled;
+		uint3 pad0;
+
+		uint SliceStart;
+		uint SliceCount;
+		uint2 pad1;
 	};
 
 	struct CloudShadowsSettings

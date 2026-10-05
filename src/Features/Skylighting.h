@@ -63,6 +63,7 @@ public:
 
 	struct Settings
 	{
+		bool EnableSkylighting = true;
 		static constexpr float kWorldCellSize = 4096.0f;
 		static constexpr float kMinProbeFieldSizeCells = 10000.0f / kWorldCellSize;
 		static constexpr float kMaxProbeFieldSizeCells = 8.0f;
@@ -71,6 +72,11 @@ public:
 		float MinSpecularVisibility = 0.1f;
 		uint ProbeGridQuality = 2;
 		float ProbeArrayWorldSizeCells = kMinProbeFieldSizeCells;
+		bool EnableIncrementalProbeUpdates = false;
+		uint StableSliceCount = 16;
+		bool EnableReducedUpdateFrequency = false;
+		uint OcclusionUpdateInterval = 1;
+		uint ProbeUpdateInterval = 1;
 	} settings;
 
 	struct SkylightingCB
@@ -90,6 +96,13 @@ public:
 		uint ShadowDataAvailable;
 		uint ArrayDims[3];
 		float ProbeArrayWorldSize;
+
+		uint Enabled;
+		uint _pad4[3];
+
+		uint SliceStart;
+		uint SliceCount;
+		uint _pad5[2];
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
@@ -173,11 +186,24 @@ public:
 
 private:
 	bool HasShadowData() const;
+	static constexpr uint probeHistoryWarmupFrames = 60;
+	float3 GetProbeCellSize() const;
+	float3 GetProbeCell(float3 eyePosition) const;
 	bool HasProbeResources() const;
 	void ClearProbes();
 	bool probeDataReady = false;
 	float3 previousProbeCell = {};
 	float3 pendingProbeCell = {};
+	uint sliceCursor = 0;
+	uint sliceCaptureMask = 0;
+	uint activeSliceCount = 0;
+	uint forcedFullUpdateFrames = probeHistoryWarmupFrames;
+	uint dispatchSliceStart = 0;
+	uint dispatchSliceCount = 0;
+	uint lastProbeUpdateCapture = static_cast<uint>(-1);
+	uint lastProbeUpdateFrame = static_cast<uint>(-1);
+	uint occlusionCaptureCorner = 0;
+	uint nextOcclusionCorner = 0;
 	static std::array<uint, 3> GetProbeArrayDims(uint quality);
 	void CreateProbeResources(const std::array<uint, 3>& dimensions);
 	void ApplyProbeGrid();
