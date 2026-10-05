@@ -63,6 +63,7 @@ public:
 
 	struct Settings
 	{
+		bool EnableSkylighting = true;
 		static constexpr float kWorldCellSize = 4096.0f;
 		static constexpr float kMinProbeFieldSizeCells = 10000.0f / kWorldCellSize;
 		static constexpr float kMaxProbeFieldSizeCells = 8.0f;
@@ -90,6 +91,9 @@ public:
 		uint ShadowDataAvailable;
 		uint ArrayDims[3];
 		float ProbeArrayWorldSize;
+
+		uint Enabled;
+		uint _pad4[3];
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
