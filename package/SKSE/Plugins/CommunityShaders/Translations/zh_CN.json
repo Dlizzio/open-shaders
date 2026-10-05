@@ -3974,11 +3974,5 @@
     "ui.vr.color_coding_primary": "",
     "ui.vr.color_coding_secondary": "",
     "ui.vr.primary_controller": "",
-    "ui.vr.secondary_controller": "",
-    "feature.effects11.no_valid_preset": "未加载有效的预设",
-    "feature.effects11.parameter": "参数",
-    "feature.effects11.post_processing_tonemap_override": "效果11正在覆盖后处理的色调映射。启用下方的“使用最初后处理”以恢复。",
-    "feature.effects11.technique": "技术",
-    "feature.effects11.value": "值",
-    "feature.effects11.vr_flat_screen_warning": "VR：此处不保证任意平面屏幕ENB预设的正确性——屏幕中心效果（暗角、镜头光晕、径向模糊）可能出现偏移或接缝变暗。建议使用专为VR构建或测试过的预设。"
+    "ui.vr.secondary_controller": ""
 }

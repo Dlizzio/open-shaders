@@ -522,6 +522,9 @@ void SkySync::ProcessMoon(const RE::Sky* sky, const Caster type, RE::NiPoint3 di
 
 std::optional<RE::NiPoint3> SkySync::GetCelestialDirection(Caster caster) const
 {
+	if (caster == Caster::None)
+		return std::nullopt;
+
 	const auto index = static_cast<size_t>(caster);
 	assert(index < std::size(rawDirections));
 	const auto sky = globals::game::sky;

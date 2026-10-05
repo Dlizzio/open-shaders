@@ -179,7 +179,7 @@ void Effects11::UpdateSkyScattering(PerFrame& a_data)
 		const auto direction = Util::GetSunDirection();
 		const float length = direction.Length();
 		if (length > 1e-6f)
-			scatteringSunDirection = { direction.x / length, direction.y / length, direction.z / length };
+			scatteringSunDirection = float3{ direction.x / length, direction.y / length, direction.z / length };
 	}
 
 	const float sunHeight = scatteringSunDirection.z;
@@ -197,7 +197,7 @@ void Effects11::UpdateSkyScattering(PerFrame& a_data)
 	const float colorPeak = std::max({ color.x, color.y, color.z, 1e-6f });
 	const float dustDensity = timeOfDay("DustDensity");
 	const float dustTint = 2.0f * dustDensity * dustDensity;
-	a_data.SkyScatteringDustTint = {
+	a_data.SkyScatteringDustTint = float3{
 		std::max(0.0f, 1.0f - color.x / colorPeak) * dustTint,
 		std::max(0.0f, 1.0f - color.y / colorPeak) * dustTint,
 		std::max(0.0f, 1.0f - color.z / colorPeak) * dustTint
@@ -231,7 +231,7 @@ void Effects11::UpdateSkyScattering(PerFrame& a_data)
 	const float cloudsIntensity = timeOfDay("CloudsIntensity", "SKY");
 	const auto cloudsColorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("CloudsColorFilter", "SKY");
 	a_data.CloudsIntensity = cloudsIntensity;
-	a_data.CloudsColorFilter = { cloudsColorFilter.x, cloudsColorFilter.y, cloudsColorFilter.z };
+	a_data.CloudsColorFilter = float3{ cloudsColorFilter.x, cloudsColorFilter.y, cloudsColorFilter.z };
 	a_data.CloudsVertexAlphaBoost = timeOfDay("CloudsVertexAlphaBoost", "SKY");
 	a_data.CloudsEdgeClamp = settingManager.GetValue<float>("CloudsEdgeClamp", "SKY");
 	a_data.CloudsEdgeFadePower = 64.0f - 60.0f * settingManager.GetValue<float>("CloudsEdgeFadeRange", "SKY");
@@ -578,7 +578,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.VolumetricRaysSkyColorAmount = settingManager.GetInterpolatedTimeOfDayValue("SkyColorAmount", "VOLUMETRICRAYS");
 	if (const auto sky = globals::game::sky) {
 		const auto& horizonColor = sky->skyColor[RE::TESWeather::ColorTypes::kHorizon];
-		data.VolumetricRaysSkyColor = { horizonColor.red, horizonColor.green, horizonColor.blue };
+		data.VolumetricRaysSkyColor = float3{ horizonColor.red, horizonColor.green, horizonColor.blue };
 	}
 
 	data.EnableCloudsScattering = enableEffect && settingManager.GetValue<bool>("EnableCloudsScattering", "EFFECT");
@@ -592,7 +592,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.FireCurve = settingManager.GetInterpolatedTimeOfDayValue("Curve", "FIRE");
 
 	const auto fogColorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("ColorFilter", "VOLUMETRICFOG");
-	data.VolumetricFogColorFilter = { fogColorFilter.x, fogColorFilter.y, fogColorFilter.z };
+	data.VolumetricFogColorFilter = float3{ fogColorFilter.x, fogColorFilter.y, fogColorFilter.z };
 	data.VolumetricFogIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "VOLUMETRICFOG");
 	data.VolumetricFogCurve = settingManager.GetInterpolatedTimeOfDayValue("Curve", "VOLUMETRICFOG");
 	data.VolumetricFogOpacity = settingManager.GetInterpolatedTimeOfDayValue("Opacity", "VOLUMETRICFOG");
@@ -640,7 +640,7 @@ void Effects11::DrawSettings()
 
 void Effects11::RestoreDefaultSettings()
 {
-	settings = {};
+	settings = { .presetLocation = std::move(settings.presetLocation) };
 }
 
 void Effects11::ToggleEnabled()
@@ -906,7 +906,7 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 			sunColorF3 = ColorFilter(sunColorF3, settingManager.GetInterpolatedColorTimeOfDayValue("SunColorFilter", "SKY"), 0.0f);
 
 			const float sunColorPeak = std::max({ sunColorF3.x, sunColorF3.y, sunColorF3.z, 1.0f });
-			scatteringSunColor = { std::max(sunColorF3.x, 0.0f) / sunColorPeak, std::max(sunColorF3.y, 0.0f) / sunColorPeak, std::max(sunColorF3.z, 0.0f) / sunColorPeak };
+			scatteringSunColor = float3{ std::max(sunColorF3.x, 0.0f) / sunColorPeak, std::max(sunColorF3.y, 0.0f) / sunColorPeak, std::max(sunColorF3.z, 0.0f) / sunColorPeak };
 
 			sunColorF3 = Intensity(sunColorF3, settingManager.GetInterpolatedTimeOfDayValue("SunIntensity", "SKY"));
 
@@ -1494,7 +1494,7 @@ void Effects11::DrawSunRays()
 			return;
 		const float2 ndc = { clip.x / clip.w, clip.y / clip.w };
 		lightInView |= std::max(std::abs(ndc.x), std::abs(ndc.y)) * 0.4f < 0.99999f;
-		lightUV[eye] = { ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f };
+		lightUV[eye] = float2{ ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f };
 	}
 	if (!lightInView)
 		return;
@@ -1523,10 +1523,10 @@ void Effects11::DrawSunRays()
 	const int type = std::clamp(static_cast<int>(std::lround(settingManager.GetValue<float>("Type", "RAYS"))), 0, 4);
 
 	SunRaysData data{};
-	data.lightUV = { lightUV[0].x, lightUV[0].y, lightUV[1].x, lightUV[1].y };
-	data.uvScale = { static_cast<float>(halfDynWidth) / halfTexWidth, static_cast<float>(halfDynHeight) / halfTexHeight };
-	data.uvMax = { (halfDynWidth - 0.5f) / halfTexWidth, (halfDynHeight - 0.5f) / halfTexHeight };
-	data.lightDirection = { light.direction.x, light.direction.y, light.direction.z };
+	data.lightUV = float4{ lightUV[0].x, lightUV[0].y, lightUV[1].x, lightUV[1].y };
+	data.uvScale = float2{ static_cast<float>(halfDynWidth) / halfTexWidth, static_cast<float>(halfDynHeight) / halfTexHeight };
+	data.uvMax = float2{ (halfDynWidth - 0.5f) / halfTexWidth, (halfDynHeight - 0.5f) / halfTexHeight };
+	data.lightDirection = float3{ light.direction.x, light.direction.y, light.direction.z };
 	data.lightBillboardTan = light.billboardTan;
 	data.raysColor = GetSunRaysColor(light, lightPeak, perFrame.VolumetricRaysSkyColor);
 	data.maskBrightness = lightPeak;

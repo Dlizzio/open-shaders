@@ -3974,11 +3974,5 @@
     "ui.vr.color_coding_primary": "",
     "ui.vr.color_coding_secondary": "",
     "ui.vr.primary_controller": "",
-    "ui.vr.secondary_controller": "",
-    "feature.effects11.no_valid_preset": "",
-    "feature.effects11.parameter": "",
-    "feature.effects11.post_processing_tonemap_override": "",
-    "feature.effects11.technique": "",
-    "feature.effects11.value": "",
-    "feature.effects11.vr_flat_screen_warning": ""
+    "ui.vr.secondary_controller": ""
 }
