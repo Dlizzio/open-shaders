@@ -20,12 +20,18 @@ namespace Skylighting
 
 	const static sh2 UNIT_SH = float4(sqrt(4.0 * Math::PI), 0, 0, 0);
 
-	const static uint3 ARRAY_DIM = uint3(256, 256, 128);
-	const static float3 ARRAY_SIZE = 10000.f * float3(1, 1, 0.5);
-	const static float3 CELL_SIZE = ARRAY_SIZE / ARRAY_DIM;
+	uint3 GetArrayDims()
+	{
+		return max(SharedData::skylightingSettings.ArrayDims.xyz, uint3(1, 1, 1));
+	}
+	float3 GetArraySize()
+	{
+		return max(SharedData::skylightingSettings.ProbeArrayWorldSize, 10000.0) * float3(1, 1, 0.5);
+	}
 
 	float GetFadeOutFactor(float3 positionMS)
 	{
+		const float3 ARRAY_SIZE = GetArraySize();
 		float3 uvw = saturate(positionMS / ARRAY_SIZE + .5);
 		float3 dists = min(uvw, 1 - uvw);
 		float edgeDist = min(dists.x, min(dists.y, dists.z));
@@ -105,6 +111,9 @@ namespace Skylighting
 		if (SharedData::InInterior || SharedData::skylightingSettings.ProbeDataReady == 0)
 			return scaledUnitSH;
 
+		const uint3 ARRAY_DIM = GetArrayDims();
+		const float3 ARRAY_SIZE = GetArraySize();
+		const float3 CELL_SIZE = ARRAY_SIZE / ARRAY_DIM;
 		positionMS.xyz += normalWS * CELL_SIZE * 0.5;  // Receiver normal bias
 
 		float3 positionMSAdjusted = positionMS - SharedData::skylightingSettings.PosOffset.xyz;
@@ -148,7 +157,7 @@ namespace Skylighting
 					shWsum += shW;
 
 #	if defined(SKYLIGHTING_SHADOW_VIS)
-					[branch] if (sampleShadowVisibility)
+					[branch] if (sampleShadowVisibility && SharedData::skylightingSettings.ShadowDataAvailable != 0)
 					{
 						shadowSum += ShadowVisibilityProbeArray[cellTexID] * triW;
 						shadowWsum += triW;
@@ -158,7 +167,8 @@ namespace Skylighting
 
 #	if defined(SKYLIGHTING_SHADOW_VIS)
 		float fadeOut = GetFadeOutFactor(positionMS);
-		shadowVisibility = lerp(1.0, shadowSum / max(shadowWsum, EPSILON_WEIGHT_SUM), fadeOut);
+		if (SharedData::skylightingSettings.ShadowDataAvailable != 0)
+			shadowVisibility = lerp(1.0, shadowSum / max(shadowWsum, EPSILON_WEIGHT_SUM), fadeOut);
 #	endif
 
 		return SphericalHarmonics::Scale(shSum, rcp(shWsum + EPSILON_WEIGHT_SUM));
@@ -179,6 +189,8 @@ namespace Skylighting
 
 	sh2 SampleNoBias(float3 positionMS)
 	{
+		const uint3 ARRAY_DIM = GetArrayDims();
+		const float3 ARRAY_SIZE = GetArraySize();
 		sh2 scaledUnitSH = UNIT_SH / 1e-10;
 
 		if (SharedData::InInterior || SharedData::skylightingSettings.ProbeDataReady == 0)

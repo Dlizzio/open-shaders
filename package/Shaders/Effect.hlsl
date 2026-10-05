@@ -562,7 +562,11 @@ float3 GetEffectDirectionalLighting()
 float3 GetWeatherEffectLighting(bool isSkyObject)
 {
 	const float3 weatherLightingColor = isSkyObject ? SharedData::linearLightingSettings.skyStaticsColor : SharedData::linearLightingSettings.effectLightingColor;
+#	if defined(LIGHTING)
 	return ENABLE_LL ? Color::EffectLight(weatherLightingColor, true) * SharedData::linearLightingSettings.dirLightMult : DLightColor.xyz;
+#	else
+	return Color::EffectLight(weatherLightingColor, true) * SharedData::linearLightingSettings.dirLightMult;
+#	endif
 }
 
 void ExtractEffectLightingReference(
@@ -1131,9 +1135,13 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 #	if !defined(LIGHTING) && !defined(MEMBRANE)
 	const bool isSkyObject = isSkyStatic || (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject);
+#		if defined(ADDBLEND) || defined(MULTBLEND) || defined(MULTBLEND_DECAL)
+	const bool useAmbientLighting = UseAmbientEffectLighting() && isSkyObject;
+	const bool useWeatherLighting = false;
+#		else
 	const bool useAmbientLighting = UseAmbientEffectLighting();
-	const bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
-	const bool useWeatherLighting = !isSkyObject && !suppressExternalEmittance && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
+	const bool useWeatherLighting = ENABLE_LL && !SharedData::InInterior && !isSkyObject && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
+#		endif
 	bool applyLighting = isSkyStatic || (lightingInfluence > 0.0 && (useAmbientLighting || useWeatherLighting));
 #		if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
 	applyLighting = applyLighting && !isEnbVolumetricFog;
