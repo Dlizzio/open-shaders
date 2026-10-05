@@ -290,6 +290,18 @@ cbuffer AlphaTestRefCB : register(b11)
 
 Texture2D<float> TexDepthSampler : register(t17);
 
+#	if defined(EFFECTS11) && (defined(HORIZFADE) || (defined(TEX) && !defined(DITHER) && !defined(CLOUDS)))
+#		define EFFECTS11_CELESTIAL_EXTINCTION
+#	endif
+
+#	if defined(EFFECTS11) && defined(DITHER) && !defined(TEX)
+#		define EFFECTS11_SKY_GRADIENT
+#	endif
+
+#	if defined(EFFECTS11) && (defined(CLOUDS) || defined(EFFECTS11_CELESTIAL_EXTINCTION) || defined(EFFECTS11_SKY_GRADIENT))
+#		include "Effects11/SkyScattering.hlsli"
+#	endif
+
 #	if defined(EFFECTS11)
 float ComputeProceduralSun(float2 uv)
 {
@@ -312,6 +324,29 @@ float3 ComposeSkyColor(float3 skyColor, float3 textureColor, float3 skyOffset, b
 	return Color::Sky(skyColor) * textureColor + Color::Sky(skyOffset);
 }
 
+#	if defined(EFFECTS11) && (defined(HORIZFADE) || defined(MOONMASK))
+float3 ShadeStars(float4 starTexel, float2 uv)
+{
+	float3 color = starTexel.xyz;
+	[branch] if (SharedData::enbSettings.EnableAnimatedStars)
+	{
+		float2 textureSize;
+		TexBaseSampler.GetDimensions(textureSize.x, textureSize.y);
+		uint seed = Random::iqint3(uint2(floor(frac(uv) * textureSize)));
+		float2 star = Random::f2(seed);
+		float4 quad = TexBaseSampler.GatherAlpha(SampBaseSampler, uv);
+		float isolation = max(max(quad.x, quad.y), max(quad.z, quad.w)) - dot(quad, 0.25);
+		float mask = saturate(isolation * SharedData::enbSettings.StarsAnimationDensity - 0.5);
+		float rate = SharedData::enbSettings.StarsAnimationTime * (2.0 + 6.0 * star.y);
+		float wave = 0.5 + 0.5 * sin(Math::TAU * frac(SharedData::Timer * rate + star.x));
+		color *= 1.0 + wave * wave * mask * SharedData::enbSettings.StarsAnimationIntensity * 0.3;
+	}
+	float3 squared = color * color;
+	color = lerp(color, squared * squared, SharedData::enbSettings.StarsCurve);
+	return max(color, 0.0) * SharedData::enbSettings.StarsIntensity;
+}
+#	endif
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -327,6 +362,18 @@ PS_OUTPUT main(PS_INPUT input)
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
+#			if defined(EFFECTS11) && (defined(HORIZFADE) || defined(MOONMASK))
+	[branch] if (SharedData::enbSettings.Enable)
+		baseColor.xyz = ShadeStars(baseColor, input.TexCoord0.xy);
+#			elif defined(EFFECTS11) && defined(TEX) && !defined(DITHER) && !defined(CLOUDS)
+	[branch] if (SharedData::enbSettings.Enable && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsMoon))
+	{
+		float2 edge = abs(input.TexCoord0.xy * 2.0 - 1.0);
+		baseColor.xyz = pow(max(baseColor.xyz, 0.0), SharedData::enbSettings.MoonCurve);
+		if (max(edge.x, edge.y) > 0.985)
+			baseColor.xyz = 0.0;
+	}
+#			endif
 	if (!composeAuthoredSky)
 		baseColor.xyz = Color::Sky(baseColor.xyz);
 #			ifdef TEXFADE
@@ -449,6 +496,12 @@ PS_OUTPUT main(PS_INPUT input)
 		float gradientPosition = pow(1.0 - saturate(viewDirection.z), SharedData::enbSettings.ProceduralGradientWeightCurve);
 		skyGradientColor = lerp(input.SkyBlendColor2.xyz, input.SkyBlendColor0.xyz, gradientPosition);
 	}
+	[branch] if (SharedData::enbSettings.EnableCloudsScattering)
+		skyGradientColor = SkyScattering::ApplySkyScattering(skyGradientColor, input.SkyBlendColor2.xyz, viewDirection) + SkyScattering::GetMoonGlow(viewDirection);
+#				endif
+#				if defined(EFFECTS11)
+	if (SharedData::enbSettings.Enable && SharedData::enbSettings.FixBlackCrush)
+		noiseGrad *= saturate(dot(skyGradientColor, 8.0));
 #				endif
 	psout.Color.xyz = ComposeSkyColor(skyGradientColor + noiseGrad, 1.0, skyScale, ENABLE_LL) * skyBrightnessMultiplier;
 	psout.Color.w = input.Color.w;
@@ -464,49 +517,39 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		elif defined(HORIZFADE)
+#			if defined(EFFECTS11)
+	if (SharedData::enbSettings.Enable)
+		skyScale = 0.0;
+#			endif
 	psout.Color.xyz = composeAuthoredSky ? Color::Sky(1.5 * (input.Color.xyz * baseColor.xyz + skyScale)) :
 	                                       1.5 * ComposeSkyColor(input.Color.xyz, baseColor.xyz, skyScale, false);
 	psout.Color.xyz *= skyBrightnessMultiplier;
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else
 
-#			if defined(CLOUDS) && defined(EFFECTS11)
-	if (SharedData::enbSettings.Enable)
-		baseColor.xyz = pow(abs(baseColor.xyz), SharedData::enbSettings.CloudsCurve);
-#			endif
-
 	psout.Color.w = input.Color.w * baseColor.w;
 	psout.Color.xyz = ComposeSkyColor(input.Color.xyz, baseColor.xyz, skyScale, composeAuthoredSky) * skyBrightnessMultiplier;
 
 #			if defined(CLOUDS) && defined(EFFECTS11)
-	if (SharedData::enbSettings.Enable) {
-		float3 cloudColor = psout.Color.xyz;
+	[branch] if (SharedData::enbSettings.Enable)
+	{
 		float3 viewDirection = normalize(input.WorldPosition.xyz);
+		float cloudTextureAlpha = saturate(baseColor.w);
+		float cloudTextureGray = pow(max(dot(baseColor.xyz, 1.0 / 3.0), 0.0), SharedData::enbSettings.CloudsCurve);
 
-		cloudColor.xyz = lerp(abs(cloudColor.xyz), dot(cloudColor.xyz, 1.0 / 3.0), SharedData::enbSettings.CloudsDesaturation);
+		float3 cloudColor = pow(max(ComposeSkyColor(input.Color.xyz, baseColor.xyz, 0.0, composeAuthoredSky), 0.0), SharedData::enbSettings.CloudsCurve);
+		cloudColor = lerp(cloudColor, dot(cloudColor, 1.0 / 3.0), SharedData::enbSettings.CloudsDesaturation) * SharedData::enbSettings.CloudsIntensity * SharedData::enbSettings.CloudsColorFilter;
 
-		float cloudLuminance = dot(cloudColor.xyz, 1.0 / 3.0);
-
-		float sunLighting = saturate(dot(viewDirection, SharedData::SunDirection.xyz) * 0.5 + 0.5);
-		float masserLighting = saturate(dot(viewDirection, SharedData::MasserDirection.xyz) * 0.5 + 0.5);
-		float secundaLighting = saturate(dot(viewDirection, SharedData::SecundaDirection.xyz) * 0.5 + 0.5);
-
-		if (SharedData::enbSettings.CloudsEdgeIntensity > 0.0) {
-			float cloudsEdgeAlpha = saturate(1.0 - baseColor.w);
-
-			float3 sunPhase = pow(sunLighting, 32.0) * SharedData::SunColor.xyz * cloudsEdgeAlpha;
-			float3 masserPhase = pow(masserLighting, 32.0) * SharedData::MasserColor.xyz * SharedData::enbSettings.CloudsEdgeMoonMultiplier * cloudsEdgeAlpha;
-			float3 secundaPhase = pow(secundaLighting, 32.0) * SharedData::SecundaColor.xyz * SharedData::enbSettings.CloudsEdgeMoonMultiplier * cloudsEdgeAlpha;
-
-			float3 cloudsScatter = (sunPhase + masserPhase + secundaPhase) * SharedData::enbSettings.CloudsEdgeIntensity;
-
-			cloudColor += cloudLuminance * cloudsScatter;
-		}
-
-		psout.Color.xyz = cloudColor;
-		psout.Color.w = saturate(psout.Color.w);
+		psout.Color.xyz = SkyScattering::ShadeCloud(cloudColor, cloudTextureAlpha, cloudTextureGray, viewDirection, SampBaseSampler) + skyScale * min(SharedData::enbSettings.CloudsIntensity, 1.0);
+		psout.Color.xyz *= skyBrightnessMultiplier;
+		psout.Color.w = saturate(input.Color.w * baseColor.w * (1.0 + baseColor.w * SharedData::enbSettings.CloudsVertexAlphaBoost));
 	}
 #			endif
+#		endif
+
+#		if defined(EFFECTS11_CELESTIAL_EXTINCTION)
+	[branch] if (SharedData::enbSettings.Enable && SharedData::enbSettings.EnableCloudsScattering && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun))
+		psout.Color *= SkyScattering::GetCelestialExtinction(normalize(input.WorldPosition.xyz));
 #		endif
 
 #	else

@@ -338,6 +338,8 @@ public:
 		IsBeastRace = 1 << 2,
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
+		IsMoon = 1 << 7,
+		IsAurora = 1 << 8,
 		SuppressExternalEmittance = 1 << 5,
 		AdditiveLighting = 1 << 6,
 		// --- Open Shaders fork-only flags below: reserved high end, not upstream's sequence. ---
@@ -408,6 +410,8 @@ public:
 	 * @param a_pass The render pass to inspect.
 	 */
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
+	/** @brief Classifies engine sky effects for shared shader permutations. */
+	void UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass);
 	void UpdatePermutationBuffer();
 	/**
 	 * @brief Binds permutationCB/sharedDataCB/featureDataCB at the vertex stage, since vertex

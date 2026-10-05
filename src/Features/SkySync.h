@@ -82,6 +82,9 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	/** @brief Returns the visible moon selected to illuminate the scene. */
+	RE::Moon* GetVisibleMoonLightSource(const RE::Sky* sky) const;
+
 private:
 	enum class CellFlagExt : uint16_t
 	{

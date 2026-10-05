@@ -752,3 +752,30 @@ inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)
 }
 
 #undef I18N_KEY_PREFIX
+
+RE::Moon* SkySync::GetVisibleMoonLightSource(const RE::Sky* sky) const
+{
+	if (!sky)
+		return nullptr;
+
+	auto visibility = [](const RE::Moon* moon) {
+		if (!moon || !moon->root || !moon->moonMesh || moon->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+			return 0.0f;
+		const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(moon->moonMesh->GetGeometryRuntimeData().shaderProperty.get());
+		return prop ? prop->kBlendColor.alpha : 0.0f;
+	};
+
+	const float masser = visibility(sky->masser);
+	const float secunda = visibility(sky->secunda);
+
+	switch (static_cast<MoonLightSource>(settings.MoonLightSource)) {
+	case MoonLightSource::Masser:
+		return masser > 0.0f ? sky->masser : nullptr;
+	case MoonLightSource::Secunda:
+		return secunda > 0.0f ? sky->secunda : nullptr;
+	default:
+		if (masser <= 0.0f && secunda <= 0.0f)
+			return nullptr;
+		return secunda > masser ? sky->secunda : sky->masser;
+	}
+}

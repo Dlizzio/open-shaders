@@ -65,7 +65,7 @@ void State::UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass)
 
 void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 {
-	permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
+	permutationData.ExtraShaderDescriptor &= ~(static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun) | static_cast<uint32_t>(State::ExtraShaderDescriptors::IsMoon));
 
 	if (!a_pass || !a_pass->shaderProperty)
 		return;
@@ -75,9 +75,33 @@ void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 		skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN_GLARE) {
 		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
 	}
+	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_MOON)
+		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsMoon);
 	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN_GLARE) {
 		auto* depthSRV = Util::GetCurrentSceneDepthSRV(true);
 		globals::d3d::context->VSSetShaderResources(17, 1, &depthSRV);
+	}
+}
+
+void State::UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass)
+{
+	constexpr auto isAurora = static_cast<uint32_t>(ExtraShaderDescriptors::IsAurora);
+	permutationData.ExtraShaderDescriptor &= ~isAurora;
+
+	if (!a_pass || !a_pass->geometry)
+		return;
+	if (!(currentVertexDescriptor & static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::SkyObject)))
+		return;
+
+	const auto sky = globals::game::sky;
+	if (!sky || !sky->auroraRoot)
+		return;
+
+	for (const RE::NiAVObject* node = a_pass->geometry; node; node = node->parent) {
+		if (node == sky->auroraRoot.get()) {
+			permutationData.ExtraShaderDescriptor |= isAurora;
+			return;
+		}
 	}
 }
 

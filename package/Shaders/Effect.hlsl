@@ -660,7 +660,7 @@ float3 GetLightingColor(
 	}
 
 #		if defined(EFFECTS11)
-	if (SharedData::enbSettings.Enable && !useAmbientEffectLighting) {
+	if (SharedData::enbSettings.EnableParticle && !useAmbientEffectLighting) {
 		useWeatherEffectLighting = false;
 		applyWeatherInfluenceToShadows = false;
 		dirColor = ShadowSampling::GetDirectionalLighting();
@@ -749,7 +749,7 @@ float3 GetLightingColor(
 		float4 lightDistanceSquared = (PLightPositionX[eyeIndex] - msPosition.xxxx) * (PLightPositionX[eyeIndex] - msPosition.xxxx) + (PLightPositionY[eyeIndex] - msPosition.yyyy) * (PLightPositionY[eyeIndex] - msPosition.yyyy) + (PLightPositionZ[eyeIndex] - msPosition.zzzz) * (PLightPositionZ[eyeIndex] - msPosition.zzzz);
 		float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 #		if defined(EFFECTS11)
-		float pointScale = SharedData::enbSettings.Enable ? SharedData::enbSettings.ParticlePointLightingInfluence : 1.0;
+		float pointScale = SharedData::enbSettings.EnableParticle ? SharedData::enbSettings.ParticlePointLightingInfluence : 1.0;
 #		else
 		float pointScale = 1.0;
 #		endif
@@ -761,6 +761,35 @@ float3 GetLightingColor(
 	return color;
 }
 #	else
+float GetViewRayShadow(float3 worldPosition, float depth, uint eyeIndex, float noise)
+{
+	static const uint sampleCount = 8;
+	static const float rcpSampleCount = 1.0 / float(sampleCount);
+
+	// Enough for sky statics
+	float maxDistance = max(0, SharedData::GetScreenDepth(depth));
+	float viewRayLength = 2048.0;
+	float3 viewDirection = normalize(worldPosition);
+	float3 startPosition = worldPosition - viewDirection * viewRayLength;
+	float3 endPosition = worldPosition + viewDirection * min(maxDistance, viewRayLength);
+
+	float shadow = 1.0;
+
+	const bool inWorld = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
+
+	if (inWorld && !SharedData::InInterior) {
+			shadow = 0.0;
+			for (uint i = 0; i < sampleCount; i++) {
+				float t = (float(i) + noise) * rcpSampleCount;
+				float3 samplePositionWS = lerp(startPosition, endPosition, t);
+				shadow += ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+			}
+			shadow *= rcpSampleCount;
+	}
+
+	return shadow;
+}
+
 float3 GetLightingShadow(float3 color, float3 materialColor, float3 worldPosition, float2 screenPosition, float depth, uint eyeIndex, inout float shadowVariance, float noise, bool isSkyObject)
 {
 	color = Color::EffectLight(color);
@@ -780,33 +809,8 @@ float3 GetLightingShadow(float3 color, float3 materialColor, float3 worldPositio
 		ExtractEffectLighting(isSkyObject ? color : GetWeatherEffectLighting(false), ambientLighting, dirColor, ambientColor);
 	}
 
-	static const uint sampleCount = 8;
-	static const float rcpSampleCount = 1.0 / float(sampleCount);
-
-	// Enough for sky statics
-	float maxDistance = max(0, SharedData::GetScreenDepth(depth));
-	float viewRayLength = 2048.0;
-	float3 viewDirection = normalize(worldPosition);
-	float3 startPosition = worldPosition - viewDirection * viewRayLength;
-	float3 endPosition = worldPosition + viewDirection * min(maxDistance, viewRayLength);
-
-	float shadow = 1.0;
-
-	const bool inWorld = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
-
-	if (inWorld && !SharedData::InInterior) {
-		if (isSkyObject) {
-			shadow = 0.0;
-			for (uint i = 0; i < sampleCount; i++) {
-				float t = (float(i) + noise) * rcpSampleCount;
-				float3 samplePositionWS = lerp(startPosition, endPosition, t);
-				shadow += ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
-			}
-			shadow *= rcpSampleCount;
-		} else {
-			shadow = ShadowSampling::GetWorldShadow(worldPosition, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
-		}
-	}
+	float shadow = isSkyObject ? GetViewRayShadow(worldPosition, depth, eyeIndex, noise) :
+	                             ShadowSampling::GetWorldShadow(worldPosition, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
 	shadowVariance = 1.0 - sqrt(saturate(fwidth(shadow)));
 
@@ -911,7 +915,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 #		if !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
-	if (SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
+	if (SharedData::enbSettings.EnableParticle && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
 		propertyColor *= SharedData::enbSettings.ParticleIntensity;
 #		endif
 #	endif
@@ -953,6 +957,12 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 	uint totalLightCount = numStrictLights + numClusteredLights;
 
+#			if defined(EFFECTS11)
+	float pointLightingScale = SharedData::enbSettings.EnableParticle ? SharedData::enbSettings.ParticlePointLightingInfluence : 1.0;
+#			else
+	float pointLightingScale = 1.0;
+#			endif
+
 	[loop] for (uint i = 0; i < totalLightCount; i++)
 	{
 		LightLimitFix::Light light;
@@ -990,7 +1000,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 		const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 		float3 lightColor = Color::EffectPointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * 0.5 * light.fade;
-		propertyColor += lightColor;
+		propertyColor += lightColor * pointLightingScale;
 	}
 
 #		endif
@@ -1080,6 +1090,32 @@ PS_OUTPUT main(PS_INPUT input)
 		baseColor.xyz = baseColorScale * TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz;
 	}
 
+#	if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
+	const bool isEnbVolumetricFog = SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && !(Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor);
+#	endif
+
+#	if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
+	[branch] if (isEnbVolumetricFog)
+	{
+		alpha = saturate(alpha * SharedData::enbSettings.VolumetricFogOpacity);
+		float volumetricFogShadow = GetViewRayShadow(input.WorldPosition.xyz, depth, eyeIndex, screenNoise);
+		float3 volumetricFogScale = SharedData::enbSettings.VolumetricFogIntensity * SharedData::enbSettings.VolumetricFogColorFilter;
+		[branch] if (SharedData::enbSettings.VolumetricFogEnableLighting)
+		{
+			float3 volumetricFogTint = BaseColor.xyz;
+			volumetricFogTint /= max(max(max(volumetricFogTint.x, volumetricFogTint.y), volumetricFogTint.z), 1.0);
+			float3 volumetricFogLight = ShadowSampling::GetDirectionalLighting() * volumetricFogShadow + ShadowSampling::GetAmbientLighting();
+			baseColor.xyz = pow(max(volumetricFogTint * baseTexColor.xyz, 0.0), SharedData::enbSettings.VolumetricFogCurve) * volumetricFogLight * volumetricFogScale * 0.5;
+			lightingInfluence = 0.0;
+		}
+		else
+		{
+			float volumetricFogShade = lerp(1.0 - SharedData::enbSettings.VolumetricFogShadowAmount, 1.0, volumetricFogShadow);
+			baseColor.xyz = pow(max(baseColor.xyz, 0.0), SharedData::enbSettings.VolumetricFogCurve) * volumetricFogShade * volumetricFogScale;
+		}
+	}
+#	endif
+
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence);
 
 #	if !defined(MOTIONVECTORS_NORMALS)
@@ -1098,7 +1134,11 @@ PS_OUTPUT main(PS_INPUT input)
 	const bool useAmbientLighting = UseAmbientEffectLighting();
 	const bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
 	const bool useWeatherLighting = !isSkyObject && !suppressExternalEmittance && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
-	if (isSkyStatic || (lightingInfluence > 0.0 && (useAmbientLighting || useWeatherLighting))) {
+	bool applyLighting = isSkyStatic || (lightingInfluence > 0.0 && (useAmbientLighting || useWeatherLighting));
+#		if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
+	applyLighting = applyLighting && !isEnbVolumetricFog;
+#		endif
+	if (applyLighting) {
 		float3 unlitColor = useAmbientLighting || !isSkyObject ? baseColor.xyz : lightColor;
 		float3 materialColor = baseColor.xyz * (useAmbientLighting ? 1.0.xxx : propertyColor);
 		lightColor = lerp(unlitColor, GetLightingShadow(lightColor, materialColor, input.WorldPosition.xyz, input.Position.xy, depth, eyeIndex, shadowVariance, screenNoise, isSkyObject), lightingInfluence);
@@ -1162,7 +1202,7 @@ PS_OUTPUT main(PS_INPUT input)
 		if (isFire)
 			blendedColor = pow(abs(blendedColor), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
 		else
-			blendedColor *= SharedData::enbSettings.LightSpriteIntensity;
+			blendedColor = pow(abs(blendedColor), SharedData::enbSettings.LightSpriteCurve) * SharedData::enbSettings.LightSpriteIntensity;
 	}
 #			endif
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
@@ -1220,6 +1260,10 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 		finalColor.xyz = linearDiffuse;
 	}
+#	endif
+#	if defined(EFFECTS11) && defined(SKY_OBJECT)
+	[branch] if (SharedData::enbSettings.Enable && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsAurora))
+		finalColor.xyz = pow(max(finalColor.xyz, 0.0), SharedData::enbSettings.AuroraCurve) * SharedData::enbSettings.AuroraIntensity;
 #	endif
 	psout.Diffuse = finalColor;
 #	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)

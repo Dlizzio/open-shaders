@@ -46,6 +46,9 @@
 #include "CSEditor/EditorWindow.h"
 #include "Features/CSEditor.h"
 #include "Features/Effects11.h"
+#if defined(ENABLE_EFFECTS11)
+#	include "Features/Effects11/Editor/Effects11Editor.h"
+#endif
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
@@ -432,6 +435,7 @@ void Menu::Load(json& o_json)
 	migrateKey(o_json, "CSEditorToggleKey", settings.CSEditorToggleKey);
 	migrateKey(o_json, "ScreenshotKey", settings.ScreenshotKey);
 	migrateKey(o_json, "Effects11ToggleKey", settings.Effects11ToggleKey);
+	migrateKey(o_json, "Effects11EditorKey", settings.Effects11EditorKey);
 
 	// Helper for new smart serialization with error handling
 	auto loadComboList = [](const json& j, const char* keyName, std::vector<InputCombo>& target) {
@@ -454,6 +458,7 @@ void Menu::Load(json& o_json)
 	loadComboList(o_json, "CSEditorToggleKey", settings.CSEditorToggleKey);
 	loadComboList(o_json, "ScreenshotKey", settings.ScreenshotKey);
 	loadComboList(o_json, "Effects11ToggleKey", settings.Effects11ToggleKey);
+	loadComboList(o_json, "Effects11EditorKey", settings.Effects11EditorKey);
 
 	// Legacy support: If old config has Theme data and no SelectedThemePreset, load it
 	if (o_json.contains("Theme") && o_json["Theme"].is_object() && settings.SelectedThemePreset.empty()) {
@@ -530,6 +535,7 @@ void Menu::Save(json& o_json)
 	InputCombo::ComboList::to_json(o_json["CSEditorToggleKey"], settings.CSEditorToggleKey);
 	InputCombo::ComboList::to_json(o_json["ScreenshotKey"], settings.ScreenshotKey);
 	InputCombo::ComboList::to_json(o_json["Effects11ToggleKey"], settings.Effects11ToggleKey);
+	InputCombo::ComboList::to_json(o_json["Effects11EditorKey"], settings.Effects11EditorKey);
 }
 
 void Menu::LoadTheme(json& o_json)
@@ -885,7 +891,8 @@ void Menu::DrawGeneralSettings()
 		.settingShaderBlockNextKey = settingShaderBlockNextKey,
 		.settingCSEditorToggleKey = settingCSEditorToggleKey,
 		.settingScreenshotKey = settingScreenshotKey,
-		.settingEffects11ToggleKey = settingEffects11ToggleKey
+		.settingEffects11ToggleKey = settingEffects11ToggleKey,
+		.settingEffects11EditorKey = settingEffects11EditorKey
 	};
 
 	// Render settings using extracted component
@@ -1197,7 +1204,8 @@ void Menu::ProcessInputEventQueue()
 
 			// Dispatch bound hotkey actions for `key`. Combo bindings (modifier + key)
 			// fire on key-down for responsiveness; single-key bindings fire on key-up.
-			auto dispatchHotkeyActions = [this, key](bool combosOnly) {
+			bool effects11EditorToggled = false;
+			auto dispatchHotkeyActions = [this, key, &effects11EditorToggled](bool combosOnly) {
 				struct KeyAction
 				{
 					std::vector<InputCombo>& settingKey;
@@ -1237,6 +1245,14 @@ void Menu::ProcessInputEventQueue()
 #if defined(ENABLE_EFFECTS11)
 						 if (globals::features::effects11.loaded)
 							 globals::features::effects11.ToggleEnabled();
+#endif
+					 } },
+					{ settings.Effects11EditorKey, [&effects11EditorToggled]() {
+#if defined(ENABLE_EFFECTS11)
+						 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
+							 Effects11Editor::GetSingleton().Toggle();
+							 effects11EditorToggled = true;
+						 }
 #endif
 					 } },
 				};
@@ -1281,6 +1297,7 @@ void Menu::ProcessInputEventQueue()
 					{ &settings.CSEditorToggleKey, &settingCSEditorToggleKey, [this](std::vector<InputCombo> keys) { settings.CSEditorToggleKey = keys; settingCSEditorToggleKey = false; } },
 					{ &settings.ScreenshotKey, &settingScreenshotKey, [this](std::vector<InputCombo> keys) { settings.ScreenshotKey = keys; settingScreenshotKey = false; } },
 					{ &settings.Effects11ToggleKey, &settingEffects11ToggleKey, [this](std::vector<InputCombo> keys) { settings.Effects11ToggleKey = keys; settingEffects11ToggleKey = false; } },
+					{ &settings.Effects11EditorKey, &settingEffects11EditorKey, [this](std::vector<InputCombo> keys) { settings.Effects11EditorKey = keys; settingEffects11EditorKey = false; } },
 				};
 				bool handled = false;
 				for (auto& h : hotkeyActions) {
@@ -1336,11 +1353,16 @@ void Menu::ProcessInputEventQueue()
 
 				// Handle ESC key for menu and editor window
 				auto* editorWindow = EditorWindow::GetSingleton();
-				if (key == VK_ESCAPE) {
+				if (key == VK_ESCAPE && !effects11EditorToggled) {
 					if (editorWindow && editorWindow->IsInPreviewMode()) {
 						editorWindow->ExitPreviewMode();
 					} else if (editorWindow && editorWindow->open && editorWindow->ShouldHandleEscapeKey()) {
 						editorWindow->open = false;
+#if defined(ENABLE_EFFECTS11)
+					} else if (auto& effects11Editor = Effects11Editor::GetSingleton(); effects11Editor.IsOpen()) {
+						if (effects11Editor.ShouldHandleEscapeKey())
+							effects11Editor.Close();
+#endif
 					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
 						IsEnabled = false;
 					}
@@ -1360,7 +1382,8 @@ void Menu::ProcessInputEventQueue()
 				&settings.OverlayToggleKey, &settings.ShaderBlockPrevKey, &settings.ShaderBlockNextKey,
 				&settings.CSEditorToggleKey,
 				&settings.ScreenshotKey,
-				&settings.Effects11ToggleKey
+				&settings.Effects11ToggleKey,
+				&settings.Effects11EditorKey
 			};
 			bool isHotkey = ShouldSwallowInput() && std::any_of(std::begin(hotkeys), std::end(hotkeys),
 														[key](const auto* combo) { return InputCombo::MatchesKeyboardCombo(*combo, key); });
@@ -1399,7 +1422,7 @@ void Menu::RecordDirectInputWheelDelta(std::int32_t delta)
 bool Menu::IsCapturingHotkeyInput() const
 {
 	return settingToggleKey || settingSkipCompilationKey || settingsEffectsToggle ||
-	       settingOverlayToggleKey || settingShaderBlockPrevKey || settingShaderBlockNextKey || settingCSEditorToggleKey || settingScreenshotKey || settingEffects11ToggleKey;
+	       settingOverlayToggleKey || settingShaderBlockPrevKey || settingShaderBlockNextKey || settingCSEditorToggleKey || settingScreenshotKey || settingEffects11ToggleKey || settingEffects11EditorKey;
 }
 
 void Menu::addToEventQueue(KeyEvent e)
@@ -1460,6 +1483,10 @@ bool Menu::SetVisible(bool a_visible)
 
 bool Menu::ShouldSwallowInput()
 {
+#if defined(ENABLE_EFFECTS11)
+	if (Effects11Editor::GetSingleton().IsOpen())
+		return true;
+#endif
 	auto editorWindow = EditorWindow::GetSingleton();
 	return IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup() || (editorWindow && editorWindow->open);
 }

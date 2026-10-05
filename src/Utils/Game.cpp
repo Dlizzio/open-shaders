@@ -928,3 +928,31 @@ namespace Util::EnvironmentControls
 		return preview.has_value();
 	}
 }
+
+float Util::GetSunVisibility()
+{
+	const auto sky = globals::game::sky;
+	const auto sun = sky ? sky->sun : nullptr;
+	if (!sun || !sun->root || !sun->sunBaseNode || !sun->sunBase)
+		return 0.0f;
+	if (sun->root->GetFlags().any(RE::NiAVObject::Flag::kHidden) || sun->sunBaseNode->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+		return 0.0f;
+
+	const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(sun->sunBase->GetGeometryRuntimeData().shaderProperty.get());
+	if (!prop)
+		return 0.0f;
+
+	const float alpha = prop->kBlendColor.alpha;
+	return alpha > 0.0f ? std::min(alpha, 1.0f) : 0.0f;
+}
+
+RE::NiPoint3 Util::GetSunDirection()
+{
+	const auto sky = globals::game::sky;
+	if (!sky || !sky->root || !sky->sun || !sky->sun->root)
+		return { 0.0f, 0.0f, 1.0f };
+	auto direction = sky->root->world.rotate * sky->sun->root->local.translate;
+	if (direction.Unitize() <= FLT_EPSILON)
+		return { 0.0f, 0.0f, 1.0f };
+	return direction;
+}
