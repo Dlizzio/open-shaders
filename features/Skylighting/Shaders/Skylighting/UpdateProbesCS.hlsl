@@ -118,7 +118,7 @@ static const float3 noise3D[32] = {
 
 	bool advanceShadowHistory = false;
 	float shadowSample = 1.0;
-	if (onScreen) {
+	if (onScreen && settings.ShadowDataAvailable != 0) {
 		DirectionalShadowLightData shadowData = DirectionalShadowLights[0];
 
 		float3 jitteredMS = cellCentreMS + noise3D[shadowSampleIndex] * 128;
@@ -152,7 +152,10 @@ static const float3 noise3D[32] = {
 		}
 	}
 
-	if (advanceShadowHistory) {
+	if (settings.ShadowDataAvailable == 0) {
+		outShadowBitmask[dtid] = 0xFFFFFFFFu;
+		outShadowVisibility[dtid] = 1.0;
+	} else if (advanceShadowHistory) {
 		uint bitmask = isValid ? outShadowBitmask[dtid] : 0xFFFFFFFFu;
 		bitmask = (bitmask << 1) | (shadowSample > 0.5 ? 1u : 0u);
 

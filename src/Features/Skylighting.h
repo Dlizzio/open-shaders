@@ -79,7 +79,7 @@ public:
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
 		uint ProbeDataReady;
-		uint _pad2;
+		uint ShadowDataAvailable;
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
@@ -162,6 +162,7 @@ public:
 	};
 
 private:
+	bool HasShadowData() const;
 	bool HasProbeResources() const;
 	void ClearProbes();
 	bool probeDataReady = false;
@@ -173,6 +174,7 @@ private:
 
 	uint lastOcclusionRenderFrame = static_cast<uint>(-1);
 	std::optional<bool> previousInteriorState;
+	bool previousShadowDataAvailable = true;
 	bool forceInteriorOcclusionTwoSided = false;
 	uint32_t savedRasterCullMode = 0;
 	uint32_t rasterCullOverrideDepth = 0;
