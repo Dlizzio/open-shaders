@@ -154,6 +154,7 @@ private:
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
+	inline static RE::Setting* gSunAlphaTransTime = nullptr;
 
 	bool moonAndStarsLoaded = false;
 	RE::TESObjectCELL* currentCell = nullptr;
@@ -183,6 +184,9 @@ private:
 	void SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell);
 
 	void ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[]);
+
+	/** @brief Hides the sun disc and glare at and outside vanilla's fade boundaries. */
+	static void HideSunOutsideFadeWindow(const RE::Sky* sky);
 
 	void ProcessMoon(const RE::Sky* sky, Caster type, RE::NiPoint3 dirs[], float intensities[]);
 

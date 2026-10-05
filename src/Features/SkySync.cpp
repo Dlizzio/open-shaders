@@ -194,6 +194,8 @@ void SkySync::DataLoaded()
 	const auto data = RE::TESDataHandler::GetSingleton();
 	if (data && (data->LookupLoadedModByName("DVLaSS.esp"sv) || data->LookupLoadedLightModByName("DVLaSS.esp"sv)))
 		DisableOnConflict("DVLaSS");
+	if (const auto collection = globals::game::gameSettingCollection)
+		gSunAlphaTransTime = collection->GetSetting("fSunAlphaTransTime");
 }
 
 void SkySync::GameLoaded()
@@ -216,7 +218,7 @@ void SkySync::OnSkyUpdateColors(RE::Sky* sky)
 	if (!settings.Enabled || !sky)
 		return;
 
-	if (settings.DimSunlightUnderHorizon && currentDim > 0.0f && currentDim < 1.0f) {
+	if (settings.DimSunlightUnderHorizon && currentDim < 1.0f) {
 		auto& dirLight = sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kSunlight)];
 		dirLight.red *= currentDim;
 		dirLight.green *= currentDim;
@@ -246,7 +248,8 @@ std::optional<RE::NiPoint3> SkySync::GetCelestialLightDirection() const
 		return std::nullopt;
 
 	auto direction = sky->root->world.rotate * shadowFader.celestialDir;
-	direction.Unitize();
+	if (direction.Unitize() <= FLT_EPSILON)
+		return std::nullopt;
 	return direction;
 }
 
@@ -393,6 +396,7 @@ bool SkySync::Update(const RE::Sky* sky)
 
 	const bool transitionCompleted = immediateTransitionReady;
 	shadowFader.Update(sky, directions, intensities, settings.ShadowTransitionDuration, fadeAdvance, transitionCompleted || resetTransition);
+	currentDim *= std::lerp(1.0f, std::clamp(intensities[static_cast<int>(Caster::Sun)], 0.0f, 1.0f), shadowFader.lightWeights.x);
 	celestialLightingValid = true;
 	immediateTransitionReady = false;
 	return transitionCompleted;
@@ -486,11 +490,36 @@ void SkySync::ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensit
 	dir = GetApparentDirection(dir, GetPlayerAltitude());  // fork: altitude correction
 
 	SetSunPosition(sun, dir, dist);
+	HideSunOutsideFadeWindow(sky);
 
 	dirs[static_cast<int>(Caster::Sun)] = dir;
 
 	if (const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(sun->sunBase->GetGeometryRuntimeData().shaderProperty.get()))
 		intensities[static_cast<int>(Caster::Sun)] = prop->kBlendColor.alpha;
+}
+
+void SkySync::HideSunOutsideFadeWindow(const RE::Sky* sky)
+{
+	if (!gSunAlphaTransTime)
+		return;
+
+	// Match vanilla's float operations so exact fade boundaries agree.
+	constexpr float HoursPerTimingUnit = 1.0f / 6.0f;
+	auto middleHour = [](const RE::TESClimate::Timing::Interval& interval) {
+		return (interval.end * HoursPerTimingUnit + interval.begin * HoursPerTimingUnit) * 0.5f;
+	};
+	const auto& timing = sky->currentClimate->timing;
+	const float halfTransition = gSunAlphaTransTime->GetFloat() * 0.5f;
+	const float fadeInStart = middleHour(timing.sunrise) - halfTransition;
+	const float fadeOutEnd = middleHour(timing.sunset) + halfTransition;
+	const float hour = sky->currentGameHour;
+	if (hour > fadeInStart && hour < fadeOutEnd)
+		return;
+
+	for (const auto& geometry : { sky->sun->sunBase, sky->sun->sunGlare }) {
+		if (const auto prop = geometry ? skyrim_cast<RE::BSSkyShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get()) : nullptr)
+			prop->kBlendColor.alpha = 0.0f;
+	}
 }
 
 void SkySync::ProcessMoon(const RE::Sky* sky, const Caster type, RE::NiPoint3 dirs[], float intensities[])
@@ -651,13 +680,15 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		std::lerp(startDir.y, targetDir.y, t),
 		std::lerp(startDir.z, targetDir.z, t)
 	};
-	currentDir.Unitize();
+	if (currentDir.Unitize() <= FLT_EPSILON)
+		currentDir = { 0.0f, 0.0f, 1.0f };
 	celestialDir = {
 		std::lerp(startCelestialDir.x, celestialTargetDir.x, t),
 		std::lerp(startCelestialDir.y, celestialTargetDir.y, t),
 		std::lerp(startCelestialDir.z, celestialTargetDir.z, t)
 	};
-	celestialDir.Unitize();
+	if (celestialDir.Unitize() <= FLT_EPSILON)
+		celestialDir = { 0.0f, 0.0f, 1.0f };
 
 	if (t >= 1.0f) {
 		currentDir = targetDir;
