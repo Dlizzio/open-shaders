@@ -11,7 +11,6 @@
 #include "TextureManager.h"
 #include "Utils/UI.h"
 
-
 namespace
 {
 	// Finds a_location's own state for a_flagName, or nullptr if it has no entry for it.

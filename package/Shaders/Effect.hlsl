@@ -782,13 +782,13 @@ float GetViewRayShadow(float3 worldPosition, float depth, uint eyeIndex, float n
 	const bool inWorld = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
 
 	if (inWorld && !SharedData::InInterior) {
-			shadow = 0.0;
-			for (uint i = 0; i < sampleCount; i++) {
-				float t = (float(i) + noise) * rcpSampleCount;
-				float3 samplePositionWS = lerp(startPosition, endPosition, t);
-				shadow += ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
-			}
-			shadow *= rcpSampleCount;
+		shadow = 0.0;
+		for (uint i = 0; i < sampleCount; i++) {
+			float t = (float(i) + noise) * rcpSampleCount;
+			float3 samplePositionWS = lerp(startPosition, endPosition, t);
+			shadow += ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+		}
+		shadow *= rcpSampleCount;
 	}
 
 	return shadow;

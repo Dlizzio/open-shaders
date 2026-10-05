@@ -81,8 +81,6 @@ void TextureManager::SwapTextures(const std::string& name1, const std::string& n
 	}
 }
 
-
-
 // Recreates only the canvas-sized textures, leaving fixed-size ones (bloom mip chain,
 // 1x1 adaptation) untouched.
 void TextureManager::CreateResizableTextures(uint32_t width, uint32_t height)

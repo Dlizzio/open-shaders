@@ -324,7 +324,6 @@ void ExtendedEffect::ParseWeatherValue(const WeatherValues& values, const Weathe
 {
 	out = {};
 
-
 	if (slot.components == 1) {
 		auto it = values.find(slot.iniKey);
 		if (it != values.end() && Effects11Settings::TryParseFloat(it->second, out.values[0]))

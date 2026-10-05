@@ -1334,7 +1334,6 @@ void Effects11::DrawVolumetricScattering()
 
 		ID3D11RenderTargetView* nullRTVs[2] = { nullptr, nullptr };
 		context->OMSetRenderTargets(2, nullRTVs, nullptr);
-
 	}
 
 	static constexpr uint32_t tgDim = 256;
