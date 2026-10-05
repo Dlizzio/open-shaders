@@ -19,12 +19,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
 	MaxZenith,
 	MinDiffuseVisibility,
-	MinSpecularVisibility)
+	MinSpecularVisibility,
+	ProbeGridQuality)
 
 void Skylighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.MaxZenith = Util::ClampFinite(settings.MaxZenith, 0.0f, std::numbers::pi_v<float> / 2.0f, Settings{}.MaxZenith);
+	settings.ProbeGridQuality = std::min(settings.ProbeGridQuality, 2u);
 }
 
 void Skylighting::SaveSettings(json& o_json)
@@ -79,6 +81,15 @@ void Skylighting::DrawSettings()
 	ImGui::SliderFloat(T(TKEY("diffuse_min_visibility"), "Diffuse Min Visibility"), &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat(T(TKEY("specular_min_visibility"), "Specular Min Visibility"), &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
 
+	const char* gridNames[] = {
+		T(TKEY("probe_grid_low"), "128 x 128 x 64"),
+		T(TKEY("probe_grid_medium"), "192 x 192 x 96"),
+		T(TKEY("probe_grid_high"), "256 x 256 x 128")
+	};
+	int selectedGrid = static_cast<int>(settings.ProbeGridQuality);
+	if (ImGui::Combo(T(TKEY("probe_grid"), "Probe Grid"), &selectedGrid, gridNames, 3))
+		settings.ProbeGridQuality = static_cast<uint>(selectedGrid);
+
 	ImGui::Separator();
 
 	if (ImGui::Button(T(TKEY("rebuild"), "Rebuild Skylighting")))
@@ -113,11 +124,40 @@ void Skylighting::SetupResources()
 		texOcclusion->CreateDSV(dsvDesc);
 	}
 
+	CreateProbeResources(GetProbeArrayDims(settings.ProbeGridQuality));
+	activeProbeGridQuality = settings.ProbeGridQuality;
+
+	ClearProbes();
+
+	{
+		D3D11_SAMPLER_DESC samplerDesc = {};
+		samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;  // Use comparison filtering
+		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;               // Address mode (Clamp for shadow maps)
+		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;  // Comparison function
+		samplerDesc.MinLOD = 0;
+		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, comparisonSampler.put()));
+		Util::SetResourceName(comparisonSampler.get(), "Skylighting::ComparisonSampler");
+	}
+
+	CompileComputeShaders();
+}
+
+std::array<uint, 3> Skylighting::GetProbeArrayDims(uint quality)
+{
+	static constexpr std::array<std::array<uint, 3>, 3> dimensions{ { { 128, 128, 64 }, { 192, 192, 96 }, { 256, 256, 128 } } };
+	return dimensions[std::min(quality, 2u)];
+}
+
+void Skylighting::CreateProbeResources(const std::array<uint, 3>& dimensions)
+{
 	{
 		D3D11_TEXTURE3D_DESC texDesc{
-			.Width = probeArrayDims[0],
-			.Height = probeArrayDims[1],
-			.Depth = probeArrayDims[2],
+			.Width = dimensions[0],
+			.Height = dimensions[1],
+			.Depth = dimensions[2],
 			.MipLevels = 1,
 			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 			.Usage = D3D11_USAGE_DEFAULT,
@@ -141,45 +181,49 @@ void Skylighting::SetupResources()
 				.WSize = texDesc.Depth }
 		};
 
-		texProbeArray = new Texture3D(texDesc, "Skylighting::ProbeArray");
-		texProbeArray->CreateSRV(srvDesc);
-		texProbeArray->CreateUAV(uavDesc);
+		auto newProbeArray = eastl::make_unique<Texture3D>(texDesc, "Skylighting::ProbeArray");
+		newProbeArray->CreateSRV(srvDesc);
+		newProbeArray->CreateUAV(uavDesc);
 
 		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_UINT;
 
-		texAccumFramesArray = new Texture3D(texDesc, "Skylighting::AccumFramesArray");
-		texAccumFramesArray->CreateSRV(srvDesc);
-		texAccumFramesArray->CreateUAV(uavDesc);
+		auto newAccumFramesArray = eastl::make_unique<Texture3D>(texDesc, "Skylighting::AccumFramesArray");
+		newAccumFramesArray->CreateSRV(srvDesc);
+		newAccumFramesArray->CreateUAV(uavDesc);
 
 		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32_UINT;
 
-		texShadowBitmask = new Texture3D(texDesc, "Skylighting::ShadowBitmask");
-		texShadowBitmask->CreateSRV(srvDesc);
-		texShadowBitmask->CreateUAV(uavDesc);
+		auto newShadowBitmask = eastl::make_unique<Texture3D>(texDesc, "Skylighting::ShadowBitmask");
+		newShadowBitmask->CreateSRV(srvDesc);
+		newShadowBitmask->CreateUAV(uavDesc);
 
 		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R8_UNORM;
 
-		texShadowVisibility = new Texture3D(texDesc, "Skylighting::ShadowVisibility");
-		texShadowVisibility->CreateSRV(srvDesc);
-		texShadowVisibility->CreateUAV(uavDesc);
+		auto newShadowVisibility = eastl::make_unique<Texture3D>(texDesc, "Skylighting::ShadowVisibility");
+		newShadowVisibility->CreateSRV(srvDesc);
+		newShadowVisibility->CreateUAV(uavDesc);
+
+		texProbeArray = std::move(newProbeArray);
+		texAccumFramesArray = std::move(newAccumFramesArray);
+		texShadowBitmask = std::move(newShadowBitmask);
+		texShadowVisibility = std::move(newShadowVisibility);
+		std::copy(dimensions.begin(), dimensions.end(), probeArrayDims);
 	}
+}
 
-	ClearProbes();
+void Skylighting::ApplyProbeGrid()
+{
+	if (!texProbeArray || settings.ProbeGridQuality == activeProbeGridQuality)
+		return;
 
-	{
-		D3D11_SAMPLER_DESC samplerDesc = {};
-		samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;  // Use comparison filtering
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;               // Address mode (Clamp for shadow maps)
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;  // Comparison function
-		samplerDesc.MinLOD = 0;
-		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, comparisonSampler.put()));
-		Util::SetResourceName(comparisonSampler.get(), "Skylighting::ComparisonSampler");
+	try {
+		CreateProbeResources(GetProbeArrayDims(settings.ProbeGridQuality));
+		activeProbeGridQuality = settings.ProbeGridQuality;
+		ResetSkylighting();
+	} catch (const std::exception& error) {
+		logger::error("Skylighting probe grid allocation failed; retaining the active grid: {}", error.what());
+		settings.ProbeGridQuality = activeProbeGridQuality;
 	}
-
-	CompileComputeShaders();
 }
 
 void Skylighting::ClearShaderCache()
@@ -215,8 +259,20 @@ void Skylighting::CompileComputeShaders()
 	}
 }
 
+namespace
+{
+	/** @brief Maps a camera cell to its wrapped, non-negative slot along one probe axis. */
+	uint WrapProbeOrigin(float a_cell, uint a_dim)
+	{
+		const int dim = static_cast<int>(a_dim);
+		return static_cast<uint>(((static_cast<int>(a_cell) - dim / 2) % dim + dim) % dim);
+	}
+}
+
 Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 {
+	ApplyProbeGrid();
+
 	if (!a_inWorld)
 		return Skylighting::SkylightingCB{};
 
@@ -242,14 +298,15 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 		.OcclusionSHBasis4Pi = OcclusionSHBasis4Pi,
 		.PosOffset = cellOrigin - eyePos,
 		.ArrayOrigin = {
-			((int)cellID.x - probeArrayDims[0] / 2) % probeArrayDims[0],
-			((int)cellID.y - probeArrayDims[1] / 2) % probeArrayDims[1],
-			((int)cellID.z - probeArrayDims[2] / 2) % probeArrayDims[2] },
+			WrapProbeOrigin(cellID.x, probeArrayDims[0]),
+			WrapProbeOrigin(cellID.y, probeArrayDims[1]),
+			WrapProbeOrigin(cellID.z, probeArrayDims[2]) },
 		.ValidMargin = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z },
 		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
 		.MinSpecularVisibility = settings.MinSpecularVisibility,
 		.ProbeDataReady = probeDataReady && HasProbeResources() && !queuedResetSkylighting.load(),
-		.ShadowDataAvailable = HasShadowData()
+		.ShadowDataAvailable = HasShadowData(),
+		.ArrayDims = { probeArrayDims[0], probeArrayDims[1], probeArrayDims[2] }
 	};
 }
 

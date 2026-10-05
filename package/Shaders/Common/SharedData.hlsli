@@ -195,6 +195,7 @@ namespace SharedData
 		float MinSpecularVisibility;
 		uint ProbeDataReady;
 		uint ShadowDataAvailable;
+		uint4 ArrayDims;
 	};
 
 	struct CloudShadowsSettings
