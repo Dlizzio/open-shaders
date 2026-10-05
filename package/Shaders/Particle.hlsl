@@ -213,7 +213,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(ENVCUBE) && defined(RAIN) && defined(EFFECTS11)
-	vsout.RaindropData.xy = input.TexCoord1.xy * 0.5 + 0.5;
+	vsout.RaindropData.xy = step(0.0, input.TexCoord1.xy);
 #	endif
 
 #	ifdef VR

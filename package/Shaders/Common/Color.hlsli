@@ -284,12 +284,18 @@ namespace Color
 		return ENABLE_LL ? GamutTransform(color) : color;
 	}
 
-	float3 Diffuse(float3 color)
+	float3 EnbColorPow(float3 color)
 	{
 #	if defined(EFFECTS11)
 		if (SharedData::enbSettings.Enable)
 			color = pow(abs(color), SharedData::enbSettings.ColorPow);
 #	endif
+		return color;
+	}
+
+	float3 Diffuse(float3 color)
+	{
+		color = EnbColorPow(color);
 #	if defined(TRUE_PBR)
 		// TRUE_PBR: input is already linear sRGB; gamut-convert only
 		return ENABLE_LL ? GamutTransform(color) : LinearToSrgb(color);

@@ -21,8 +21,6 @@ namespace ENBExtender
 	// Source preprocessing
 	/** @brief Converts extender directives and collects editable compile-time definitions. */
 	void ConvertExtenderSyntax(std::string& content, const std::filesystem::path& enbseriesPath, std::vector<Effect::UIDefineInfo>& uiDefines, const std::string& iniPath = "", const std::string& iniSection = "");
-	/** @brief Expands stringification macros unsupported by the effect compiler. */
-	void ExpandStringificationMacros(std::string& source);
 	/** @brief Collects and removes stringification definitions before preprocessing. */
 	void StripStringifyDefines(std::string& source, std::vector<std::string>& macroNames);
 	/** @brief Expands invocations of the collected stringification macros. */
@@ -31,16 +29,6 @@ namespace ENBExtender
 	// File preprocessing
 	/** @brief Removes preprocessor line markers from the rewritten source. */
 	void StripLineDirectives(std::string& source);
-	/** @brief Inlines includes for the stringification fallback with bounded recursion. */
-	std::string InlineIncludes(const std::string& source,
-		const std::filesystem::path& basePath,
-		const std::string& iniPath,
-		const std::string& iniSection,
-		std::vector<std::filesystem::path>& includeDirs,
-		std::unordered_set<std::string>& visited,
-		std::vector<Effect::UIDefineInfo>& uiDefines,
-		int depth = 0);
-
 	class PresetInclude : public ID3DInclude
 	{
 	public:

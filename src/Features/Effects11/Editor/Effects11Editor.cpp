@@ -866,9 +866,11 @@ void Effects11Editor::DrawCategoryWeatherToggle(const std::string& a_category)
 
 void Effects11Editor::DrawParticleOwnershipToggle()
 {
-	ImGui::Checkbox(T(TKEY("cs_particles"), "Let {brand} handle particles"), &globals::features::effects11.settings.IgnorePresetParticles);
+	bool overrideParticles = !globals::features::effects11.settings.IgnorePresetParticles;
+	if (ImGui::Checkbox(T(TKEY("cs_particles"), "Effect 11 Particle Override"), &overrideParticles))
+		globals::features::effects11.settings.IgnorePresetParticles = !overrideParticles;
 	Util::AddTooltip(T(TKEY("cs_particles_tip"),
-		"Ignores the preset's [PARTICLE] values so smoke, mist and waterfalls are lit as with Effects 11 off.\n"
+		"Applies the preset's [PARTICLE] values to smoke, mist and waterfalls.\n"
 		"Saved using Save Settings in {brand}; preset saves do not include it."));
 }
 
@@ -1560,7 +1562,12 @@ void Effects11Editor::DrawLauncher()
 		ImGui::SameLine();
 		if (Util::SuccessButton(T(TKEY("save"), "Save")))
 			Save();
+		ImGui::SameLine();
+		if (ImGui::Button(T(TKEY("revert"), "Revert")))
+			RequestAction(PendingAction::Revert);
+		Util::AddTooltip(T(TKEY("revert_tip"), "Discard unsaved changes and reload every value from disk."));
 	}
+	DrawPendingActionPopup();
 
 	DrawParticleOwnershipToggle();
 

@@ -176,7 +176,6 @@ void EffectManager::RegisterSettings()
 	settingManager.RegisterBoolSetting("EnablePostPassShader", "EFFECT", false, false);
 	settingManager.RegisterBoolSetting("EnableCloudShadows", "EFFECT", false, false);
 	settingManager.RegisterBoolSetting("EnableProceduralSun", "EFFECT", false, false);
-	settingManager.RegisterBoolSetting("ExcludeFromAdaptation", "PROCEDURALSUN", true, false);
 	settingManager.RegisterBoolSetting("EnableCloudsScattering", "EFFECT", false, false);
 	settingManager.RegisterBoolSetting("EnableImageBasedLighting", "EFFECT", false, false);
 	settingManager.RegisterBoolSetting("EnableVolumetricRays", "EFFECT", false, false);
@@ -210,9 +209,9 @@ void EffectManager::RegisterSettings()
 	settingManager.RegisterTimeOfDaySetting("Brightness", "WATER", 1.0f, 0.0f, 10.0f, 0.01f, true);
 	settingManager.RegisterTimeOfDaySetting("WavesAmplitude", "WATER", 1.0f, 0.0f, 10.0f, 0.01f, true);
 	settingManager.RegisterFloatSetting("Muddiness", "WATER", 1.0f, 0.0f, 1.0f, 0.01f, false);
-	settingManager.RegisterFloatSetting("SunLightingMultiplier", "WATER", 1.0f, 0.0f, 1.0f, 0.01f, false);
+	settingManager.RegisterFloatSetting("SunLightingMultiplier", "WATER", 0.0f, 0.0f, 1.0f, 0.01f, false);
 	settingManager.RegisterFloatSetting("SunSpecularMultiplier", "WATER", 1.0f, 0.0f, 1.0f, 0.01f, false);
-	settingManager.RegisterFloatSetting("FresnelMin", "WATER", 1.0f, 0.0f, 1.0f, 0.01f, false);
+	settingManager.RegisterFloatSetting("FresnelMin", "WATER", 0.0f, 0.0f, 1.0f, 0.01f, false);
 	settingManager.RegisterFloatSetting("FresnelMax", "WATER", 1.0f, 0.0f, 1.0f, 0.01f, false);
 	settingManager.RegisterFloatSetting("FresnelMultiplier", "WATER", 1.0f, 0.0f, 4.0f, 0.01f, false);
 	settingManager.RegisterFloatSetting("ReflectionAmount", "WATER", 1.0f, 0.0f, 1.0f, 0.01f, false);
@@ -245,7 +244,6 @@ void EffectManager::RegisterSettings()
 	settingManager.RegisterTimeOfDaySetting("ColorPow", "ENVIRONMENT", 1.0f, 1.0f, 2.2f, 0.01f, true);
 
 	settingManager.RegisterBoolSetting("DisableWrongSkyMath", "SKY", false, false);
-	settingManager.RegisterBoolSetting("FixBlackCrush", "SKY", false, false);
 	settingManager.RegisterTimeOfDaySetting("GradientIntensity", "SKY", 1.0f, 0.0f, 30000.0f, 0.01f, true);
 	settingManager.RegisterTimeOfDaySetting("GradientDesaturation", "SKY", 0.0f, -1.0f, 1.0f, 0.01f, true);
 	settingManager.RegisterTimeOfDaySetting("GradientTopIntensity", "SKY", 1.0f, 0.0f, 30000.0f, 0.01f, true);
@@ -1015,8 +1013,16 @@ void EffectManager::UpdateCommonVariablesForEffect(Effect& effect)
 	if (!effect.GetEffect())
 		return;
 
-	auto& depthData = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	effect.SetShaderResourceVariable("TextureDepth", GetEyeCroppedDepthSRV(Util::AsReal(depthData.texture), GetEffectDepthSRV()));
+	auto shaderResource = [&effect](const std::string& name) {
+		auto* variable = effect.GetCachedVariable(name);
+		auto* resource = variable ? variable->AsShaderResource() : nullptr;
+		return resource && resource->IsValid() ? resource : nullptr;
+	};
+
+	if (auto* variable = shaderResource("TextureDepth")) {
+		auto& depthData = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		variable->SetResource(GetEyeCroppedDepthSRV(Util::AsReal(depthData.texture), GetEffectDepthSRV()));
+	}
 
 	static const std::string renderTargets[] = {
 		"RenderTargetRGBA32", "RenderTargetRGBA64", "RenderTargetRGBA64F",
@@ -1027,8 +1033,10 @@ void EffectManager::UpdateCommonVariablesForEffect(Effect& effect)
 
 	auto& textureManager = TextureManager::GetSingleton();
 	for (const auto& targetName : renderTargets) {
-		if (auto* texture = textureManager.FindCommonTexture(targetName))
-			effect.SetShaderResourceVariable(targetName, GetEyeCroppedSRV(*texture));
+		if (auto* variable = shaderResource(targetName)) {
+			if (auto* texture = textureManager.FindCommonTexture(targetName))
+				variable->SetResource(GetEyeCroppedSRV(*texture));
+		}
 	}
 
 	effect.SetVectorVariable("Timer", commonData.timer, sizeof(commonData.timer));

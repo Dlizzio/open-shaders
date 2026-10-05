@@ -77,7 +77,7 @@ public:
 
 		uint EnableVolumetricRays;
 		float VolumetricRaysIntensity;
-		float VolumetricRaysDensity;
+		float VolumetricRaysExtinction;
 		float VolumetricRaysSkyColorAmount;
 
 		float VolumetricRaysDesaturation;
@@ -167,9 +167,7 @@ public:
 		float AuroraIntensity;
 
 		float AuroraCurve;
-		uint FixBlackCrush;
-		float NightSkyPad0;
-		float NightSkyPad1;
+		float3 NightSkyPad;
 	};
 	static_assert(sizeof(PerFrame) % 16 == 0);
 	static_assert(offsetof(PerFrame, StarsCurve) % 16 == 0);

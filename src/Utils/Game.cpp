@@ -4,6 +4,7 @@
 #include <limits>
 #include <mutex>
 
+#include "Features/SkySync.h"
 #include "Globals.h"
 #include "State.h"
 
@@ -948,10 +949,28 @@ float Util::GetSunVisibility()
 
 RE::NiPoint3 Util::GetSunDirection()
 {
+	if (auto direction = globals::features::skySync.GetCelestialDirection(SkySync::Caster::Sun))
+		return *direction;
 	const auto sky = globals::game::sky;
 	if (!sky || !sky->root || !sky->sun || !sky->sun->root)
 		return { 0.0f, 0.0f, 1.0f };
 	auto direction = sky->root->world.rotate * sky->sun->root->local.translate;
+	if (direction.Unitize() <= FLT_EPSILON)
+		return { 0.0f, 0.0f, 1.0f };
+	return direction;
+}
+
+RE::NiPoint3 Util::GetMoonDirection(const RE::Moon* moon)
+{
+	const auto sky = globals::game::sky;
+	if (!sky || !sky->root || !moon || !moon->root)
+		return { 0.0f, 0.0f, 1.0f };
+	if (moon == sky->masser || moon == sky->secunda) {
+		const auto caster = moon == sky->masser ? SkySync::Caster::Masser : SkySync::Caster::Secunda;
+		if (auto direction = globals::features::skySync.GetCelestialDirection(caster))
+			return *direction;
+	}
+	auto direction = sky->root->world.rotate * Moon::GetFacingAxis(moon->root->local.rotate);
 	if (direction.Unitize() <= FLT_EPSILON)
 		return { 0.0f, 0.0f, 1.0f };
 	return direction;

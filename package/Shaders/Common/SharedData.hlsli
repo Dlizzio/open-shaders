@@ -406,7 +406,7 @@ namespace SharedData
 
 		uint EnableVolumetricRays;
 		float VolumetricRaysIntensity;
-		float VolumetricRaysDensity;
+		float VolumetricRaysExtinction;
 		float VolumetricRaysSkyColorAmount;
 
 		float VolumetricRaysDesaturation;
@@ -496,9 +496,7 @@ namespace SharedData
 		float AuroraIntensity;
 
 		float AuroraCurve;
-		uint FixBlackCrush;
-		float NightSkyPad0;
-		float NightSkyPad1;
+		float3 NightSkyPad;
 	};
 	struct TerrainBlendingSettings
 	{

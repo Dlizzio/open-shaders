@@ -413,18 +413,6 @@ bool Effect::LoadFXFile()
 		return { static_cast<const char*>(blob->GetBufferPointer()), blob->GetBufferSize() };
 	};
 
-	auto tryPreprocessAndCompile = [&](const std::string& source, ID3DInclude* include,
-									   const std::vector<std::string>& extraStringifyMacros = {}) -> bool {
-		auto pp = preprocess(source, include);
-		if (pp.empty())
-			return false;
-		if (!extraStringifyMacros.empty())
-			ENBExtender::ExpandStringifyMacros(pp, extraStringifyMacros);
-		ENBExtender::ParseSourceGroupScopes(pp, *this);
-		ENBExtender::StripLineDirectives(pp);
-		return compile(pp, nullptr);
-	};
-
 	bool compiled = false;
 
 	{
@@ -440,14 +428,6 @@ bool Effect::LoadFXFile()
 			ENBExtender::StripLineDirectives(pp);
 			compiled = compile(pp, nullptr);
 		}
-	}
-
-	if (!compiled) {
-		std::vector<std::filesystem::path> dirs = { enbseriesPath };
-		std::unordered_set<std::string> visited;
-		auto inlined = ENBExtender::InlineIncludes(sourceCode, enbseriesPath, iniPathStr, iniSection, dirs, visited, uiDefines);
-		ENBExtender::ExpandStringificationMacros(inlined);
-		compiled = tryPreprocessAndCompile(inlined, nullptr);
 	}
 
 	if (!compiled) {

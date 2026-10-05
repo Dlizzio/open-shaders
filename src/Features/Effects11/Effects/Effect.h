@@ -162,6 +162,10 @@ public:
 	std::vector<UIVariable> uiVariables;
 
 	static bool IsWeatherSeparated(const UIVariable& uiVar) { return !uiVar.separation.empty() && uiVar.separation != "None"; }
+	/** @brief Returns whether the vector is stored as separate INI component keys. */
+	static bool IsPerComponentVector(const UIVariable& uiVar);
+	/** @brief Returns the preset key, or an empty string when its identity is unresolved. */
+	static std::string GetVariableIniKey(const UIVariable& uiVar);
 	static void CaptureBaseValue(UIVariable& uiVar);
 	/** @brief Records the current value as the shader default. Only meaningful before the ini is applied. */
 	static void CaptureDefaultValue(UIVariable& uiVar);
@@ -286,10 +290,6 @@ public:
 	void ClearVariableCache();
 
 	virtual bool IsTechniqueEnabled(TechniqueInfo&) { return true; }
-
-protected:
-	static bool IsPerComponentVector(const UIVariable& uiVar);
-	std::string GetVariableIniKey(const UIVariable& uiVar);
 
 private:
 	bool LoadFXFile();

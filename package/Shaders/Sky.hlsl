@@ -367,12 +367,7 @@ PS_OUTPUT main(PS_INPUT input)
 		baseColor.xyz = ShadeStars(baseColor, input.TexCoord0.xy);
 #			elif defined(EFFECTS11) && defined(TEX) && !defined(DITHER) && !defined(CLOUDS)
 	[branch] if (SharedData::enbSettings.Enable && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsMoon))
-	{
-		float2 edge = abs(input.TexCoord0.xy * 2.0 - 1.0);
 		baseColor.xyz = pow(max(baseColor.xyz, 0.0), SharedData::enbSettings.MoonCurve);
-		if (max(edge.x, edge.y) > 0.985)
-			baseColor.xyz = 0.0;
-	}
 #			endif
 	if (!composeAuthoredSky)
 		baseColor.xyz = Color::Sky(baseColor.xyz);
@@ -499,11 +494,8 @@ PS_OUTPUT main(PS_INPUT input)
 	[branch] if (SharedData::enbSettings.EnableCloudsScattering)
 		skyGradientColor = SkyScattering::ApplySkyScattering(skyGradientColor, input.SkyBlendColor2.xyz, viewDirection) + SkyScattering::GetMoonGlow(viewDirection);
 #				endif
-#				if defined(EFFECTS11)
-	if (SharedData::enbSettings.Enable && SharedData::enbSettings.FixBlackCrush)
-		noiseGrad *= saturate(dot(skyGradientColor, 8.0));
-#				endif
-	psout.Color.xyz = ComposeSkyColor(skyGradientColor + noiseGrad, 1.0, skyScale, ENABLE_LL) * skyBrightnessMultiplier;
+	psout.Color.xyz = ComposeSkyColor(skyGradientColor + noiseGrad, 1.0, skyScale, ENABLE_LL);
+	psout.Color.xyz *= skyBrightnessMultiplier;
 	psout.Color.w = input.Color.w;
 #			endif  // TEX
 

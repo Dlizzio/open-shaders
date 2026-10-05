@@ -16,6 +16,7 @@ static constexpr std::array<std::string_view, 3> FocusTechniques = { "Aperture",
 bool ENBDepthOfField::Apply()
 {
 	historyValid.fill(false);
+	historyIndex.fill(0);
 	apertureSRV.fill(nullptr);
 	apertureFrame.fill(UINT32_MAX);
 	const bool applied = EffectBase::Apply();
@@ -48,7 +49,7 @@ void ENBDepthOfField::Execute()
 	if (!textureHDRTemp || !textureHDRTemp2)
 		return;
 
-	const bool swap = (textureManager.GetTextureSwap() & 1) != 0;
+	const bool swap = historyIndex[eye] != 0;
 
 	auto& textureApertureRead = effectTextureCache[std::string(swap ? "TextureApertureSwap" : "TextureAperture") + suffix];
 	auto& textureApertureWrite = effectTextureCache[std::string(swap ? "TextureAperture" : "TextureApertureSwap") + suffix];
@@ -78,6 +79,7 @@ void ENBDepthOfField::Execute()
 	SetShaderResourceVariable("TexturePrevious", textureFocusRead.srv.get());
 	SetShaderResourceVariable("TextureCurrent", textureReadFocus.srv.get());
 	ExecuteTechnique("Focus", textureFocusWrite);
+	historyIndex[eye] ^= 1;
 	historyValid[eye] = true;
 
 	SetShaderResourceVariable("TextureFocus", textureFocusWrite.srv.get());
@@ -107,9 +109,7 @@ void ENBDepthOfField::UpdateEffectVariables()
 
 	ID3D11ShaderResourceView* adaptationSRV = nullptr;
 	if (idEnableAdaptation != 0xFFFFFFFF && settingManager.GetValue<bool>(idEnableAdaptation)) {
-		const char* previousAdaptation = (TextureManager::GetSingleton().GetTextureSwap() & 1) ? "TextureAdaptationSwap" : "TextureAdaptation";
-		auto* texture = TextureManager::GetSingleton().FindCommonTexture(previousAdaptation);
-		adaptationSRV = texture ? texture->srv.get() : nullptr;
+		adaptationSRV = EffectManager::GetSingleton().enbAdaptation.GetHistorySRV();
 	}
 	SetShaderResourceVariable("TextureAdaptation", adaptationSRV);
 

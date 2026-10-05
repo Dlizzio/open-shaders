@@ -4,7 +4,7 @@ Texture2D<float> InputTexture : register(t0);
 Texture2D<float> LinearDepthTexture : register(t1);
 RWTexture2D<float> OutputTexture : register(u0);
 
-#include "VolumetricRaysCommon.hlsli"
+#include "Effects11/VolumetricRaysCommon.hlsli"
 
 #define TG_DIM 256
 #define WINDOW 12

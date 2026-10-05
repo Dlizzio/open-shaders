@@ -364,89 +364,122 @@ namespace ENBExtender
 		return trimmed.substr(nameStart, nameEnd - nameStart);
 	}
 
+	static size_t SkipSourceLiteralOrComment(std::string_view source, size_t pos)
+	{
+		const char quote = source[pos];
+		if (quote == '"' || quote == '\'') {
+			for (size_t end = pos + 1; end < source.size(); ++end) {
+				if (source[end] == '\\')
+					++end;
+				else if (source[end] == quote)
+					return end + 1;
+			}
+			return source.size();
+		}
+		if (source.substr(pos, 2) == "//") {
+			const auto end = source.find('\n', pos + 2);
+			return end == std::string_view::npos ? source.size() : end;
+		}
+		if (source.substr(pos, 2) == "/*") {
+			const auto end = source.find("*/", pos + 2);
+			return end == std::string_view::npos ? source.size() : end + 2;
+		}
+		return pos;
+	}
+
+	static std::string StringifyArgument(std::string_view argument)
+	{
+		std::string normalized;
+		for (size_t pos = 0; pos < argument.size();) {
+			const auto end = SkipSourceLiteralOrComment(argument, pos);
+			const bool comment = end != pos && argument[pos] == '/';
+			if (comment || std::isspace(static_cast<unsigned char>(argument[pos]))) {
+				if (!normalized.empty() && normalized.back() != ' ')
+					normalized += ' ';
+				pos = comment ? end : pos + 1;
+			} else if (end != pos) {
+				normalized.append(argument.substr(pos, end - pos));
+				pos = end;
+			} else {
+				normalized += argument[pos++];
+			}
+		}
+		Trim(normalized);
+
+		std::string result = "\"";
+		for (size_t pos = 0; pos < normalized.size();) {
+			const auto end = SkipSourceLiteralOrComment(normalized, pos);
+			if (end != pos) {
+				for (; pos < end; ++pos) {
+					if (normalized[pos] == '\\' || normalized[pos] == '"')
+						result += '\\';
+					result += normalized[pos];
+				}
+			} else if (normalized.compare(pos, 3, "| -") == 0) {
+				result += "|-";
+				pos += 3;
+			} else if (normalized.compare(pos, 2, " .") == 0) {
+				++pos;
+			} else if (normalized.compare(pos, 2, ". ") == 0) {
+				result += '.';
+				pos += 2;
+			} else {
+				result += normalized[pos++];
+			}
+		}
+		return result + '"';
+	}
+
 	static std::string ReplaceStringifyInvocations(const std::string& source, const std::string& macroName)
 	{
 		std::string result;
 		result.reserve(source.size());
 		size_t pos = 0;
-
 		while (pos < source.size()) {
-			size_t found = source.find(macroName, pos);
-			if (found == std::string::npos) {
-				result.append(source, pos);
-				break;
-			}
-
-			bool partOfLargerIdent =
-				(found > 0 && IsIdentChar(source[found - 1])) ||
-				(found + macroName.size() < source.size() && IsIdentChar(source[found + macroName.size()]));
-
-			if (partOfLargerIdent) {
-				result.append(source, pos, found + macroName.size() - pos);
-				pos = found + macroName.size();
+			const auto tokenEnd = SkipSourceLiteralOrComment(source, pos);
+			if (tokenEnd != pos) {
+				result.append(source, pos, tokenEnd - pos);
+				pos = tokenEnd;
 				continue;
 			}
-
-			size_t afterName = found + macroName.size();
-			while (afterName < source.size() && (source[afterName] == ' ' || source[afterName] == '\t'))
+			if (!IsIdentChar(source[pos])) {
+				result += source[pos++];
+				continue;
+			}
+			size_t nameEnd = pos + 1;
+			while (nameEnd < source.size() && IsIdentChar(source[nameEnd]))
+				++nameEnd;
+			size_t afterName = nameEnd;
+			while (afterName < source.size() && std::isspace(static_cast<unsigned char>(source[afterName])))
 				++afterName;
-
-			if (afterName >= source.size() || source[afterName] != '(') {
-				result.append(source, pos, found + macroName.size() - pos);
-				pos = found + macroName.size();
+			if (source.compare(pos, nameEnd - pos, macroName) != 0 || afterName == source.size() || source[afterName] != '(') {
+				result.append(source, pos, nameEnd - pos);
+				pos = nameEnd;
 				continue;
 			}
 
 			int depth = 1;
 			size_t argEnd = afterName + 1;
 			while (argEnd < source.size() && depth > 0) {
+				const auto end = SkipSourceLiteralOrComment(source, argEnd);
+				if (end != argEnd) {
+					argEnd = end;
+					continue;
+				}
 				if (source[argEnd] == '(')
 					++depth;
 				else if (source[argEnd] == ')')
 					--depth;
 				++argEnd;
 			}
-
 			if (depth != 0) {
-				result.append(source, pos, found + macroName.size() - pos);
-				pos = found + macroName.size();
-				continue;
+				result.append(source, pos);
+				break;
 			}
-
-			std::string arg = source.substr(afterName + 1, argEnd - afterName - 2);
-			Trim(arg);
-
-			// D3DPreprocess spacing would otherwise change the preset's UI names and group paths.
-			std::string collapsed;
-			collapsed.reserve(arg.size());
-			for (size_t ci = 0; ci < arg.size(); ++ci) {
-				if (ci + 2 < arg.size() && arg[ci] == '|' && arg[ci + 1] == ' ' && arg[ci + 2] == '-') {
-					collapsed += "|-";
-					ci += 2;
-				} else if (arg[ci] == ' ' && ci + 1 < arg.size() && arg[ci + 1] == '.') {
-					continue;
-				} else if (arg[ci] == '.' && ci + 1 < arg.size() && arg[ci + 1] == ' ') {
-					collapsed += '.';
-					++ci;
-				} else {
-					collapsed += arg[ci];
-				}
-			}
-
-			result.append(source, pos, found - pos);
-			result += "\"" + collapsed + "\"";
+			result += StringifyArgument(std::string_view(source).substr(afterName + 1, argEnd - afterName - 2));
 			pos = argEnd;
 		}
-
 		return result;
-	}
-
-	void ExpandStringificationMacros(std::string& source)
-	{
-		std::vector<std::string> macroNames;
-		StripStringifyDefines(source, macroNames);
-		if (!macroNames.empty())
-			ExpandStringifyMacros(source, macroNames);
 	}
 
 	void StripStringifyDefines(std::string& source, std::vector<std::string>& macroNames)
@@ -456,13 +489,29 @@ namespace ENBExtender
 
 		std::istringstream stream(source);
 		std::string line;
+		size_t lineStart = 0, scanPos = 0;
 		while (std::getline(stream, line)) {
-			if (auto name = ParseStringifyDefine(line)) {
+			bool directiveIsCode = false;
+			const auto first = line.find_first_not_of(" \t\r");
+			if (first != std::string::npos) {
+				const auto directivePos = lineStart + first;
+				while (scanPos <= directivePos) {
+					const auto end = SkipSourceLiteralOrComment(source, scanPos);
+					if (end != scanPos) {
+						scanPos = end;
+					} else {
+						directiveIsCode = scanPos == directivePos;
+						++scanPos;
+					}
+				}
+			}
+			if (auto name = directiveIsCode ? ParseStringifyDefine(line) : std::nullopt) {
 				macroNames.push_back(*name);
 				stripped += "\n";
 			} else {
 				stripped += line + "\n";
 			}
+			lineStart += line.size() + 1;
 		}
 
 		source = std::move(stripped);
@@ -993,123 +1042,6 @@ namespace ENBExtender
 		source = std::move(result);
 	}
 
-	static std::string ReadAndProcessInclude(const std::filesystem::path& fullPath,
-		const std::filesystem::path& basePath,
-		const std::string& iniPath,
-		const std::string& iniSection,
-		std::vector<std::filesystem::path>& includeDirs,
-		std::unordered_set<std::string>& visited,
-		std::vector<Effect::UIDefineInfo>& uiDefines,
-		int depth);
-
-	std::string InlineIncludes(const std::string& source,
-		const std::filesystem::path& basePath,
-		const std::string& iniPath,
-		const std::string& iniSection,
-		std::vector<std::filesystem::path>& includeDirs,
-		std::unordered_set<std::string>& visited,
-		std::vector<Effect::UIDefineInfo>& uiDefines,
-		int depth)
-	{
-		if (depth > 20)
-			return source;
-
-		std::string result;
-		result.reserve(source.size());
-		std::istringstream stream(source);
-		std::string line;
-		while (std::getline(stream, line)) {
-			size_t firstNonSpace = line.find_first_not_of(" \t");
-			if (firstNonSpace != std::string::npos && line[firstNonSpace] == '#') {
-				auto rest = line.substr(firstNonSpace + 1);
-				size_t dirStart = rest.find_first_not_of(" \t");
-				if (dirStart != std::string::npos && rest.compare(dirStart, 7, "include") == 0) {
-					size_t q1 = rest.find('"', dirStart + 7);
-					size_t q2 = (q1 != std::string::npos) ? rest.find('"', q1 + 1) : std::string::npos;
-					if (q1 != std::string::npos && q2 != std::string::npos) {
-						std::string includeName = rest.substr(q1 + 1, q2 - q1 - 1);
-
-						std::string_view nameView(includeName);
-						while (!nameView.empty() && (nameView.front() == '/' || nameView.front() == '\\'))
-							nameView.remove_prefix(1);
-						includeName = std::string(nameView);
-
-						std::filesystem::path inclPath;
-						bool found = false;
-						auto baseCanonical = std::filesystem::weakly_canonical(basePath);
-						for (auto& dir : includeDirs) {
-							auto candidate = std::filesystem::weakly_canonical(dir / includeName);
-							auto [baseEnd, _] = std::mismatch(baseCanonical.begin(), baseCanonical.end(), candidate.begin(), candidate.end());
-							if (baseEnd != baseCanonical.end())
-								continue;
-							if (std::filesystem::exists(candidate)) {
-								inclPath = candidate;
-								found = true;
-								break;
-							}
-						}
-						if (!found) {
-							auto candidate = std::filesystem::weakly_canonical(basePath / includeName);
-							auto [baseEnd, _] = std::mismatch(baseCanonical.begin(), baseCanonical.end(), candidate.begin(), candidate.end());
-							if (baseEnd != baseCanonical.end()) {
-								result += "\n";
-								continue;
-							}
-							inclPath = candidate;
-						}
-
-						std::string canonical = inclPath.string();
-						if (visited.count(canonical)) {
-							result += "\n";
-							continue;
-						}
-
-						std::string expanded = ReadAndProcessInclude(inclPath, basePath, iniPath, iniSection, includeDirs, visited, uiDefines, depth + 1);
-						result += expanded;
-						result += "\n";
-						continue;
-					}
-				}
-			}
-			result += line;
-			result += "\n";
-		}
-		return result;
-	}
-
-	static std::string ReadAndProcessInclude(const std::filesystem::path& fullPath,
-		const std::filesystem::path& basePath,
-		const std::string& iniPath,
-		const std::string& iniSection,
-		std::vector<std::filesystem::path>& includeDirs,
-		std::unordered_set<std::string>& visited,
-		std::vector<Effect::UIDefineInfo>& uiDefines,
-		int depth)
-	{
-		std::string canonical = fullPath.string();
-		visited.insert(canonical);
-
-		const SKSE::stl::scope_exit releaseVisit([&]() noexcept { visited.erase(canonical); });
-		Util::ShaderInclude::File file;
-		Util::ShaderInclude::ReadError error;
-		if (!Util::ShaderInclude::Read(fullPath, file, error)) {
-			Util::ShaderInclude::Report(basePath, fullPath, error);
-			return {};
-		}
-		std::string content(file.data.get(), file.size);
-		EffectSourceCompatibility::PatchInteriorTimeOfDayMacro(content);
-
-		Util::ShaderPatches::Apply(fullPath.filename().string().c_str(), content);
-		ConvertExtenderSyntax(content, basePath, uiDefines, iniPath, iniSection);
-
-		auto parentDir = fullPath.parent_path();
-		if (std::find(includeDirs.begin(), includeDirs.end(), parentDir) == includeDirs.end())
-			includeDirs.push_back(parentDir);
-
-		auto expanded = InlineIncludes(content, basePath, iniPath, iniSection, includeDirs, visited, uiDefines, depth);
-		return expanded;
-	}
-
 	PresetInclude::PresetInclude(const std::filesystem::path& a_basePath, std::vector<Effect::UIDefineInfo>& a_uiDefines, const std::string& a_iniPath, const std::string& a_iniSection) :
 		basePath(a_basePath), uiDefines(a_uiDefines), iniPath(a_iniPath), iniSection(a_iniSection), sourceIncludes(a_basePath) {}
 
@@ -1318,50 +1250,52 @@ namespace ENBExtender
 		std::unordered_map<std::string, uint32_t> scopeIds;
 		std::vector<uint32_t> scopeIdOf(scopes.size());
 		std::vector<const std::string*> uniqueScopes;
-		for (size_t j = 0; j < scopes.size(); ++j) {
-			auto [it, inserted] = scopeIds.try_emplace(scopes[j], static_cast<uint32_t>(uniqueScopes.size()));
+		for (size_t scope = 0; scope < scopes.size(); ++scope) {
+			auto [it, inserted] = scopeIds.try_emplace(scopes[scope], static_cast<uint32_t>(uniqueScopes.size()));
 			if (inserted)
 				uniqueScopes.push_back(&it->first);
-			scopeIdOf[j] = it->second;
+			scopeIdOf[scope] = it->second;
 		}
 
-		const size_t n = vars.size(), m = scopes.size(), u = uniqueScopes.size();
-		std::vector<uint8_t> cost(n * u);
-		for (size_t i = 0; i < n; ++i) {
-			for (size_t s = 0; s < u; ++s) {
-				const auto& scope = *uniqueScopes[s];
-				auto key = NormalizeIniKey(scope.empty() ? vars[i]->displayName : scope + "." + vars[i]->displayName);
+		static constexpr uint8_t scopedHitCost = 0, rootHitCost = 1, missCost = 4;
+		const size_t varCount = vars.size(), scopeCount = scopes.size(), uniqueCount = uniqueScopes.size();
+		std::vector<uint8_t> cost(varCount * uniqueCount);
+		for (size_t var = 0; var < varCount; ++var) {
+			for (size_t unique = 0; unique < uniqueCount; ++unique) {
+				const auto& scope = *uniqueScopes[unique];
+				auto key = NormalizeIniKey(scope.empty() ? vars[var]->displayName : scope + "." + vars[var]->displayName);
 				bool found = keys.contains(key) || keys.contains(key + "X");
-				cost[i * u + s] = found ? (scope.empty() ? 1 : 0) : 4;
+				cost[var * uniqueCount + unique] = found ? (scope.empty() ? rootHitCost : scopedHitCost) : missCost;
 			}
 		}
 
-		std::vector<uint32_t> total(m), next(m);
-		std::vector<uint32_t> from(n * m);
-		for (size_t j = 0; j < m; ++j)
-			total[j] = cost[scopeIdOf[j]];
-		for (size_t i = 1; i < n; ++i) {
-			uint32_t best = UINT32_MAX, bestJ = 0;
-			for (size_t j = 0; j < m; ++j) {
-				if (total[j] < best) {
-					best = total[j];
-					bestJ = static_cast<uint32_t>(j);
+		// Variables and group markers share declaration order, so pick the cheapest non-decreasing scope sequence
+		std::vector<uint32_t> total(scopeCount), next(scopeCount);
+		std::vector<uint32_t> from(varCount * scopeCount);
+		for (size_t scope = 0; scope < scopeCount; ++scope)
+			total[scope] = cost[scopeIdOf[scope]];
+		for (size_t var = 1; var < varCount; ++var) {
+			uint32_t best = UINT32_MAX, bestScope = 0;
+			for (size_t scope = 0; scope < scopeCount; ++scope) {
+				if (total[scope] < best) {
+					best = total[scope];
+					bestScope = static_cast<uint32_t>(scope);
 				}
-				next[j] = best + cost[i * u + scopeIdOf[j]];
-				from[i * m + j] = bestJ;
+				next[scope] = best + cost[var * uniqueCount + scopeIdOf[scope]];
+				from[var * scopeCount + scope] = bestScope;
 			}
 			std::swap(total, next);
 		}
 
-		size_t j = std::min_element(total.begin(), total.end()) - total.begin();
+		size_t scope = std::min_element(total.begin(), total.end()) - total.begin();
 		size_t matched = 0;
-		for (size_t i = n; i-- > 0;) {
-			vars[i]->group = scopes[j];
-			if (cost[i * u + scopeIdOf[j]] < 4)
+		for (size_t var = varCount; var-- > 0;) {
+			vars[var]->group = scopes[scope];
+			if (cost[var * uniqueCount + scopeIdOf[scope]] < missCost)
 				++matched;
-			j = from[i * m + j];
+			scope = from[var * scopeCount + scope];
 		}
 
-		logger::info("[ENBEXTENDER] Recovered groups for encrypted '{}': {}/{} parameters matched '{}'", effect.GetName(), matched, n, iniPath.filename().string());
+		logger::info("[ENBEXTENDER] Recovered groups for encrypted '{}': {}/{} parameters matched '{}'", effect.GetName(), matched, varCount, iniPath.filename().string());
 	}
 }

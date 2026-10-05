@@ -57,8 +57,6 @@ namespace UITree
 
 	void Tree::Build(std::span<Effect*> effects, FilterMode filter)
 	{
-		std::unordered_set<std::string> seenItems;
-
 		constexpr int sourceOrderOffset = 100000;
 		int effectIndex = 0;
 
@@ -67,6 +65,7 @@ namespace UITree
 				continue;
 
 			int offset = effectIndex++ * sourceOrderOffset;
+			std::unordered_set<std::string> seenItems;
 
 			for (auto& [path, gm] : effect->groupMeta) {
 				auto [it, inserted] = meta.try_emplace(path, GroupMeta{});
@@ -97,7 +96,9 @@ namespace UITree
 
 				std::string uname = !var.uniqueName.empty() ? var.uniqueName : !var.group.empty() ? var.group + "." + var.displayName :
 				                                                                                    var.displayName;
-				uniqueNameMap[uname] = { effect, i };
+				auto [global, inserted] = uniqueNameMap.try_emplace(uname, VarRef{ effect, i });
+				if (!inserted && global->second.effect != effect)
+					global->second = {};
 				fileMap[uname] = { effect, i };
 
 				if (filter == FilterMode::TopLevelOnly && !var.isTopLevel)

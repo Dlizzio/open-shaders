@@ -144,7 +144,7 @@ namespace
 		const bool masser = moon == a_sky->masser;
 		const auto moonColor = Util::Moon::GetBlendColor(masser ? a_sky->masser : a_sky->secunda, masser ? Util::Moon::MasserBaseColor : Util::Moon::SecundaBaseColor,
 			skySync.settings.NewMoonIntensity, skySync.settings.CrescentMoonIntensity, skySync.settings.FullMoonIntensity);
-		a_light = { float3(moonColor.x, moonColor.y, moonColor.z), Util::Moon::GetDirection(masser ? a_sky->masser : a_sky->secunda), masser ? a_perFrame.MasserBillboardTan : a_perFrame.SecundaBillboardTan, 4.0f, false };
+		a_light = { float3(moonColor.x, moonColor.y, moonColor.z), Util::GetMoonDirection(masser ? a_sky->masser : a_sky->secunda), masser ? a_perFrame.MasserBillboardTan : a_perFrame.SecundaBillboardTan, 4.0f, false };
 		return true;
 	}
 
@@ -178,7 +178,7 @@ void Effects11::UpdateSkyScattering(PerFrame& a_data)
 	if (sky && sky->sun) {
 		const auto direction = Util::GetSunDirection();
 		const float length = direction.Length();
-		if (length > 1e-6f && (sunVisible || direction.z < 0.0f))
+		if (length > 1e-6f)
 			scatteringSunDirection = { direction.x / length, direction.y / length, direction.z / length };
 	}
 
@@ -550,7 +550,6 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.StarsAnimationIntensity = settingManager.GetValue<float>("StarsAnimationIntensity", "SKY");
 	data.AuroraIntensity = settingManager.GetInterpolatedTimeOfDayValue("AuroraBorealisIntensity", "SKY");
 	data.AuroraCurve = settingManager.GetInterpolatedTimeOfDayValue("AuroraBorealisCurve", "SKY");
-	data.FixBlackCrush = settingManager.GetValue<bool>("FixBlackCrush", "SKY");
 
 	data.VolumetricRaysDesaturation = settingManager.GetInterpolatedTimeOfDayValue("Desaturation", "GAMEVOLUMETRICRAYS");
 	auto colorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("ColorFilter", "GAMEVOLUMETRICRAYS");
@@ -570,7 +569,12 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 
 	data.EnableVolumetricRays = enableEffect && settingManager.GetValue<bool>("EnableVolumetricRays", "EFFECT");
 	data.VolumetricRaysIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "VOLUMETRICRAYS");
-	data.VolumetricRaysDensity = settingManager.GetInterpolatedTimeOfDayValue("Density", "VOLUMETRICRAYS");
+	{
+		constexpr float minimumDensity = 0.1f;
+		constexpr float referenceExtinction = 0.000003f;
+		const float density = std::max(minimumDensity, settingManager.GetInterpolatedTimeOfDayValue("Density", "VOLUMETRICRAYS"));
+		data.VolumetricRaysExtinction = referenceExtinction / density;
+	}
 	data.VolumetricRaysSkyColorAmount = settingManager.GetInterpolatedTimeOfDayValue("SkyColorAmount", "VOLUMETRICRAYS");
 	if (const auto sky = globals::game::sky) {
 		const auto& horizonColor = sky->skyColor[RE::TESWeather::ColorTypes::kHorizon];
@@ -748,7 +752,6 @@ void Effects11::ClearShaderCache()
 	sunRaysCompositePS = nullptr;
 
 	auto& effectManager = EffectManager::GetSingleton();
-	effectManager.enbAdaptation.ClearShaderCache();
 	effectManager.ReloadShaders();
 }
 
@@ -1006,7 +1009,7 @@ void Effects11::CheckCommonData()
 		auto& settingManager = SettingManager::GetSingleton();
 		auto& effectManager = EffectManager::GetSingleton();
 
-		enableEffect = !globals::state->IsFullScreenMenuOpen() && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL") && effectManager.IsPresetLoaded();
+		enableEffect = !globals::state->IsMenuArtOpen() && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL") && effectManager.IsPresetLoaded();
 
 		effectManager.UpdateCommonData();
 
@@ -1036,9 +1039,12 @@ void Effects11::OverrideAmbientLighting(DirectionalAmbientColors& DirectionalAmb
 	const float desaturation = settingManager.GetInterpolatedTimeOfDayValue("AmbientLightingDesaturation", "ENVIRONMENT");
 	const float intensity = settingManager.GetInterpolatedTimeOfDayValue("AmbientLightingIntensity", "ENVIRONMENT");
 
-	for (auto& axis : DirectionalAmbientColors.directionalAmbientColors) {
+	auto& colors = DirectionalAmbientColors.directionalAmbientColors;
+	auto& desaturatedSide = colors[1][1];
+	desaturatedSide = F3ToNi(Desaturation(NiToF3(desaturatedSide), desaturation));
+	for (auto& axis : colors) {
 		for (auto& ambientLightingColor : axis)
-			ambientLightingColor = F3ToNi(Intensity(Desaturation(NiToF3(ambientLightingColor), desaturation), intensity));
+			ambientLightingColor = F3ToNi(Intensity(NiToF3(ambientLightingColor), intensity));
 	}
 }
 
@@ -1229,7 +1235,10 @@ void Effects11::DrawVolumetricScattering()
 	}
 
 	if (!applyVolumetricRaysPS) {
-		applyVolumetricRaysPS.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\Effects11\\ApplyVolumetricRaysPS.hlsl", {}, "ps_5_0")));
+		std::vector<std::pair<const char*, const char*>> defines;
+		if (globals::features::ibl.loaded)
+			defines.push_back({ "IBL", nullptr });
+		applyVolumetricRaysPS.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\Effects11\\ApplyVolumetricRaysPS.hlsl", defines, "ps_5_0")));
 		if (!applyVolumetricRaysPS) {
 			volumetricRaysFailed = true;
 			return;
@@ -1372,6 +1381,14 @@ void Effects11::DrawVolumetricScattering()
 
 		ID3D11ShaderResourceView* srvs[2] = { vlTexA->srv.get(), vlDepthHalf->srv.get() };
 		context->PSSetShaderResources(0, 2, srvs);
+		auto& ibl = globals::features::ibl;
+		if (ibl.loaded) {
+			ID3D11ShaderResourceView* iblSRVs[2] = {
+				ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr,
+				ibl.skyIBLTexture ? ibl.skyIBLTexture->srv.get() : nullptr
+			};
+			context->PSSetShaderResources(14, 2, iblSRVs);
+		}
 		context->PSSetSamplers(0, 1, &sampler);
 
 		// Half-res dimensions for the bilateral upsample.

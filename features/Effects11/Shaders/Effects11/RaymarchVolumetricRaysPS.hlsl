@@ -8,7 +8,7 @@ SamplerState defaultSampler : register(s0);
 
 #include "Common/ShadowSampling.hlsli"
 
-#include "VolumetricRaysCommon.hlsli"
+#include "Effects11/VolumetricRaysCommon.hlsli"
 
 struct VS_OUTPUT_POST
 {
@@ -25,22 +25,20 @@ struct PS_OUTPUT
 
 static const uint SampleCount = 16;
 static const float RcpSampleCount = 1.0 / float(SampleCount);
-static const float MaxRayLength = 154117.64;
-static const float RcpShadowCoverageRadiusSq = 1.0 / (262000.0 * 262000.0);
 
 float GetVolumetricRaysScattering(float3 positionMS, float noise, float3 cameraOffset)
 {
-	float pixelDistance = length(positionMS);
-	float3 rayDirection = positionMS / max(pixelDistance, VolumetricRays::DepthEpsilon);
-	float rayLength = min(pixelDistance, MaxRayLength);
-	float3 sunDirection = SharedData::SunDirection.xyz;
-
-
-	float visibility = 0.0;
+	float negExtTimesRayLen = -SharedData::enbSettings.VolumetricRaysExtinction * length(positionMS);
+	float scattering = 0.0;
+	float transmittance = 1.0;
 
 	[unroll] for (uint i = 0; i < SampleCount; i++)
 	{
-		float3 samplePos = rayDirection * ((float(i) + noise) * RcpSampleCount * rayLength);
+		float t0 = float(i) * RcpSampleCount;
+		float t1 = float(i + 1) * RcpSampleCount;
+		t0 *= t0;
+		t1 *= t1;
+		float3 samplePos = positionMS * lerp(t0, t1, noise);
 
 		float shadow = 1.0;
 
@@ -52,12 +50,13 @@ float GetVolumetricRaysScattering(float3 positionMS, float noise, float3 cameraO
 		shadow *= CloudShadows::GetCloudShadowMult(samplePos, LinearSampler);
 #endif
 
-		float alongSun = dot(samplePos, sunDirection);
-		float offsetSq = max(dot(samplePos, samplePos) - alongSun * alongSun, 0.0);
-		visibility += shadow * saturate(1.0 - offsetSq * RcpShadowCoverageRadiusSq);
+		shadow *= shadow;
+		float stepTransmittance = exp(negExtTimesRayLen * (t1 - t0));
+		scattering += shadow * (1.0 - stepTransmittance) * transmittance;
+		transmittance *= stepTransmittance;
 	}
 
-	return saturate(visibility * RcpSampleCount * rayLength / MaxRayLength);
+	return scattering;
 }
 
 PS_OUTPUT main(VS_OUTPUT_POST input)

@@ -27,6 +27,7 @@ private:
 	uint32_t idEnableAdaptation = 0xFFFFFFFF;
 	bool idsCached = false;
 	std::array<bool, 2> historyValid{};
+	std::array<uint32_t, 2> historyIndex{};
 	std::string fallbackTechnique;
 
 	std::array<ID3D11ShaderResourceView*, 2> apertureSRV{};

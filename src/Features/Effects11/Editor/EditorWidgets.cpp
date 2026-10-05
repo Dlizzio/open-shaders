@@ -106,8 +106,6 @@ namespace Effects11UI
 			{ "EnableSunRays", [] { return T("feature.effects11.setting.EnableSunRays", "Enable Sun Rays"); } },
 			{ "EnableVolumetricRays", [] { return T("feature.effects11.setting.EnableVolumetricRays", "Enable Volumetric Rays"); } },
 			{ "EnableWater", [] { return T("feature.effects11.setting.EnableWater", "Enable Water"); } },
-			{ "ExcludeFromAdaptation", [] { return T("feature.effects11.setting.ExcludeFromAdaptation", "Exclude From Adaptation"); } },
-			{ "FixBlackCrush", [] { return T("feature.effects11.setting.FixBlackCrush", "Fix Black Crush"); } },
 			{ "FocusingTime", [] { return T("feature.effects11.setting.FocusingTime", "Focusing Time"); } },
 			{ "FogAmountMultiplier", [] { return T("feature.effects11.setting.FogAmountMultiplier", "Fog Amount Multiplier"); } },
 			{ "FogColorCurve", [] { return T("feature.effects11.setting.FogColorCurve", "Fog Color Curve"); } },

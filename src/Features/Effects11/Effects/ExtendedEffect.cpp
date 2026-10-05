@@ -539,7 +539,7 @@ namespace
 
 	using FileUniqueNameMap = std::unordered_map<std::string, std::unordered_map<std::string, UITree::VarRef>>;
 
-	std::pair<bool, bool> EvaluateBinding(const Effect::UIVariable& var,
+	std::pair<bool, bool> EvaluateBinding(const Effect::UIVariable& var, const std::string& fileName,
 		const std::unordered_map<std::string, UITree::VarRef>& uniqueNameMap,
 		const FileUniqueNameMap& fileUniqueNameMap)
 	{
@@ -549,20 +549,19 @@ namespace
 
 		for (const auto& binding : var.uiBindings) {
 			const UITree::VarRef* boundRef = nullptr;
-			if (!binding.file.empty()) {
-				auto fileIt = fileUniqueNameMap.find(binding.file);
-				if (fileIt != fileUniqueNameMap.end()) {
-					auto varIt = fileIt->second.find(binding.target);
-					if (varIt != fileIt->second.end())
-						boundRef = &varIt->second;
-				}
-			} else {
+			auto fileIt = fileUniqueNameMap.find(binding.file.empty() ? fileName : binding.file);
+			if (fileIt != fileUniqueNameMap.end()) {
+				auto varIt = fileIt->second.find(binding.target);
+				if (varIt != fileIt->second.end())
+					boundRef = &varIt->second;
+			}
+			if (!boundRef && binding.file.empty()) {
 				auto it = uniqueNameMap.find(binding.target);
 				if (it != uniqueNameMap.end())
 					boundRef = &it->second;
 			}
 
-			if (!boundRef)
+			if (!boundRef || !boundRef->effect)
 				continue;
 
 			const auto& bv = boundRef->effect->uiVariables[boundRef->index];
@@ -880,7 +879,7 @@ namespace
 		if (uiVar.isLabel ? ctx.Filtering() : !(ancestorMatched || MatchesFilter(uiVar, ctx)))
 			return false;
 
-		auto [bindVisible, bindReadOnly] = EvaluateBinding(uiVar, ctx.uniqueNameMap, ctx.fileUniqueNameMap);
+		auto [bindVisible, bindReadOnly] = EvaluateBinding(uiVar, ref.effect->GetName(), ctx.uniqueNameMap, ctx.fileUniqueNameMap);
 		if (!bindVisible)
 			return false;
 
