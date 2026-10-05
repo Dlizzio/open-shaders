@@ -1119,7 +1119,7 @@ void Effects11Editor::DrawColorTimeOfDayRow(const Setting& a_setting, const char
 		constexpr ImGuiColorEditFlags flags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoTooltip |
 		                                      ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_NoOptions;
 		if (ImGui::ColorEdit3("##c", rgb, flags)) {
-			value.values[period] = { rgb[0], rgb[1], rgb[2] };
+			value.values[period] = float3{ rgb[0], rgb[1], rgb[2] };
 			changed = true;
 		}
 
@@ -1163,7 +1163,7 @@ void Effects11Editor::DrawColorTimeOfDayRow(const Setting& a_setting, const char
 			if (ImGui::MenuItem(T(TKEY("paste"), "Paste"), nullptr, false, Effects11UI::Clipboard::HasColor())) {
 				float paste[3];
 				Effects11UI::Clipboard::GetColor(paste);
-				value.values[period] = { paste[0], paste[1], paste[2] };
+				value.values[period] = float3{ paste[0], paste[1], paste[2] };
 				changed = true;
 			}
 			ImGui::EndPopup();

@@ -927,7 +927,7 @@ static bool TryParseColor(const std::string& a_value, float a_min, float a_max, 
 	if (count != 3)
 		return false;
 
-	a_out = { components[0], components[1], components[2] };
+	a_out = float3{ components[0], components[1], components[2] };
 	return true;
 }
 
