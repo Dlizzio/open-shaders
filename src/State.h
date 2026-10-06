@@ -343,10 +343,10 @@ public:
 		IsBeastRace = 1 << 2,
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
-		IsMoon = 1 << 7,
-		IsAurora = 1 << 8,
 		SuppressExternalEmittance = 1 << 5,
 		AdditiveLighting = 1 << 6,
+		IsAurora = 1 << 7,
+		IsMoon = 1 << 8,
 		// --- Open Shaders fork-only flags below: reserved high end, not upstream's sequence. ---
 		IsEye = 1u << 31,
 		IsCharacterRainSurface = 1u << 30,
