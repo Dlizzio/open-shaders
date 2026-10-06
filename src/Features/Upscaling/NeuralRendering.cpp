@@ -58,7 +58,7 @@ namespace
 	{
 		if (state == NR::RuntimeAvailability::State::kMissing)
 			return T(TKEY("runtime_missing_fix"), "Install nvngx_dlssnr.dll under Data\\Shaders\\Upscaling\\Streamline\\.");
-		return T(TKEY("runtime_build_fix"), "Replace it with one of the validated 310.8 builds listed in docs/development/neural-rendering.md.");
+		return T(TKEY("runtime_build_fix"), "Replace it with a validated 310.8 build of that file.");
 	}
 
 	/**
@@ -162,6 +162,8 @@ struct NeuralRendering::Impl
 	struct Eye
 	{
 		std::unique_ptr<WrappedResource> color, depth, motion, output;
+		/** @brief DLSSNR.UIAlpha built from the Masks2 category lane; created only while the material strength is on. */
+		std::unique_ptr<WrappedResource> materialAlpha;
 		NR::FrameParameters frame;
 		std::unique_ptr<Texture2D> resolved, toneData;
 		DirectX::SimpleMath::Vector3 position{}, forward{};
@@ -169,7 +171,18 @@ struct NeuralRendering::Impl
 	std::array<Eye, 2> eyes;
 	winrt::com_ptr<ID3D11DeviceContext1> context;
 	winrt::com_ptr<ID3DDeviceContextState> isolated;
-	Util::LazyShader<ID3D11ComputeShader> prepareColor, prepareToneData, compositeColor;
+	Util::LazyShader<ID3D11ComputeShader> prepareColor, prepareToneData, compositeColor, materialAlphaShader;
+	/** @brief Cbuffer CategoryAlphaCS.hlsl reads: the eye extent, the stereo offset, the softness radius and the six strengths. */
+	struct alignas(16) CategoryAlphaData
+	{
+		uint32_t width, height, eyeOffsetX, edgeSoftness;
+		float4 strengthsA;
+		float2 strengthsB;
+		float2 pad{};
+	};
+	static_assert(offsetof(CategoryAlphaData, strengthsA) == 16);
+	static_assert(offsetof(CategoryAlphaData, strengthsB) == 32);
+	static_assert(sizeof(CategoryAlphaData) == 48);
 	struct alignas(16) ColorTransferData
 	{
 		uint32_t width, height, eyeOffsetX, hasExposure = 0;
@@ -186,6 +199,12 @@ struct NeuralRendering::Impl
 		float regionOutlineThickness = kRegionOutlineThicknessPixels;
 		uint32_t regionActorBaseX = 0, regionActorBaseY = 0, regionActorWidth = 0, regionActorHeight = 0;
 		float2 pad{};
+		// Per-category tone multipliers, Skin..Landscape in .x; the 16-byte rows mirror
+		// ColorTransferCS.hlsl's float4 CategoryStrength[5].
+		float4 categoryStrength[5]{};
+		uint32_t materialMapEnabled = 0, materialMapMode = 0, materialMapFilter = 0, materialMapStrengthBound = 0;
+		float4 materialStrengthsA{};
+		float4 materialStrengthsB{};
 	};
 	static_assert(offsetof(ColorTransferData, dynamicRangeProtect) == 64);
 	static_assert(offsetof(ColorTransferData, toneLowStrength) == 80);
@@ -198,8 +217,25 @@ struct NeuralRendering::Impl
 	static_assert(offsetof(ColorTransferData, regionActorBaseX) == 120);
 	static_assert(offsetof(ColorTransferData, regionActorHeight) == 132);
 	static_assert(offsetof(ColorTransferData, pad) == 136);
-	static_assert(sizeof(ColorTransferData) == 144);
+	static_assert(offsetof(ColorTransferData, categoryStrength) == 144);
+	static_assert(offsetof(ColorTransferData, materialMapEnabled) == 224);
+	static_assert(offsetof(ColorTransferData, materialMapStrengthBound) == 236);
+	static_assert(offsetof(ColorTransferData, materialStrengthsA) == 240);
+	static_assert(offsetof(ColorTransferData, materialStrengthsB) == 256);
+	static_assert(sizeof(ColorTransferData) == 272);
+	// ModeValues.hlsli carries these numbers for ColorTransferCS.hlsl's tint.
+	static_assert(static_cast<uint32_t>(NR::MaterialMap::Mode::kCategory) == 0);
+	static_assert(static_cast<uint32_t>(NR::MaterialMap::Mode::kStrength) == 1);
 	std::unique_ptr<ConstantBuffer> colorBuffer;
+	std::unique_ptr<ConstantBuffer> categoryAlphaBuffer;
+	/** @brief Material-strength switch the persistent eye features were last created with; drives recreation. */
+	bool materialStrengthOn = false;
+	/** @brief The graded protection is bound for the evaluate now in flight, so a fault belongs to it. */
+	bool materialStrengthInFlight = false;
+	/** @brief Last evaluate bound the graded protection; reported by the status readout. */
+	bool materialStrengthBound = false;
+	/** @brief Latched setup failure: the material lane or the alpha texture is unusable for this session. */
+	bool materialStrengthDegraded = false;
 	std::unique_ptr<Texture2D> original;
 	std::unique_ptr<ConstantBuffer> encodeBuffer;
 	std::array<std::unique_ptr<Texture2D>, 2> encodeMasks;
@@ -221,9 +257,16 @@ struct NeuralRendering::Impl
 	float manualExposure = 1.0f, differenceStrength = 1.0f, splitPosition = 0.5f;
 	float shadowProtect = 0.0f, highlightProtect = 0.0f;
 	float toneLowStrength = 1.0f, toneRadius = 1.0f, toneHighStrength = 1.0f;
+	/** @brief Per-category tone multipliers from the tuning, consumed by TransferColor's cbuffer. */
+	std::array<float, 5> categoryToneStrength{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
 	bool useResolutionMotionScale = true;
 	/** @brief Draws the evaluated crop outline into the composite; read from the tuning each NR frame. */
 	bool regionOverlay = false;
+	/** @brief Material-map tint of the last frame, read from the tuning: the switch, the mode and the category filter. */
+	bool materialMapEnabled = false;
+	uint32_t materialMapMode = 0, materialMapFilter = NR::MaterialMap::kAllCategories;
+	/** @brief Per-category by-material strengths of the last frame, in NeuralRenderingCategory id order. */
+	std::array<float, NR::MaterialStrength::kCount> materialMapStrength{};
 	NR::Diagnostics* captureDiagnostics = nullptr;
 	uint32_t captureFrame = UINT32_MAX;
 
@@ -251,6 +294,7 @@ struct NeuralRendering::Impl
 		Util::SetResourceName(isolated.get(), "NeuralRendering::ContextState");
 		encodeBuffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc<Upscaling::UpscalingDataCB>(), "NeuralRendering::Encode CB");
 		colorBuffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc<ColorTransferData>(), "NeuralRendering::ColorTransfer CB");
+		categoryAlphaBuffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc<CategoryAlphaData>(), "NeuralRendering::CategoryAlpha CB");
 		runtime.Initialize(interop.Device(), RuntimeDirectory(), globals::state->IsDeveloperMode());
 		ready = true;
 	}
@@ -266,6 +310,7 @@ struct NeuralRendering::Impl
 		eyes = {};
 		original.reset();
 		encodeMasks = {};
+		materialStrengthInFlight = materialStrengthBound = false;
 		width = height = guideWidth = guideHeight = eyeCount = 0;
 		format = DXGI_FORMAT_UNKNOWN;
 		lastFrame = UINT32_MAX;
@@ -400,15 +445,24 @@ struct NeuralRendering::Impl
 
 	void Transition(ID3D12GraphicsCommandList* commands, Eye& eye, bool enter)
 	{
-		ID3D12Resource* resources[]{ eye.color->resource.get(), eye.depth->resource.get(), eye.motion->resource.get(), eye.output->resource.get() };
-		D3D12_RESOURCE_BARRIER barriers[4]{};
-		for (uint32_t i = 0; i < 4; ++i) {
-			const auto state = i == 3 ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-			barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-			barriers[i].Transition = { resources[i], D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-				enter ? D3D12_RESOURCE_STATE_COMMON : state, enter ? state : D3D12_RESOURCE_STATE_COMMON };
+		ID3D12Resource* resources[5]{ eye.color->resource.get(), eye.depth->resource.get(), eye.motion->resource.get(),
+			eye.output->resource.get(), eye.materialAlpha ? eye.materialAlpha->resource.get() : nullptr };
+		const D3D12_RESOURCE_STATES states[5]{
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+		};
+		D3D12_RESOURCE_BARRIER barriers[5]{};
+		uint32_t count = 0;
+		for (uint32_t i = 0; i < 5; ++i) {
+			if (!resources[i])
+				continue;
+			barriers[count].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+			barriers[count].Transition = { resources[i], D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+				enter ? D3D12_RESOURCE_STATE_COMMON : states[i], enter ? states[i] : D3D12_RESOURCE_STATE_COMMON };
+			++count;
 		}
-		commands->ResourceBarrier(4, barriers);
+		commands->ResourceBarrier(count, barriers);
 	}
 
 	bool NeedsToneData() const
@@ -481,10 +535,19 @@ struct NeuralRendering::Impl
 		data.toneLowStrength = toneLowStrength;
 		data.toneRadius = toneRadius;
 		data.toneHighStrength = toneHighStrength;
+		for (size_t category = 0; category < categoryToneStrength.size(); ++category)
+			data.categoryStrength[category].x = categoryToneStrength[category];
 		data.hasToneData = !prepare && NeedsToneData();
 		// Never on the Prepare dispatch: that writes NGX's input proxy, which the overlay would corrupt.
 		data.regionOverlayEnabled = (!prepare && regionOverlay) ? 1u : 0u;
 		data.regionOutlineThickness = kRegionOutlineThicknessPixels;
+		data.materialMapEnabled = (!prepare && materialMapEnabled) ? 1u : 0u;
+		data.materialMapMode = materialMapMode;
+		data.materialMapFilter = materialMapFilter;
+		data.materialMapStrengthBound = materialStrengthBound ? 1u : 0u;
+		data.materialStrengthsA = float4{ materialMapStrength[NR::MaterialStrength::kNone], materialMapStrength[NR::MaterialStrength::kSkin],
+			materialMapStrength[NR::MaterialStrength::kHair], materialMapStrength[NR::MaterialStrength::kEyes] };
+		data.materialStrengthsB = float4{ materialMapStrength[NR::MaterialStrength::kFoliage], materialMapStrength[NR::MaterialStrength::kLandscape], 0.0f, 0.0f };
 		SetRegion(data, i);
 		if (debugOptions & NR::Diagnostics::ForceMaskZero)
 			data.maskMode = static_cast<uint32_t>(NR::Diagnostics::MaskMode::ForceZero);
@@ -509,9 +572,10 @@ struct NeuralRendering::Impl
 		auto buffer = colorBuffer->CB();
 		context->CSSetConstantBuffers(0, 1, &buffer);
 		globals::state->BindSharedDataCS(context.get(), true);
+		auto* masks2 = Util::AsReal(globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kRAWINDIRECT_PREVIOUS_DOWNSCALED].SRV);
 		ID3D11ShaderResourceView* inputs[]{ original->srv.get(), prepare ? nullptr : eye.color->srv,
 			prepare ? nullptr : eye.output->srv, exposure,
-			data.hasToneData ? eye.toneData->srv.get() : nullptr };
+			data.hasToneData ? eye.toneData->srv.get() : nullptr, masks2 };
 		ID3D11UnorderedAccessView* outputs[]{ prepare ? eye.color->uav : eye.resolved->uav.get() };
 		context->CSSetShaderResources(0, ARRAYSIZE(inputs), inputs);
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(outputs), outputs, nullptr);
@@ -520,7 +584,63 @@ struct NeuralRendering::Impl
 		context->ClearState();
 	}
 
-	bool Draw(ID3D11Texture2D* color, ID3D11ShaderResourceView* const* inputs, ID3D11ComputeShader* shader, uint32_t reset, const NR::Tuning& tuning, NR::Diagnostics::Frame& diagnostic, NR::Diagnostics& diagnostics)
+	/**
+	 * @brief Returns the Masks2 SRV only when it carries the R16G16 material category lane this
+	 *        alpha decodes. Any other target would read as None everywhere and protect everything.
+	 */
+	ID3D11ShaderResourceView* MaterialLane()
+	{
+		const auto& target = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kRAWINDIRECT_PREVIOUS_DOWNSCALED];
+		if (!target.SRV)
+			return nullptr;
+		auto* srv = Util::AsReal(target.SRV);
+		D3D11_TEXTURE2D_DESC desc{};
+		return Util::GetTexture2DDesc(srv, desc) && desc.Format == DXGI_FORMAT_R16G16_UNORM ? srv : nullptr;
+	}
+
+	/**
+	 * @brief Builds each eye's DLSSNR.UIAlpha from the Masks2 category lane for this frame.
+	 * @param masks2 The deferred Masks2 SRV the categories are decoded from.
+	 * @param strengths The per-category protection and edge softness CategoryAlphaCS.hlsl applies.
+	 * @return False on a shader or texture failure; the caller then binds no protection.
+	 */
+	bool BuildMaterialAlpha(ID3D11ShaderResourceView* masks2, const NR::MaterialStrength::Values& strengths)
+	{
+		CS_GPU_PASS("Upscaling::NRMaterialAlpha");
+		auto* shader = materialAlphaShader.Get(L"Data/Shaders/Upscaling/NeuralRendering/CategoryAlphaCS.hlsl",
+			{}, "cs_5_0", "main", "NeuralRendering::CategoryAlpha CS");
+		if (!shader)
+			return false;
+		try {
+			for (uint32_t i = 0; i < eyeCount; ++i) {
+				auto& eye = eyes[i];
+				if (!eye.materialAlpha) {
+					const auto name = eyeCount > 1 ? std::format("NeuralRendering::MaterialAlpha{}", i) : std::string("NeuralRendering::MaterialAlpha");
+					eye.materialAlpha = interop.CreateTexture(width, height, DXGI_FORMAT_R8_UNORM, name);
+				}
+				context->ClearState();
+				categoryAlphaBuffer->Update(CategoryAlphaData{ width, height, i * width, strengths.edgeSoftness,
+					{ strengths.strength[NR::MaterialStrength::kNone], strengths.strength[NR::MaterialStrength::kSkin],
+						strengths.strength[NR::MaterialStrength::kHair], strengths.strength[NR::MaterialStrength::kEyes] },
+					{ strengths.strength[NR::MaterialStrength::kFoliage], strengths.strength[NR::MaterialStrength::kLandscape] } });
+				auto buffer = categoryAlphaBuffer->CB();
+				context->CSSetConstantBuffers(0, 1, &buffer);
+				context->CSSetShaderResources(0, 1, &masks2);
+				auto* output = eye.materialAlpha->uav;
+				context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+				context->CSSetShader(shader, nullptr, 0);
+				context->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
+				context->ClearState();
+			}
+		} catch (...) {
+			if (interop.DeviceRemoved())
+				throw;
+			return false;
+		}
+		return true;
+	}
+
+	bool Draw(ID3D11Texture2D* color, ID3D11ShaderResourceView* const* inputs, ID3D11ComputeShader* shader, uint32_t reset, bool materialStrengthWanted, const NR::MaterialStrength::Values& materialStrengths, const NR::Tuning& tuning, NR::Diagnostics::Frame& diagnostic, NR::Diagnostics& diagnostics)
 	{
 		CS_GPU_PASS("Upscaling::NeuralRendering");
 		captureDiagnostics = &diagnostics;
@@ -558,6 +678,19 @@ struct NeuralRendering::Impl
 			diagnostic.outcome = NR::Diagnostics::Outcome::Bypassed;
 			diagnostics.FinishCapture(diagnostic.number);
 			return true;
+		}
+		materialStrengthInFlight = materialStrengthBound = false;
+		if (materialStrengthWanted && !materialStrengthDegraded) {
+			auto* lane = MaterialLane();
+			if (!lane) {
+				materialStrengthDegraded = true;
+				logger::warn("[NeuralRendering] material strength unavailable: the deferred material lane is not present, so the whole frame is processed");
+			} else if (BuildMaterialAlpha(lane, materialStrengths)) {
+				materialStrengthInFlight = materialStrengthBound = true;
+			} else {
+				materialStrengthDegraded = true;
+				logger::warn("[NeuralRendering] material strength unavailable: its shader or texture could not be created, so the whole frame is processed");
+			}
 		}
 		context->CSSetShader(shader, nullptr, 0);
 		context->CSSetShaderResources(0, 4, inputs);
@@ -624,8 +757,15 @@ struct NeuralRendering::Impl
 					// MotionBlur produces normalized eye-UV displacement; NR consumes input-pixel displacement.
 					guides.motionScaleX = useResolutionMotionScale ? static_cast<float>(width) : 1.0f;
 					guides.motionScaleY = useResolutionMotionScale ? static_cast<float>(height) : 1.0f;
+					const NR::ProtectionResources protection{
+						materialStrengthInFlight && eye.materialAlpha ? eye.materialAlpha->resource.get() : nullptr,
+						// A protected pixel is restored from the NR input itself, so the alpha and the
+						// backbuffer share the proxy colour domain the model works in.
+						materialStrengthInFlight ? eye.color->resource.get() : nullptr
+					};
 					success = runtime.Evaluate(commands, i, eye.color->resource.get(), eye.depth->resource.get(),
-						eye.motion->resource.get(), eye.output->resource.get(), width, height, guides, eye.frame, tuning);
+						eye.motion->resource.get(), eye.output->resource.get(), protection,
+						width, height, guides, eye.frame, tuning);
 				}
 				diagnostic.result[i] = eye.frame.result;
 				if (success)
@@ -638,6 +778,8 @@ struct NeuralRendering::Impl
 			}
 			interop.End();
 		}
+		if (success)
+			materialStrengthInFlight = false;
 		if (diagnostic.options & NR::Diagnostics::SerializeGPU)
 			interop.Drain();
 		diagnostic.submittedFence = interop.SubmittedFence();
@@ -910,6 +1052,11 @@ NeuralRendering::Status NeuralRendering::GetStatus() const
 	snapshot.lastAppliedFrame = appliedFrame.load(std::memory_order_relaxed);
 	snapshot.appliedFrames = appliedFrames.load(std::memory_order_relaxed);
 	snapshot.ngxResult = { lastNgxResult[0].load(std::memory_order_relaxed), lastNgxResult[1].load(std::memory_order_relaxed) };
+	snapshot.materialStrengthActive = materialStrengthActive.load(std::memory_order_relaxed);
+	snapshot.materialStrengthAvailable = materialStrengthAvailable.load(std::memory_order_relaxed);
+	for (size_t i = 0; i < snapshot.materialStrength.size(); ++i)
+		snapshot.materialStrength[i] = materialStrengthValues[i].load(std::memory_order_relaxed);
+	snapshot.materialEdgeSoftness = materialEdgeSoftness.load(std::memory_order_relaxed);
 	return snapshot;
 }
 
@@ -932,6 +1079,170 @@ void NeuralRendering::DrawRuntimeDiagnostics() const
 		Util::Text::Disabled("%s", T(TKEY("runtime_developer_load"), "Loading this build because developer mode is on; its output is unverified."));
 	else
 		Util::Text::Disabled("%s", RuntimeFixHint(availability.state));
+}
+
+namespace
+{
+	constexpr uint32_t kMaterialChecklistColumns = 3;
+	constexpr float kStrengthLegendWidthFraction = 0.6f;
+	using MaterialSelection = std::array<uint8_t, NR::MaterialMap::kBits>;
+
+	/** @brief NeuralRenderingCategory ids in the order the material checklists list them. */
+	constexpr std::array<uint32_t, NR::MaterialMap::kBits> kMaterialListOrder{
+		NR::MaterialStrength::kSkin, NR::MaterialStrength::kHair, NR::MaterialStrength::kEyes,
+		NR::MaterialStrength::kFoliage, NR::MaterialStrength::kLandscape, NR::MaterialStrength::kNone
+	};
+
+	ImU32 ToColor(const NR::MaterialMap::Color& color)
+	{
+		return ImGui::ColorConvertFloat4ToU32(ImVec4(color.r, color.g, color.b, 1.0f));
+	}
+
+	/** @brief Draws one checkbox per material, three to a row, optionally led by its map colour; returns true when one changed. */
+	bool DrawMaterialChecklist(MaterialSelection& selected, bool colourSwatches)
+	{
+		const std::array<const char*, NR::MaterialMap::kBits> labels{
+			T(TKEY("category_skin"), "Skin"), T(TKEY("category_hair"), "Hair"), T(TKEY("category_eyes"), "Eyes"),
+			T(TKEY("category_foliage"), "Foliage"), T(TKEY("category_landscape"), "Landscape"), T(TKEY("material_other"), "Everything Else")
+		};
+		bool changed = false;
+		for (uint32_t i = 0; i < selected.size(); ++i) {
+			ImGui::PushID(static_cast<int>(i));
+			if (i % kMaterialChecklistColumns != 0)
+				ImGui::SameLine();
+			if (colourSwatches) {
+				const auto& color = NR::MaterialMap::kColors[kMaterialListOrder[i]];
+				ImGui::ColorButton("##swatch", ImVec4(color.r, color.g, color.b, 1.0f),
+					ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoDragDrop,
+					ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()));
+				ImGui::SameLine();
+			}
+			bool value = selected[i] != 0;
+			if (ImGui::Checkbox(labels[i], &value)) {
+				selected[i] = value ? 1 : 0;
+				changed = true;
+			}
+			ImGui::PopID();
+		}
+		return changed;
+	}
+
+	/** @brief Select All and Select None for a material checklist; returns true when a button changed it. */
+	bool DrawMaterialSelectionButtons(MaterialSelection& selected)
+	{
+		const auto before = selected;
+		Util::DrawSelectionButtons(selected,
+			T("feature.scene_manager.action.select_all", "Select All"),
+			T("feature.scene_manager.action.select_none", "Select None"));
+		return selected != before;
+	}
+
+	/** @brief Draws the colour bar the Strength map mode reads against, 0 at the left to 1 at the right. */
+	void DrawStrengthLegend()
+	{
+		const ImVec2 origin = ImGui::GetCursorScreenPos();
+		const float width = ImGui::GetContentRegionAvail().x * kStrengthLegendWidthFraction;
+		const float height = ImGui::GetTextLineHeight();
+		const auto& ramp = NR::MaterialMap::kStrengthRamp;
+		const float segment = width / static_cast<float>(std::size(ramp) - 1);
+		auto* drawList = ImGui::GetWindowDrawList();
+		for (size_t i = 0; i + 1 < std::size(ramp); ++i) {
+			const float left = origin.x + segment * static_cast<float>(i);
+			drawList->AddRectFilledMultiColor(ImVec2(left, origin.y), ImVec2(left + segment, origin.y + height),
+				ToColor(ramp[i]), ToColor(ramp[i + 1]), ToColor(ramp[i + 1]), ToColor(ramp[i]));
+		}
+		ImGui::Dummy(ImVec2(width, height));
+		ImGui::TextUnformatted(T(TKEY("material_map_strength_legend"), "Strength: 0 at the left, 1 at the right"));
+	}
+
+	/** @brief Draws the by-material selection and the material map controls; returns true when any value changed. */
+	bool DrawMaterialControls(NR::Tuning& tuning, bool materialStrengthAvailable)
+	{
+		bool changed = false;
+		ImGui::TextUnformatted(T(TKEY("material_apply_to"), "Apply Neural Rendering To"));
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T(TKEY("material_apply_to_tooltip"),
+				"Choose the materials Neural Rendering is applied to, using the labels the deferred pass writes. All selected is the normal behaviour. It changes where the effect shows, not how much GPU time it costs, and needs the deferred pass. Fine-Tune Strengths sets partial amounts."));
+		ImGui::PushID("materialSelection");
+		MaterialSelection selected{};
+		for (uint32_t i = 0; i < selected.size(); ++i)
+			selected[i] = tuning.MaterialSelected(kMaterialListOrder[i]) ? 1 : 0;
+		const auto before = selected;
+		DrawMaterialSelectionButtons(selected);
+		ImGui::SameLine();
+		if (ImGui::SmallButton(T(TKEY("material_characters_only"), "Characters Only")))
+			for (uint32_t i = 0; i < selected.size(); ++i)
+				selected[i] = NR::MaterialStrength::kCharactersOnly[kMaterialListOrder[i]] > NR::MaterialStrength::kMinStrength ? 1 : 0;
+		DrawMaterialChecklist(selected, false);
+		ImGui::PopID();
+		for (uint32_t i = 0; i < selected.size(); ++i) {
+			if (selected[i] != before[i]) {
+				tuning.SetMaterialSelected(kMaterialListOrder[i], selected[i] != 0);
+				changed = true;
+			}
+		}
+		if (ImGui::TreeNodeEx(T(TKEY("material_strengths"), "Fine-Tune Strengths"), ImGuiTreeNodeFlags_None)) {
+			ImGui::PushID("materialStrength");
+			bool strengthChanged = false;
+			strengthChanged |= ImGui::SliderFloat(T(TKEY("category_skin"), "Skin"), &tuning.strengthSkin, NR::MaterialStrength::kMinStrength, NR::MaterialStrength::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			strengthChanged |= ImGui::SliderFloat(T(TKEY("category_hair"), "Hair"), &tuning.strengthHair, NR::MaterialStrength::kMinStrength, NR::MaterialStrength::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			strengthChanged |= ImGui::SliderFloat(T(TKEY("category_eyes"), "Eyes"), &tuning.strengthEyes, NR::MaterialStrength::kMinStrength, NR::MaterialStrength::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			strengthChanged |= ImGui::SliderFloat(T(TKEY("category_foliage"), "Foliage"), &tuning.strengthFoliage, NR::MaterialStrength::kMinStrength, NR::MaterialStrength::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			strengthChanged |= ImGui::SliderFloat(T(TKEY("category_landscape"), "Landscape"), &tuning.strengthLandscape, NR::MaterialStrength::kMinStrength, NR::MaterialStrength::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			strengthChanged |= ImGui::SliderFloat(T(TKEY("material_other"), "Everything Else"), &tuning.strengthOther, NR::MaterialStrength::kMinStrength, NR::MaterialStrength::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if (strengthChanged) {
+				tuning.SyncMaterialSwitch();
+				changed = true;
+			}
+			int edgeSoftness = static_cast<int>(tuning.strengthEdgeSoftness);
+			if (ImGui::SliderInt(T(TKEY("edge_softness"), "Edge Softness"), &edgeSoftness, 0, static_cast<int>(NR::MaterialStrength::kMaxEdgeSoftness))) {
+				tuning.strengthEdgeSoftness = static_cast<uint32_t>(edgeSoftness);
+				changed = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T(TKEY("edge_softness_tooltip"),
+					"Blends each material's strength into its neighbours over this many pixels; 0 keeps a hard boundary between materials."));
+			ImGui::PopID();
+			ImGui::TreePop();
+		}
+		if (tuning.materialStrength && !materialStrengthAvailable)
+			Util::Text::WrappedWarning("%s", T(TKEY("material_unavailable"), "Neural Rendering by material is unavailable this session, so the whole frame is processed. Check the log; restarting the game retries."));
+		if (ImGui::Checkbox(T(TKEY("material_map"), "Show Material Map"), &tuning.showMaterialMap))
+			changed = true;
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T(TKEY("material_map_tooltip"),
+				"Tints each pixel by the material the deferred pass labelled it, so a character the classification mislabels is visible. The filter picks which materials show; the mode picks the category's colour or a colour ramp of the strength the by-material selection gives that pixel, read at the pixel without Edge Softness. Needs the deferred pass; unlabelled pixels follow Everything Else."));
+		ImGui::BeginDisabled(!tuning.showMaterialMap);
+		ImGui::PushID("materialMap");
+		int materialMapMode = static_cast<int>(std::min(tuning.materialMapMode, NR::MaterialMap::kMaxMode));
+		const std::array<const char*, NR::MaterialMap::kMaxMode + 1> materialMapModeLabels{
+			T(TKEY("material_map_category"), "Category colours"),
+			T(TKEY("material_map_strength"), "Strength"),
+		};
+		if (ImGui::Combo(T(TKEY("material_map_mode"), "Map Mode"), &materialMapMode, materialMapModeLabels.data(), static_cast<int>(materialMapModeLabels.size()))) {
+			tuning.materialMapMode = static_cast<uint32_t>(materialMapMode);
+			changed = true;
+		}
+		if (tuning.materialMapMode == static_cast<uint32_t>(NR::MaterialMap::Mode::kStrength))
+			DrawStrengthLegend();
+		ImGui::TextUnformatted(T(TKEY("material_map_filter"), "Show"));
+		MaterialSelection shown{};
+		for (uint32_t i = 0; i < shown.size(); ++i)
+			shown[i] = NR::MaterialMap::Contains(tuning.materialMapFilter, kMaterialListOrder[i]) ? 1 : 0;
+		bool filterChanged = DrawMaterialSelectionButtons(shown);
+		filterChanged |= DrawMaterialChecklist(shown, true);
+		if (filterChanged) {
+			for (uint32_t i = 0; i < shown.size(); ++i)
+				tuning.materialMapFilter = NR::MaterialMap::Set(tuning.materialMapFilter, kMaterialListOrder[i], shown[i] != 0);
+			changed = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T(TKEY("material_map_filter_tooltip"),
+				"Each swatch is the colour that material is drawn in. A material that is off keeps its normal pixels."));
+		ImGui::PopID();
+		ImGui::EndDisabled();
+		return changed;
+	}
 }
 
 void NeuralRendering::DrawSettings(bool& enabled, NR::Tuning& tuning)
@@ -961,7 +1272,7 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Tuning& tuning)
 			Util::Text::Disabled("%s", RuntimeFixHint(availability.state));
 	}
 	ImGui::TextWrapped("%s", T(TKEY("description"),
-								 "One display-referred NR proxy pass at eye render resolution, composed back into scene-linear HDR before DLSS/FSR and frame-generation capture. Requires an NR-capable NVIDIA GPU and one of the validated 310.8 runtime builds listed in docs/development/neural-rendering.md."));
+								 "One display-referred NR proxy pass at eye render resolution, composed back into scene-linear HDR before DLSS/FSR and frame-generation capture. Requires an NR-capable NVIDIA GPU and a validated 310.8 runtime build."));
 	int style = static_cast<int>(std::min(tuning.style, NR::Tuning::kMaxStyle));
 	const std::array<const char*, NR::Tuning::kMaxStyle + 1> styleLabels{
 		T(TKEY("style_0"), "Style 0"),
@@ -981,9 +1292,19 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Tuning& tuning)
 	changed |= ImGui::SliderFloat(T(TKEY("skin_structure"), "Skin Structure Strength"), &tuning.skinStructureStrength, NR::Tuning::kAutomaticSkinStructure, NR::Tuning::kMaxStrength,
 		tuning.skinStructureStrength == NR::Tuning::kAutomaticSkinStructure ? T(TKEY("skin_auto"), "Auto") : "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	recreateTuning |= ImGui::IsItemDeactivatedAfterEdit();
-	const bool autoMaskChanged = ImGui::Checkbox(T(TKEY("use_auto_mask"), "Use Auto Mask"), &tuning.useAutoMask);
-	changed |= autoMaskChanged;
-	recreateTuning |= autoMaskChanged;
+	if (ImGui::CollapsingHeader(T(TKEY("category_tone"), "Category Tone Strengths"))) {
+		ImGui::PushID("categoryTone");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T(TKEY("category_tone_tooltip"),
+				"Scales Neural Rendering's tone edit per material: 0 leaves a material's brightness untouched, 1 is the normal edit, and 2 doubles it. Materials the deferred buffer does not label are unaffected."));
+		changed |= ImGui::SliderFloat(T(TKEY("category_skin"), "Skin"), &tuning.skinToneStrength, NR::Tuning::kMinStrength, NR::Tuning::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= ImGui::SliderFloat(T(TKEY("category_hair"), "Hair"), &tuning.hairToneStrength, NR::Tuning::kMinStrength, NR::Tuning::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= ImGui::SliderFloat(T(TKEY("category_eyes"), "Eyes"), &tuning.eyeToneStrength, NR::Tuning::kMinStrength, NR::Tuning::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= ImGui::SliderFloat(T(TKEY("category_foliage"), "Foliage"), &tuning.foliageToneStrength, NR::Tuning::kMinStrength, NR::Tuning::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= ImGui::SliderFloat(T(TKEY("category_landscape"), "Landscape"), &tuning.landscapeToneStrength, NR::Tuning::kMinStrength, NR::Tuning::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::PopID();
+	}
+	changed |= DrawMaterialControls(tuning, materialStrengthAvailable.load(std::memory_order_relaxed));
 	if (ImGui::Checkbox(T(TKEY("region_of_interest"), "Limit to Tracked Actor"), &tuning.regionOfInterest)) {
 		changed = true;
 		resetHistory = true;
@@ -1004,19 +1325,38 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Tuning& tuning)
 	// out without it instead of accepting edits that the pass ignores.
 	const bool cropDisabled = !tuning.regionOfInterest;
 	ImGui::BeginDisabled(cropDisabled);
+	if (ImGui::Checkbox(T(TKEY("crop_group"), "Include Nearby Characters"), &tuning.regionGroup)) {
+		changed = true;
+		resetHistory = true;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted(T(TKEY("crop_group_tooltip"),
+			"Grows the crop to also cover the next most prominent characters while it stays under half the view, so a group is evaluated together. Off tracks one character."));
 	if (ImGui::Checkbox(T(TKEY("region_overlay"), "Show Region Overlay"), &tuning.regionOverlay))
 		changed = true;
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted(T(TKEY("region_overlay_tooltip"),
 			"Draws the evaluated crop: a green outline in the game frame and the same rectangle over the preview below. Only meaningful with Limit to Tracked Actor on, and it draws nothing while no character is tracked, since the whole frame is evaluated then."));
-	if (globals::state->IsDeveloperMode()) {
-		if (ImGui::Checkbox(T(TKEY("crop_group"), "Track Multiple Characters"), &tuning.regionGroup)) {
-			changed = true;
-			resetHistory = true;
-		}
+	ImGui::EndDisabled();
+	if (ImGui::Button(T(TKEY("restore_defaults"), "Restore NR Defaults"))) {
+		tuning = {};
+		changed = recreateTuning = true;
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(T(TKEY("reset_history"), "Reset NR History")))
+		resetHistory = true;
+	if (enabled && ImGui::Button(T(TKEY("retry"), "Retry NR")))
+		RequestRetry();
+	if (globals::state->IsDeveloperMode() && ImGui::TreeNodeEx(T(TKEY("developer"), "Developer"), ImGuiTreeNodeFlags_None)) {
+		ImGui::SeparatorText(T(TKEY("developer_model"), "Model input"));
+		const bool autoMaskChanged = ImGui::Checkbox(T(TKEY("use_auto_mask"), "Use NGX Automatic Mask"), &tuning.useAutoMask);
+		changed |= autoMaskChanged;
+		recreateTuning |= autoMaskChanged;
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(T(TKEY("crop_group_tooltip"),
-				"Grows the crop to also cover the next most prominent characters while it stays under half the view, so a group is evaluated together. Off tracks one character."));
+			ImGui::TextUnformatted(T(TKEY("use_auto_mask_tooltip"),
+				"NVIDIA's built-in automatic mask. On is the normal setting; turning it off with no mask supplied is an untested configuration."));
+		ImGui::SeparatorText(T(TKEY("developer_crop"), "Crop"));
+		ImGui::BeginDisabled(cropDisabled);
 		int fit = static_cast<int>(std::min(tuning.regionFit, NR::Tuning::kMaxRegionFit));
 		const std::array<const char*, NR::Tuning::kMaxRegionFit + 1> fitLabels{
 			T(TKEY("crop_fit_padded"), "Padded"),
@@ -1030,9 +1370,7 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Tuning& tuning)
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(T(TKEY("crop_fit_tooltip"),
 				"How much margin the crop keeps around the tracked character. Padded keeps the normal margin; Tight evaluates the character's own outline with no margin, for checking what the crop covers."));
-	}
-	ImGui::EndDisabled();
-	if (globals::state->IsDeveloperMode()) {
+		ImGui::EndDisabled();
 		// The sweep forces its own centred crops, so it stays usable without a tracked actor.
 		if (ImGui::Button(T(TKEY("crop_calibrate"), "Calibrate Crop Cost")))
 			RequestCalibration();
@@ -1051,25 +1389,16 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Tuning& tuning)
 			if (calibrationState.stabilityRatio > kCalibrationUnstableRatio)
 				ImGui::TextUnformatted(T(TKEY("crop_calibrate_unstable"), "Timing was unsteady between passes; run it again."));
 		}
-	}
-	if (ImGui::Button(T(TKEY("restore_defaults"), "Restore NR Defaults"))) {
-		tuning = {};
-		changed = recreateTuning = true;
+		ImGui::SeparatorText(T(TKEY("developer_diagnostics"), "Diagnostics"));
+		if (ImGui::Checkbox("Use resolution-scaled NR motion", &impl->useResolutionMotionScale))
+			resetHistory = true;
+		diagnostics.DrawSettings();
+		ImGui::TreePop();
 	}
 	if (changed)
 		tuning.Sanitize();
 	if (recreateTuning)
 		recreate = resetHistory = true;
-	ImGui::SameLine();
-	if (ImGui::Button(T(TKEY("reset_history"), "Reset NR History")))
-		resetHistory = true;
-	if (enabled && ImGui::Button(T(TKEY("retry"), "Retry NR")))
-		RequestRetry();
-	if (globals::state->IsDeveloperMode()) {
-		if (ImGui::Checkbox("Use resolution-scaled NR motion", &impl->useResolutionMotionScale))
-			resetHistory = true;
-		diagnostics.DrawSettings();
-	}
 	const auto current = GetStatus();
 	ImGui::TextWrapped("%s", current.text.c_str());
 	if (tuning.regionOverlay)
@@ -1190,6 +1519,14 @@ void NeuralRendering::DrawBeforeUpscaling(bool enabled, const NR::Tuning& tuning
 		resetHistory = true;
 		return;
 	}
+	const auto materialStrengths = tuning.MaterialStrengths();
+	const auto publishMaterialStrength = [this, &materialStrengths] {
+		materialStrengthActive.store(impl->materialStrengthBound, std::memory_order_relaxed);
+		materialStrengthAvailable.store(!impl->materialStrengthDegraded && !materialStrengthRejected.load(std::memory_order_relaxed), std::memory_order_relaxed);
+		for (size_t i = 0; i < materialStrengths.strength.size(); ++i)
+			materialStrengthValues[i].store(materialStrengths.strength[i], std::memory_order_relaxed);
+		materialEdgeSoftness.store(materialStrengths.edgeSoftness, std::memory_order_relaxed);
+	};
 	try {
 		retryRequested = false;
 		if (action == NR::FrameAction::RebuildThenRun) {
@@ -1227,6 +1564,7 @@ void NeuralRendering::DrawBeforeUpscaling(bool enabled, const NR::Tuning& tuning
 			work.prepareColor.Reset();
 			work.prepareToneData.Reset();
 			work.compositeColor.Reset();
+			work.materialAlphaShader.Reset();
 		}
 		auto& targets = globals::game::renderer->GetRuntimeData().renderTargets;
 		auto* color = Util::AsReal(targets[RE::RENDER_TARGETS::kMAIN].texture);
@@ -1256,6 +1594,12 @@ void NeuralRendering::DrawBeforeUpscaling(bool enabled, const NR::Tuning& tuning
 			if (!input || !Util::GetTexture2DDesc(input, guide) || guide.Width < gw * count || guide.Height < gh ||
 				guide.ArraySize != 1 || guide.SampleDesc.Count != 1)
 				throw std::runtime_error("Missing or incompatible NR guide texture");
+		}
+		const bool materialStrengthWanted = tuning.materialStrength && !materialStrengthRejected.load(std::memory_order_relaxed);
+		// Feature 18 latches the UIAlpha binding at creation, so only this switch rebuilds the eye features.
+		if (materialStrengthWanted != work.materialStrengthOn) {
+			recreate = resetHistory = true;
+			work.materialStrengthOn = materialStrengthWanted;
 		}
 		const bool forceRecreate = recreate.exchange(false);
 		diagnostic.recreated = forceRecreate || work.width != w || work.height != h || work.guideWidth != gw || work.guideHeight != gh || work.eyeCount != count || work.format != desc.Format;
@@ -1320,7 +1664,13 @@ void NeuralRendering::DrawBeforeUpscaling(bool enabled, const NR::Tuning& tuning
 			boundedTuning.skinStructureStrength = NR::Tuning::kAutomaticSkinStructure;
 		work.toneLowStrength = boundedTuning.localToneStrength;
 		work.toneHighStrength = boundedTuning.localStructureStrength;
+		work.categoryToneStrength = { boundedTuning.skinToneStrength, boundedTuning.hairToneStrength,
+			boundedTuning.eyeToneStrength, boundedTuning.foliageToneStrength, boundedTuning.landscapeToneStrength };
 		work.regionOverlay = boundedTuning.regionOverlay;
+		work.materialMapEnabled = boundedTuning.showMaterialMap;
+		work.materialMapMode = boundedTuning.materialMapMode;
+		work.materialMapFilter = boundedTuning.materialMapFilter;
+		work.materialMapStrength = materialStrengths.strength;
 		diagnostic.conversion = static_cast<uint32_t>(work.conversionMode);
 		diagnostic.exposureMode = static_cast<uint32_t>(work.exposureMode);
 		diagnostic.compositeMode = static_cast<uint32_t>(work.compositeMode);
@@ -1332,7 +1682,9 @@ void NeuralRendering::DrawBeforeUpscaling(bool enabled, const NR::Tuning& tuning
 		diagnostic.localTone = boundedTuning.localToneStrength;
 		diagnostic.localStructure = boundedTuning.localStructureStrength;
 		diagnostic.skinStructure = boundedTuning.skinStructureStrength;
-		if (!work.Draw(color, inputs.data(), shader, reset, boundedTuning, diagnostic, diagnostics))
+		const bool processed = work.Draw(color, inputs.data(), shader, reset, materialStrengthWanted, materialStrengths, boundedTuning, diagnostic, diagnostics);
+		publishMaterialStrength();
+		if (!processed)
 			throw std::runtime_error(std::format("the NVIDIA runtime failed to process a frame. Update the GPU driver, then press Retry (NGX L/R 0x{:08X}/0x{:08X})",
 				diagnostic.result[0], diagnostic.result[1]));
 		appliedFrame.store(state->frameCount, std::memory_order_relaxed);
@@ -1351,15 +1703,34 @@ void NeuralRendering::DrawBeforeUpscaling(bool enabled, const NR::Tuning& tuning
 		work.lastFrame = state->frameCount;
 	} catch (const winrt::hresult_error& error) {
 		diagnostic.outcome = Outcome::Error;
+		const bool strengthHandled = RevertMaterialStrengthOnFailure(winrt::to_string(error.message()).c_str());
+		publishMaterialStrength();
+		if (strengthHandled)
+			return;
 		LatchFailure();
 		PublishFailure(winrt::to_string(error.message()));
 		logger::error("[NeuralRendering] D3D initialization/dispatch failed: 0x{:08X}", static_cast<uint32_t>(error.code().value));
 	} catch (const std::exception& error) {
 		diagnostic.outcome = Outcome::Error;
+		const bool strengthHandled = RevertMaterialStrengthOnFailure(error.what());
+		publishMaterialStrength();
+		if (strengthHandled)
+			return;
 		LatchFailure();
 		PublishFailure(error.what());
 		logger::error("[NeuralRendering] {}", error.what());
 	}
+}
+
+bool NeuralRendering::RevertMaterialStrengthOnFailure(const char* detail)
+{
+	if (!impl->materialStrengthInFlight || impl->interop.DeviceRemoved())
+		return false;
+	impl->materialStrengthInFlight = false;
+	impl->materialStrengthBound = false;
+	materialStrengthRejected.store(true, std::memory_order_relaxed);
+	logger::warn("[NeuralRendering] material strength rejected ({}); Neural Rendering by material is off for this session", detail);
+	return true;
 }
 
 void NeuralRendering::LatchFailure()
