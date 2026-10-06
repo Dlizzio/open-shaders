@@ -725,9 +725,15 @@ namespace Util
 		const ImVec2 textPos(start.x + ImGui::GetFrameHeight() + style.ItemInnerSpacing.x, start.y + style.FramePadding.y);
 		const auto* textEnd = ImGui::FindRenderedTextEnd(label);
 		const float contentRight = textPos.x + ImGui::CalcTextSize(label, textEnd).x;
-		DrawClippedTextExpansion(textPos.x, contentRight, [&](ImDrawList* drawList) {
-			drawList->AddText(textPos, ImGui::GetColorU32(ImGuiCol_Text), label, textEnd);
-		});
+		const auto* viewport = ImGui::GetWindowViewport();
+		if (contentRight + style.FramePadding.x > viewport->Pos.x + viewport->Size.x) {
+			if (auto tooltip = HoverTooltipWrapper())
+				ImGui::TextUnformatted(label, textEnd);
+		} else {
+			DrawClippedTextExpansion(textPos.x, contentRight, [&](ImDrawList* drawList) {
+				drawList->AddText(textPos, ImGui::GetColorU32(ImGuiCol_Text), label, textEnd);
+			});
+		}
 		return changed;
 	}
 

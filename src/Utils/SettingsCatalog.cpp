@@ -93,42 +93,30 @@ namespace Util::Settings
 
 	std::vector<std::string> GetCatalogContextPath(const SceneSettingsCatalog::SettingMetadata& setting)
 	{
-		auto parts = GetCatalogDisplayPath(setting);
-		auto selectorDefaults = GetCatalogSelectorPath(setting);
-		auto rawParts = SplitCatalogPath(setting.displayPath.empty() ? setting.settingPath : setting.displayPath);
-		const auto rawKeys = SplitCatalogPath(setting.displayPathKeys);
-		const auto settingParts = SplitCatalogPath(setting.settingPath);
-		const bool hasSelector = !selectorDefaults.empty();
-		size_t rawOffset = 0;
-		for (auto& part : selectorDefaults)
-			part = NormalizeDisplayPart(std::move(part));
-		while (!parts.empty() && !selectorDefaults.empty() &&
-			   EqualDisplayText(parts.front(), selectorDefaults.front())) {
-			parts.erase(parts.begin());
-			selectorDefaults.erase(selectorDefaults.begin());
-			++rawOffset;
-		}
-		if (hasSelector) {
-			while (rawOffset < rawParts.size() && IsStructuralDisplayPart(rawParts[rawOffset]))
-				++rawOffset;
-			if (rawOffset < settingParts.size()) {
-				auto settingPart = NormalizeDisplayPart(settingParts[rawOffset]);
-				size_t contextIndex = 0;
-				for (size_t index = rawOffset; index < rawParts.size() && contextIndex < parts.size(); ++index) {
-					if (IsStructuralDisplayPart(rawParts[index]))
-						continue;
-					const bool translated = index < rawKeys.size() && rawKeys[index] != "-";
-					auto rawPart = NormalizeDisplayPart(rawParts[index]);
-					if (!translated && EqualDisplayText(parts[contextIndex], rawPart) &&
-						EqualDisplayText(rawPart, settingPart)) {
-						parts.erase(parts.begin() + contextIndex);
-						break;
-					}
-					++contextIndex;
+		auto parts = SplitCatalogPath(setting.displayPath.empty() ? setting.settingPath : setting.displayPath);
+		const auto keys = SplitCatalogPath(setting.displayPathKeys);
+		const auto selectorParts = SplitCatalogPath(setting.selectorPath);
+		const auto selectorKeys = SplitCatalogPath(setting.selectorPathKeys);
+		std::vector<std::string> context;
+		size_t selectorIndex = 0;
+		for (size_t index = 0; index < parts.size(); ++index) {
+			const bool hasKey = index < keys.size() && keys[index] != "-";
+			if (selectorIndex < selectorParts.size()) {
+				const bool hasSelectorKey = selectorIndex < selectorKeys.size() && selectorKeys[selectorIndex] != "-";
+				const bool matchesSelector = hasKey && hasSelectorKey ? keys[index] == selectorKeys[selectorIndex] :
+				                                                        EqualDisplayText(NormalizeDisplayPart(parts[index]), NormalizeDisplayPart(selectorParts[selectorIndex]));
+				if (matchesSelector) {
+					++selectorIndex;
+					continue;
 				}
 			}
+			if (hasKey)
+				parts[index] = T(keys[index], parts[index].c_str());
+			auto part = NormalizeDisplayPart(std::move(parts[index]));
+			if (!part.empty() && !IsStructuralDisplayPart(part))
+				context.push_back(std::move(part));
 		}
-		return parts;
+		return context;
 	}
 
 	std::string GetCatalogLeafDisplayName(const SceneSettingsCatalog::SettingMetadata& setting)
