@@ -163,6 +163,12 @@ namespace Util
 	// Disable vanilla TAA (bUseTAA:Display). CS drives TAA itself.
 	void DisableVanillaTAA();
 	float GetVerticalFOVRad();
+	/** @brief Returns the visible sun disc's opacity, or zero when hidden. */
+	float GetSunVisibility();
+	/** @brief Returns the sun's normalized world direction from its current local position. */
+	RE::NiPoint3 GetSunDirection();
+	/** @brief Returns a moon's normalized world direction, including celestial synchronization. */
+	RE::NiPoint3 GetMoonDirection(const RE::Moon* moon);
 
 	/** @brief Requests the optional True Directional Movement target API. */
 	void RequestTargetLockAPI();

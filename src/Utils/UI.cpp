@@ -1551,19 +1551,13 @@ namespace Util
 		       StringMatchesSearch(feat->GetDisplayCategory(), searchQuery);
 	}
 
-	bool StringMatchesSearch(const std::string& text, const std::string& searchQuery)
+	bool StringMatchesSearch(std::string_view text, std::string_view searchQuery)
 	{
 		if (searchQuery.empty())
 			return true;
-
-		std::string lowerText = text;
-		std::string lowerQuery = searchQuery;
-
-		// Convert all to lowercase for case-insensitive search
-		std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(), [](unsigned char c) { return static_cast<char>(::tolower(c)); });
-		std::transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(), [](unsigned char c) { return static_cast<char>(::tolower(c)); });
-
-		return lowerText.find(lowerQuery) != std::string::npos;
+		return std::search(text.begin(), text.end(), searchQuery.begin(), searchQuery.end(), [](unsigned char a, unsigned char b) {
+			return std::tolower(a) == std::tolower(b);
+		}) != text.end();
 	}
 
 	void DrawModalBackground(uint8_t alpha)

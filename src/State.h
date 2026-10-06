@@ -343,6 +343,8 @@ public:
 		IsBeastRace = 1 << 2,
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
+		IsMoon = 1 << 7,
+		IsAurora = 1 << 8,
 		SuppressExternalEmittance = 1 << 5,
 		AdditiveLighting = 1 << 6,
 		// --- Open Shaders fork-only flags below: reserved high end, not upstream's sequence. ---
@@ -384,6 +386,9 @@ public:
 	bool isLoadingMenuOpen = false;
 	bool isMapMenuOpen = false;
 	bool isStatsMenuOpen = false;
+	bool flatWorldMapLoaded = false;
+	/** @brief The map menu is open with a flat map mod using FlatMapMarkersSSE. */
+	bool IsFlatWorldMapOpen() const { return isMapMenuOpen && flatWorldMapLoaded; }
 	/** @brief Returns true if the cached main-menu or loading-menu state is open. */
 	bool IsMainOrLoadingMenuOpen() const { return isMainMenuOpen || isLoadingMenuOpen; }
 	/** @brief Returns true if main/loading menu is open, with a live fallback query via the UI pointer. */
@@ -392,8 +397,10 @@ public:
 		return IsMainOrLoadingMenuOpen() ||
 		       (ui && (ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)));
 	}
-	/** @brief Full-screen menus drawing their own art, which must not be graded by post-process effects. */
+	/** @brief Full-screen menus replacing the gameplay view with a separate scene or artwork. */
 	bool IsFullScreenMenuOpen() const { return IsMainOrLoadingMenuOpen() || isMapMenuOpen || isStatsMenuOpen; }
+	/** @brief Menu artwork that should bypass scene post-processing. */
+	bool IsMenuArtOpen() const { return IsMainOrLoadingMenuOpen() || isStatsMenuOpen || IsFlatWorldMapOpen(); }
 	/** @brief Gameplay is paused or suspended behind a menu. Cached menus are kept explicit in case a mod clears kPausesGame. */
 	bool IsPausedOrMenuOpen(RE::UI* ui) const
 	{
@@ -413,6 +420,8 @@ public:
 	 * @param a_pass The render pass to inspect.
 	 */
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
+	/** @brief Classifies engine sky effects for shared shader permutations. */
+	void UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass);
 	void UpdatePermutationBuffer();
 	/**
 	 * @brief Binds permutationCB/sharedDataCB/featureDataCB at the vertex stage, since vertex
@@ -598,9 +607,6 @@ public:
 	D3D_FEATURE_LEVEL featureLevel;
 
 	TracyD3D11Ctx tracyCtx = nullptr;  // Tracy context
-
-	// Moon and Stars mod detection
-	inline static bool moonAndStarsLoaded = false;
 
 	void ClearDisabledFeatures();
 	bool SetFeatureDisabled(const std::string& featureName, bool isDisabled);

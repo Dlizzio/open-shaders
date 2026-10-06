@@ -75,6 +75,8 @@ namespace Permutation
 		static const uint IsBeastRace = (1 << 2);
 		static const uint GrassSphereNormal = (1 << 3);
 		static const uint IsSun = (1 << 4);
+		static const uint IsMoon = (1 << 7);
+		static const uint IsAurora = (1 << 8);
 		static const uint SuppressExternalEmittance = (1 << 5);
 		static const uint AdditiveLighting = (1 << 6);
 		// Fork-only flags reserve the high end so upstream's next sequential flag never collides.

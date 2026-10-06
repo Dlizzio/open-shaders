@@ -385,6 +385,13 @@ public:
 	/** @brief Called after engine weather colors and weather extensions have finished updating. */
 	virtual void OnWeatherColorsUpdated(RE::Sky* /*a_sky*/) {}
 
+	/** @brief Opts into point-light color processing before opacity and brightness scaling. */
+	virtual bool WantsPointLightColorOverride() const { return false; }
+	/** @brief Adjusts an unscaled point-light color on the render thread. */
+	virtual void OverridePointLightColor(float3& /*a_color*/) {}
+	/** @brief Applies loaded color overrides using the cached opt-in feature list. */
+	static void ApplyPointLightColorOverrides(float3& a_color);
+
 	/**
 	 * @brief Opt-in flag checked once, when the render-pass hook's feature list is built: return
 	 * true to have OnRenderPassBegin() visited for qualifying render passes. Default false keeps

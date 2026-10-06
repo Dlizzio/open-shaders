@@ -51,7 +51,7 @@ struct Menu {
     struct Settings {
         std::vector<InputCombo> ToggleKey, SkipCompilationKey, EffectToggleKey,
             OverlayToggleKey, ShaderBlockPrevKey, ShaderBlockNextKey,
-            CSEditorToggleKey, ScreenshotKey, Effects11ToggleKey;
+            CSEditorToggleKey, ScreenshotKey, Effects11ToggleKey, Effects11EditorKey;
     };
     static void OverlayInputSettings(json&, const json&, const json&);
 };
@@ -173,6 +173,7 @@ struct State {
         for (const auto& binding : kInputBindings) live["Menu"][binding.key] = 0;
         live["Menu"]["ToggleKey"] = 35u;
         live["Menu"]["CSEditorToggleKey"] = {16u, 35u};
+        live["Menu"]["Effects11EditorKey"] = {17u, 35u};
     }
     void SaveToJson(json& output) {
         output = live;
@@ -239,7 +240,7 @@ int main() {
 
     const auto userPath = GetConfigPath(State::USER);
     const auto defaultPath = GetConfigPath(State::DEFAULT);
-    const std::string oldFile = R"({ "Version": "old", "Fixture": { "Strength": 2 }, "Menu": { "ToggleKey": [17, 35], "CSEditorToggleKey": 36, "SkipCompilationKey": -1 } })";
+    const std::string oldFile = R"({ "Version": "old", "Fixture": { "Strength": 2 }, "Menu": { "ToggleKey": [17, 35], "CSEditorToggleKey": 36, "SkipCompilationKey": -1, "Effects11EditorKey": [17, 36] } })";
     check(WriteConfigFile(userPath, oldFile), "Create old user fixture");
     check(WriteConfigFile(defaultPath, R"({"Fixture":{"Enabled":true}})"), "Create stale default fixture");
     State state;
@@ -251,6 +252,7 @@ int main() {
         "Feature loaders can distinguish missing keys for legacy migrations");
     check(state.live["Menu"]["ToggleKey"] == json{17u, 35u}, "Menu accepts a combo instead of a scalar");
     check(state.live["Menu"]["CSEditorToggleKey"] == 36u, "Menu accepts a scalar instead of a combo");
+    check(state.live["Menu"]["Effects11EditorKey"] == json{17u, 36u}, "Effects 11 editor imports saved combos");
     check(state.live["Menu"]["SkipCompilationKey"] == 0, "Invalid binding restores the pristine default");
     state.live["Fixture"]["Enabled"] = true;
     state.Load();
@@ -311,6 +313,7 @@ int main() {
             check(!simulatedUpscaling.neuralRenderingEnabled && !simulatedUpscaling.enableDLSSFrameGen && !simulatedUpscaling.fsr4RuntimeEnable,
                 "Absent Open Shaders opt-ins stay off using actual current Upscaling settings");
             check(migrated.live["Menu"]["ToggleKey"] == 36u, "Old and current Community Shaders menu keys survive");
+            check(migrated.live["Menu"]["Effects11EditorKey"] == json{17u, 35u}, "Missing editor binding keeps its current default");
             check(migrated.live["General"]["Enable Async"] == false, "Explicit core preference survives");
             check(migrated.live["Replace Original Shaders"]["Grass"] == false, "Shader selection survives");
             check(migrated.disabledFeatures["Experimental Feature"], "New disabled-by-default features remain disabled");
