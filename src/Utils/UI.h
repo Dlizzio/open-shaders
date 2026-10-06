@@ -515,6 +515,8 @@ namespace Util
 	}
 
 	bool InvertedCheckbox(const char* label, bool* storedValue);
+	/** @brief Draws a checkbox whose clipped label expands on hover. */
+	bool CheckboxWithClippedText(const char* label, bool* value);
 	bool RadioButton(const char* label, unsigned int* storedValue, unsigned int buttonValue);
 	const void* GetActiveControlStorageAddress();
 	ImVec2 GetNativeViewportSizeScaled(float scale);
@@ -537,6 +539,8 @@ namespace Util
 
 	// Text rendering helpers for clearer title text
 	// These functions modify ImGui rendering state and should be called within ImGui context
+	/** @brief Reveals clipped last-item content on hover using the sidebar fade and background. */
+	bool DrawClippedTextExpansion(float contentLeft, float contentRight, const std::function<void(ImDrawList*)>& drawContents);
 	ImVec2 DrawSharpText(const char* text, bool alignToPixelGrid = true, float scale = 1.0f);
 	ImVec2 DrawAlignedTextWithLogo(ID3D11ShaderResourceView* logoTexture, const ImVec2& logoSize, const char* text, float textScale = DefaultHeaderTextScale, ImU32 logoTint = IM_COL32_WHITE);
 

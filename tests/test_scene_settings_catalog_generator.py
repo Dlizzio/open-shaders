@@ -15,7 +15,7 @@ SPEC.loader.exec_module(GENERATOR)
 SYNTHETIC_HEADER = r'''
 struct SyntheticFeature : Feature
 {
-    struct WaterSettings
+    struct NestedSettings
     {
         float amount = 0.0f;
     };
@@ -23,7 +23,7 @@ struct SyntheticFeature : Feature
     struct Settings
     {
         float regular = 0.0f;
-        WaterSettings water{};
+        NestedSettings nested{};
         float guardSentinel = 0.0f;
         float2 unboundedRange{};
         float constrained = 0.0f;
@@ -50,13 +50,13 @@ struct SyntheticFeature : Feature
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-    SyntheticFeature::WaterSettings,
+    SyntheticFeature::NestedSettings,
     amount)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     SyntheticFeature::Settings,
     regular,
-    water,
+    nested,
     guardSentinel,
     unboundedRange,
     constrained,
@@ -226,17 +226,18 @@ void SyntheticFeature::DrawSettings()
         ImGui::EndTabItem();
     }
 
-    DrawWaterSettings();
+    DrawNestedSettings();
 }
 
-void SyntheticFeature::DrawWaterSettings()
+void SyntheticFeature::DrawNestedSettings()
 {
-    if (!ImGui::BeginTabItem(T(TKEY("water"), "Water")))
+    if (!ImGui::BeginTabItem(T(TKEY("nested"), "Nested Group")))
         return;
 
-    auto& water = settings.water;
+    auto& nested = settings.nested;
+    ImGui::SeparatorText(T(TKEY("section"), "Section"));
     DrawGuardedSlider(
-        T(TKEY("water_amount"), "Water Amount"), water.amount, 0.0f, 2.0f);
+        T(TKEY("nested_amount"), "Nested Amount"), nested.amount, 0.0f, 2.0f);
     ImGui::EndTabItem();
 
     settings.guardSentinel = settings.guardSentinel;
@@ -306,11 +307,13 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertTrue(all(not entry["hasNumericBounds"] for entry in entries))
 
     def test_early_return_tab_and_nested_draw_helper_are_discovered(self):
-        guarded = self.entries_by_id[("water", "amount")]
+        guarded = self.entries_by_id[("nested", "amount")]
         sentinel = self.entries_by_id[("", "guardSentinel")]
 
-        self.assertEqual(guarded["selectorPath"], "Water")
-        self.assertEqual(guarded["displayName"], "Water Amount")
+        self.assertEqual(guarded["selectorPath"], "Nested Group")
+        self.assertEqual(guarded["displayName"], "Nested Amount")
+        self.assertEqual(guarded["displayPath"], "Section/nested")
+        self.assertEqual(guarded["displayPathKeys"], "feature.synthetic.section/-")
         self.assertEqual(guarded["sourceWidget"], "SliderFloat")
         self.assertEqual((guarded["minimum"], guarded["maximum"]), (0.0, 2.0))
         self.assertEqual(sentinel["selectorPath"], "")
@@ -759,7 +762,9 @@ void SyntheticFeature::SaveSettings(json& output) {
     output["Wrong"] = wrong;
 }
 void DrawCurve(Curve& value) {
-    ImGui::SliderFloat("Shoulder", &value.shoulder, 0.0f, 2.0f);
+    if (ImGui::CollapsingHeader(T("feature.synthetic.section", "Section"))) {
+        ImGui::SliderFloat("Shoulder", &value.shoulder, 0.0f, 2.0f);
+    }
 }
 '''
         with tempfile.TemporaryDirectory() as directory:
@@ -780,6 +785,7 @@ void DrawCurve(Curve& value) {
                     self.assertIn("SettingFlag::SceneControllable", entry["flags"])
             shoulder = by_id[("Second", "shoulder")]
             self.assertEqual(shoulder["displayName"], "Shoulder")
+            self.assertEqual(shoulder["displayPath"], "Second/Section")
             self.assertEqual((shoulder["minimum"], shoulder["maximum"]), (0.0, 2.0))
 
     def test_validation_rejects_inconsistent_input_metadata(self):

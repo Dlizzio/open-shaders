@@ -4463,8 +4463,11 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                 display_path[matching_index] = ui_category
                 display_path_keys[matching_index] = category_key
             else:
-                display_path.insert(heading_size, ui_category)
-                display_path_keys.insert(heading_size, category_key)
+                category_index = heading_size
+                if binding_match and not contextual:
+                    category_index = max(category_index, binding_match.matched_offset)
+                display_path.insert(category_index, ui_category)
+                display_path_keys.insert(category_index, category_key)
         display_path = [*context.display_path_prefix, *display_path]
         display_path_keys = [
             *("" for _ in context.display_path_prefix), *display_path_keys]

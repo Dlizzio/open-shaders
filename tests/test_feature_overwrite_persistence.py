@@ -144,12 +144,15 @@ std::span<const SettingMetadata> GetSettings() {
         entries[0].serializedComponent = -1;
         entries[0].settingKey = "Strength";
         entries[0].displayName = "Catalogue Strength";
+        entries[0].displayPath = "Shape";
+        entries[0].selectorPath = "General/Details";
         entries[0].flags = SettingFlag::Persisted;
         entries[1] = entries[0];
         entries[1].serializedKey = "Vector";
         entries[1].settingKey = "Vector";
         entries[1].serializedComponent = 0;
         entries[1].displayName = "Whole Vector";
+        entries[1].displayPath = "General/Details/Shape";
         return entries;
     }();
     return entries;
@@ -318,7 +321,9 @@ int main() {
     exportSource["Fixture Feature"]["0"] = {{"1", 5}};
     const auto options = Util::Settings::GetExportSettings("Fixture", exportSource["Fixture Feature"]);
     const auto strength = std::ranges::find(options, std::string("/Strength"), &Util::Settings::ExportSetting::path);
-    check(strength != options.end() && strength->label == "Catalogue Strength", "Export uses shared generic catalogue");
+    check(strength != options.end() && strength->label == "General / Details / Shape / Catalogue Strength", "Export includes subfeatures before their section headings");
+    const auto vector = std::ranges::find(options, std::string("/Vector"), &Util::Settings::ExportSetting::path);
+    check(vector != options.end() && vector->label == "General / Details / Shape / Whole Vector", "Export does not repeat subfeatures already in the display path");
     check(std::ranges::find(options, std::string("/Vector/0"), &Util::Settings::ExportSetting::path) == options.end(), "Arrays remain whole");
     const std::vector<std::string> selected{"/Strength", "/Vector", "/Nested/Keep", "/a~1b/~0key", "/0/1"};
     check(manager->ExportSettings("Exported", "Fixture", selected, exportSource), "Selected export succeeds");
