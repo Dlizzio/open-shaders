@@ -60,7 +60,7 @@ BINDINGS;
 MENU_OVERLAY
 namespace FidelityFX { enum class Fsr4AdapterSupport { Unsupported, RadeonRx7000, RadeonRx9000 }; }
 using uint = unsigned;
-#include NR_TUNING_PATH
+#include NR_CONTEXT_PATH
 struct Upscaling {
     static constexpr unsigned kFsr4RuntimeSelectionSchemaVersion = 1;
     UPSCALING_TYPES
@@ -312,6 +312,8 @@ int main() {
             check(simulatedSSS.settings.ScatterMode == 2, "Absent modern SSS fields use current defaults");
             check(!simulatedUpscaling.neuralRenderingEnabled && !simulatedUpscaling.enableDLSSFrameGen && !simulatedUpscaling.fsr4RuntimeEnable,
                 "Absent Open Shaders opt-ins stay off using actual current Upscaling settings");
+            check(json(simulatedUpscaling.neuralRenderingContexts) == json(NR::Context::Profiles{}),
+                "Old configs keep the new dialogue profiles at their unchanged defaults");
             check(migrated.live["Menu"]["ToggleKey"] == 36u, "Old and current Community Shaders menu keys survive");
             check(migrated.live["Menu"]["Effects11EditorKey"] == json{17u, 35u}, "Missing editor binding keeps its current default");
             check(migrated.live["General"]["Enable Async"] == false, "Explicit core preference survives");
@@ -341,6 +343,10 @@ int main() {
         obscure["Subsurface Scattering"]["BaseProfile"]["Strength"] = {1, "invalid", 3};
         obscure["Upscaling"]["neuralRenderingEnabled"] = "true";
         obscure["Upscaling"]["qualityMode"] = 4294967296ULL;
+        obscure["Upscaling"]["neuralRenderingContexts"] = {
+            {"normal", {{"run", false}}},
+            {"dialogue", {{"run", "yes"}, {"scope", -1}, {"region", "full"}}}
+        };
         obscure["Unknown Obsolete Feature"] = {{"Enabled", true}};
         const auto obscureBytes = obscure.dump(1);
         check(WriteConfigFile(userPath, obscureBytes), "Write malformed Community Shaders variant");
@@ -354,6 +360,9 @@ int main() {
         check(simulatedSSS.settings.BaseProfile.BlurRadius == 1.25f, "Malformed neighbors do not discard valid values");
         check(!simulatedUpscaling.neuralRenderingEnabled && simulatedUpscaling.qualityMode == 1,
             "Malformed newly added options cannot enable NR or overflow enum storage");
+        check(!simulatedUpscaling.neuralRenderingContexts.normal.run &&
+            json(simulatedUpscaling.neuralRenderingContexts.dialogue) == json(NR::Context::ContextProfile{}),
+            "Malformed dialogue values retain defaults without discarding a valid normal profile");
         check(!filtered.receivedSettings.contains("Unknown Obsolete Feature"), "Unknown roots are not applied");
         obscure = fixture["settings"];
         obscure["Subsurface Scattering"].erase("EnableCharacterLighting");
@@ -365,6 +374,35 @@ int main() {
         check(filtered.live["Menu"]["ToggleKey"] == 37u, "Current hotkey names win over legacy aliases");
         check(read(userPath) == missingBytes, "Partial Community Shaders file remains unchanged");
     }
+    const json profiles = {
+        {"normal", {{"run", false}, {"scope", 0}, {"region", 0}}},
+        {"dialogue", {{"run", true}, {"scope", 2}, {"region", 1}}}
+    };
+    for (const bool enabled : {false, true}) {
+        json imported = {{"Version", "old"}, {"Upscaling", {
+            {"neuralRenderingEnabled", enabled}, {"neuralRenderingContexts", profiles}}}};
+        const auto originalBytes = imported.dump(1);
+        check(WriteConfigFile(userPath, originalBytes), "Write saved dialogue profiles");
+        State migrated;
+        migrated.Load();
+        check(read(userPath) == originalBytes, "Loading dialogue profiles preserves the original bytes");
+        check(simulatedUpscaling.neuralRenderingEnabled == enabled &&
+            json(simulatedUpscaling.neuralRenderingContexts) == profiles,
+            "Dialogue profiles and explicit NR enablement import independently");
+        const json favoritePatch = {{"Favorites", {{"Upscaling", true}}}};
+        check(migrated.SaveFeaturePreference(favoritePatch), "Favorite imported dialogue profiles");
+        imported.merge_patch(favoritePatch);
+        check(json::parse(read(userPath)) == imported, "Favorites preserve imported dialogue profiles without normalizing them");
+        migrated.Save();
+        const auto normalized = json::parse(read(userPath));
+        check(normalized["Upscaling"]["neuralRenderingContexts"] == profiles,
+            "Explicit Save preserves dialogue profiles");
+        migrated.Load();
+        check(simulatedUpscaling.neuralRenderingEnabled == enabled &&
+            json(simulatedUpscaling.neuralRenderingContexts) == profiles,
+            "Saved dialogue profiles and NR enablement round trip");
+        check(json::parse(read(userPath)) == normalized, "Reload does not rewrite saved dialogue profiles");
+    }
 }
 '''
         tokens = {
@@ -374,7 +412,7 @@ int main() {
             "MENU_OVERLAY": braced(menu, "void Menu::OverlayInputSettings("),
             "PROCESS_SETTINGS": braced(post, "void PostProcessing::ProcessSettings("),
             "FSR4_MIGRATION": braced(upscaling, "void ApplyLegacyFsr4RuntimeSelectionMigration("),
-            "NR_TUNING_PATH": json.dumps((ROOT / "src/Features/Upscaling/NeuralRendering/Tuning.h").as_posix()),
+            "NR_CONTEXT_PATH": json.dumps((ROOT / "src/Features/Upscaling/NeuralRendering/ContextProfile.h").as_posix()),
             "UPSCALING_TYPES": "\n".join(braced(upscaling_header, token) + ";" for token in
                                          ("enum class UpscaleMethod", "enum class QualityMode", "struct Settings")),
             "UPSCALING_SERIALIZERS": upscaling[upscaling.index("namespace NR"):upscaling.index("decltype(&D3D11")],
