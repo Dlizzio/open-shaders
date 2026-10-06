@@ -680,6 +680,63 @@ namespace Util
 		return IconLoader::InitializeMenuIcons(menu);
 	}
 
+	bool DrawClippedTextExpansion(float contentLeft, float contentRight, const std::function<void(ImDrawList*)>& drawContents)
+	{
+		auto* window = ImGui::GetCurrentWindow();
+		if (!ImGui::IsItemVisible() || contentRight <= window->ClipRect.Max.x)
+			return false;
+		const auto& style = ImGui::GetStyle();
+		const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+		ImGui::PushID(ImGui::GetItemID());
+		const SKSE::stl::scope_exit restoreID([]() noexcept { ImGui::PopID(); });
+		auto* storage = ImGui::GetStateStorage();
+		const ImGuiID progressId = ImGui::GetID("##ExpansionProgress");
+		const ImGuiID frameId = ImGui::GetID("##ExpansionFrame");
+		const int frame = ImGui::GetFrameCount();
+		float progress = storage->GetInt(frameId, -1) == frame - 1 ? storage->GetFloat(progressId) : 0.0f;
+		const float step = ImGui::GetIO().DeltaTime / ThemeManager::Constants::SIDEBAR_ROW_FADE_DURATION;
+		progress = std::clamp(progress + (hovered ? step : -step), 0.0f, 1.0f);
+		storage->SetFloat(progressId, progress);
+		storage->SetInt(frameId, frame);
+		const float expansionAlpha = progress * progress * (3.0f - 2.0f * progress);
+		if (expansionAlpha <= 0.0f)
+			return false;
+		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, style.Alpha * expansionAlpha);
+		const SKSE::stl::scope_exit restoreAlpha([]() noexcept { ImGui::PopStyleVar(); });
+		auto* drawList = ImGui::GetForegroundDrawList(window->Viewport);
+		const ImRect expanded({ contentLeft, ImGui::GetItemRectMin().y }, { contentRight + style.FramePadding.x, ImGui::GetItemRectMax().y });
+		ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
+		background.w = 1.0f;
+		drawList->PushClipRect({ window->Viewport->Pos.x, window->ClipRect.Min.y },
+			{ window->Viewport->Pos.x + window->Viewport->Size.x, window->ClipRect.Max.y });
+		drawList->AddRectFilled(expanded.Min, expanded.Max, ImGui::GetColorU32(background));
+		drawList->AddRectFilled(expanded.Min, expanded.Max, ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_HeaderActive : ImGuiCol_HeaderHovered));
+		drawList->AddRect(expanded.Min, expanded.Max, ImGui::GetColorU32(ImGuiCol_Border));
+		drawContents(drawList);
+		drawList->PopClipRect();
+		return true;
+	}
+
+	bool CheckboxWithClippedText(const char* label, bool* value)
+	{
+		const bool changed = ImGui::Checkbox(label, value);
+		const auto& style = ImGui::GetStyle();
+		const auto start = ImGui::GetItemRectMin();
+		const ImVec2 textPos(start.x + ImGui::GetFrameHeight() + style.ItemInnerSpacing.x, start.y + style.FramePadding.y);
+		const auto* textEnd = ImGui::FindRenderedTextEnd(label);
+		const float contentRight = textPos.x + ImGui::CalcTextSize(label, textEnd).x;
+		const auto* viewport = ImGui::GetWindowViewport();
+		if (contentRight + style.FramePadding.x > viewport->Pos.x + viewport->Size.x) {
+			if (auto tooltip = HoverTooltipWrapper())
+				ImGui::TextUnformatted(label, textEnd);
+		} else {
+			DrawClippedTextExpansion(textPos.x, contentRight, [&](ImDrawList* drawList) {
+				drawList->AddText(textPos, ImGui::GetColorU32(ImGuiCol_Text), label, textEnd);
+			});
+		}
+		return changed;
+	}
+
 	// Text rendering helpers
 	ImVec2 DrawSharpText(const char* text, bool alignToPixelGrid, float scale)
 	{
