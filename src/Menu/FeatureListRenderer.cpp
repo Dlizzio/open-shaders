@@ -395,36 +395,10 @@ namespace
 		};
 		drawContents(window->DrawList);
 
-		float expansionAlpha = 0.0f;
-		if (expandClippedText && contentRight > window->ClipRect.Max.x) {
-			auto* storage = ImGui::GetStateStorage();
-			const ImGuiID progressId = ImGui::GetID("##ExpansionProgress");
-			const ImGuiID frameId = ImGui::GetID("##ExpansionFrame");
-			const int frame = ImGui::GetFrameCount();
-			float progress = storage->GetInt(frameId, -1) == frame - 1 ? storage->GetFloat(progressId) : 0.0f;
-			const float step = ImGui::GetIO().DeltaTime / ThemeManager::Constants::SIDEBAR_ROW_FADE_DURATION;
-			progress = std::clamp(progress + (hovered ? step : -step), 0.0f, 1.0f);
-			storage->SetFloat(progressId, progress);
-			storage->SetInt(frameId, frame);
-			expansionAlpha = progress * progress * (3.0f - 2.0f * progress);
-		}
-		if (expansionAlpha > 0.0f) {
-			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, style.Alpha * expansionAlpha);
-			const SKSE::stl::scope_exit restoreAlpha([]() noexcept { ImGui::PopStyleVar(); });
-			auto* drawList = ImGui::GetForegroundDrawList(window->Viewport);
-			const ImRect expanded(rowRect.Min, { contentRight + style.FramePadding.x, rowRect.Max.y });
-			ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
-			background.w = 1.0f;
-			drawList->PushClipRect({ window->Viewport->Pos.x, window->ClipRect.Min.y },
-				{ window->Viewport->Pos.x + window->Viewport->Size.x, window->ClipRect.Max.y });
-			drawList->AddRectFilled(expanded.Min, expanded.Max, ImGui::GetColorU32(background));
-			drawList->AddRectFilled(expanded.Min, expanded.Max, ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_HeaderActive : ImGuiCol_HeaderHovered));
-			drawList->AddRect(expanded.Min, expanded.Max, ImGui::GetColorU32(ImGuiCol_Border));
-			drawContents(drawList);
-			drawList->PopClipRect();
-		} else if (row.icon && hovered && ImGui::IsMouseHoveringRect(rowStart, { rowStart.x + height, rowStart.y + height })) {
+		const bool expanded = expandClippedText &&
+		                      Util::DrawClippedTextExpansion(rowRect.Min.x, contentRight, drawContents);
+		if (!expanded && row.icon && hovered && ImGui::IsMouseHoveringRect(rowStart, { rowStart.x + height, rowStart.y + height }))
 			Util::AddTooltip(row.category.data());
-		}
 		return pressed;
 	}
 }
