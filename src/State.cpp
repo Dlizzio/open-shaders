@@ -66,7 +66,7 @@ void State::UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass)
 
 void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 {
-	permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
+	permutationData.ExtraShaderDescriptor &= ~(static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun) | static_cast<uint32_t>(State::ExtraShaderDescriptors::IsMoon));
 
 	if (!a_pass || !a_pass->shaderProperty)
 		return;
@@ -76,10 +76,34 @@ void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 		skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN_GLARE) {
 		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
 	}
+	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_MOON)
+		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsMoon);
 	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN_GLARE) {
 		// Sky binds the depth copy as its DSV, so sample main depth to avoid a read/write conflict.
 		auto* depthSRV = Util::AsReal(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV);
 		globals::d3d::context->VSSetShaderResources(17, 1, &depthSRV);
+	}
+}
+
+void State::UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass)
+{
+	constexpr auto isAurora = static_cast<uint32_t>(ExtraShaderDescriptors::IsAurora);
+	permutationData.ExtraShaderDescriptor &= ~isAurora;
+
+	if (!a_pass || !a_pass->geometry)
+		return;
+	if (!(currentVertexDescriptor & static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::SkyObject)))
+		return;
+
+	const auto sky = globals::game::sky;
+	if (!sky || !sky->auroraRoot)
+		return;
+
+	for (const RE::NiAVObject* node = a_pass->geometry; node; node = node->parent) {
+		if (node == sky->auroraRoot.get()) {
+			permutationData.ExtraShaderDescriptor |= isAurora;
+			return;
+		}
 	}
 }
 
@@ -292,7 +316,7 @@ State::TonemapOwner State::GetTonemapOwner()
 
 #if defined(ENABLE_EFFECTS11)
 	auto& effects11 = globals::features::effects11;
-	if (effects11.loaded && !IsFullScreenMenuOpen() && effects11.WantsTonemapOwnership())
+	if (effects11.loaded && effects11.WantsTonemapOwnership())
 		cachedOwner = TonemapOwner::kEffects11;
 	else
 #endif
@@ -420,11 +444,6 @@ void State::Reset()
 
 void State::Setup()
 {
-	// Detect Moon and Stars mod for compatibility adjustments
-	moonAndStarsLoaded = GetModuleHandle(L"po3_MoonMod.dll") != nullptr;
-	if (moonAndStarsLoaded)
-		logger::info("Moon and Stars detected, compatibility enabled");
-
 	globals::features::truePBR.SetupResources();
 	SetupResources();
 
@@ -1507,10 +1526,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		if (auto sky = globals::game::sky) {
 			// Process sun
 			if (auto sun = sky->sun; sun && sun->root && sky->root) {
-				const auto& sunPos = sun->root->world.translate;
-				const auto& skyPos = sky->root->world.translate;
-				float3 sunDirection = { sunPos.x - skyPos.x, sunPos.y - skyPos.y, sunPos.z - skyPos.z };
-				sunDirection.Normalize();
+				const auto sunDirection = Util::GetSunDirection();
 				data.SunDirection = float4{ sunDirection.x, sunDirection.y, sunDirection.z, 0.0f };
 
 				if (sun->sunBase) {
@@ -1520,14 +1536,14 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			}
 
 			if (auto masser = sky->masser) {
-				auto dir = Util::Moon::GetDirection(masser, moonAndStarsLoaded);
+				auto dir = Util::GetMoonDirection(masser);
 				data.MasserDirection = float4{ dir.x, dir.y, dir.z, 0.0f };
 				if (masser->root && !masser->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
 					data.MasserColor = Util::Moon::GetBlendColor(masser, Util::Moon::MasserBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
 			}
 
 			if (auto secunda = sky->secunda) {
-				auto dir = Util::Moon::GetDirection(secunda, moonAndStarsLoaded);
+				auto dir = Util::GetMoonDirection(secunda);
 				data.SecundaDirection = float4{ dir.x, dir.y, dir.z, 0.0f };
 				if (secunda->root && !secunda->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
 					data.SecundaColor = Util::Moon::GetBlendColor(secunda, Util::Moon::SecundaBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);

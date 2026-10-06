@@ -974,7 +974,7 @@ namespace Util
 	 * @param searchQuery The search query string
 	 * @return True if the text matches the search query (case-insensitive)
 	 */
-	bool StringMatchesSearch(const std::string& text, const std::string& searchQuery);
+	bool StringMatchesSearch(std::string_view text, std::string_view searchQuery);
 
 	/** @brief Allocation-free label accessor for indexed searchable combos. */
 	using SearchableComboLabelGetter = const char* (*)(const void* userData, int index);

@@ -272,7 +272,10 @@ endif()
 
 if(ENABLE_EFFECTS11)
     target_link_libraries(${PROJECT_NAME} PRIVATE Microsoft::Effects11)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_EFFECTS11)
+    target_compile_definitions(
+        ${PROJECT_NAME}
+        PRIVATE ENABLE_EFFECTS11 ENABLE_ENB_EXTENDER
+    )
 endif()
 
 if(MSVC)

@@ -82,6 +82,20 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	/** @brief Returns the visible moon selected to illuminate the scene. */
+	RE::Moon* GetVisibleMoonLightSource(const RE::Sky* sky) const;
+
+	enum class Caster : uint8_t
+	{
+		Sun,
+		Masser,
+		Secunda,
+		None
+	};
+
+	/** @brief Returns a body's synchronized world direction before shadow clamping, or nullopt when inactive. */
+	std::optional<RE::NiPoint3> GetCelestialDirection(Caster caster) const;
+
 private:
 	enum class CellFlagExt : uint16_t
 	{
@@ -94,14 +108,6 @@ private:
 		Masser,
 		Secunda,
 		Count
-	};
-
-	enum class Caster : uint8_t
-	{
-		Sun,
-		Masser,
-		Secunda,
-		None
 	};
 
 	enum class SunPath : uint8_t
@@ -156,7 +162,6 @@ private:
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
 	inline static RE::Setting* gSunAlphaTransTime = nullptr;
 
-	bool moonAndStarsLoaded = false;
 	RE::TESObjectCELL* currentCell = nullptr;
 	bool currentCellInterior = false;
 	RE::TESWorldSpace* currentCellWorldspace = nullptr;
@@ -166,6 +171,7 @@ private:
 	bool immediateTransitionReady = false;
 
 	float4 colors[3] = {};
+	RE::NiPoint3 rawDirections[3] = {};
 	float currentDim = 1.0f;
 	bool sunSetting = false;
 	bool sunRising = false;

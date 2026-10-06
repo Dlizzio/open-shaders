@@ -76,6 +76,7 @@ add_executable(cpp_tests
 	test_settingspatch.cpp
 	test_weatheridparser.cpp
 	test_effectsourcecompatibility.cpp
+	test_effects11_settings.cpp
 	test_versiongate.cpp
 	test_presetinclude.cpp
 	test_windfield.cpp

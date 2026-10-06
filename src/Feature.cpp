@@ -362,6 +362,15 @@ const std::vector<Feature*>& Feature::GetRenderPassHookFeatures()
 	return hookFeatures;
 }
 
+void Feature::ApplyPointLightColorOverrides(float3& a_color)
+{
+	static const auto features = FilterFeatureList([](Feature* feature) { return feature->WantsPointLightColorOverride(); });
+	for (auto* feature : features) {
+		if (feature->loaded)
+			feature->OverridePointLightColor(a_color);
+	}
+}
+
 const std::vector<Feature*>& Feature::GetRenderPassSkipFeatures()
 {
 	static const std::vector<Feature*> skipFeatures = FilterFeatureList([](Feature* f) { return f->WantsRenderPassSkipHook(); });
