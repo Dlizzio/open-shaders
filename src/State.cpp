@@ -528,39 +528,32 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		errorDetected = true;
 	}
 
-	// Attempt to load the config file
-	auto tryLoadConfig = [&](const std::string& path) -> bool {
-		std::ifstream i(path);
-		logger::info("Attempting to open config file: {}", path);
-		if (!i.is_open()) {
-			logger::warn("Unable to open config file: {}", path);
-			return false;
-		}
-		try {
-			i >> settings;
-			i.close();
-			return true;
-		} catch (const nlohmann::json::parse_error& e) {
-			logger::warn("Error parsing json config file ({}) : {}\n", path, e.what());
-			i.close();
-			return false;
-		}
-	};
-
 	// LOADING ORDER: Default → User → Overrides → User Overrides (.user files)
 
-	// Step 1: Always start with default settings
-	logger::info("Loading default settings from: {}", defaultConfigFilePath);
-	if (!tryLoadConfig(defaultConfigFilePath)) {
-		logger::info("No default config ({}), generating new one", defaultConfigFilePath);
+	// Step 1: Generate the baseline before any user settings can reach live state
+	if (defaultSettingsBaseline.is_null()) {
 		std::fill(enabledClasses, enabledClasses + magic_enum::enum_integer(RE::BSShader::Type::Total) - 1, true);
-		Save(ConfigMode::DEFAULT);
-		// Attempt to load the newly created config
-		if (!tryLoadConfig(defaultConfigFilePath)) {
-			logger::error("Error opening newly created default config file ({})\n", defaultConfigFilePath);
+		json generatedDefaults;
+		std::string serializedDefaults;
+		try {
+			SaveToJson(generatedDefaults);
+			auto& disabledByDefault = generatedDefaults["Disable at Boot"];
+			for (auto* feature : Feature::GetFeatureList())
+				disabledByDefault[feature->GetShortName()] = feature->IsDisabledByDefault();
+			serializedDefaults = generatedDefaults.dump(1);
+		} catch (const std::exception& e) {
+			logger::error("Failed to generate current default settings: {}", e.what());
 			return;
 		}
+		defaultSettingsBaseline = std::move(generatedDefaults);
+
+		if (!WriteConfigAtomically(defaultConfigFilePath, serializedDefaults)) {
+			logger::warn("Failed to persist current default settings to: {}", defaultConfigFilePath);
+		} else {
+			logger::info("Generated current default settings at: {}", defaultConfigFilePath);
+		}
 	}
+	settings = defaultSettingsBaseline;
 
 	// Step 2: Apply user settings on top of defaults (user preferences)
 	if (a_configMode == ConfigMode::USER) {
@@ -571,12 +564,19 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				userFile >> userSettings;
 				userFile.close();
 
-				// Merge user settings on top of defaults
-				for (auto& [key, value] : userSettings.items()) {
-					settings[key] = value;
+				Util::Settings::OverlayRecognizedRootSettings(settings, userSettings);
+				if (const auto menu = userSettings.find("Menu"); menu != userSettings.end() && menu->is_object())
+					Menu::OverlayInputSettings(settings["Menu"], defaultSettingsBaseline["Menu"], *menu);
+				for (auto* feature : Feature::GetFeatureList()) {
+					const auto name = feature->GetName();
+					const auto userFeature = userSettings.find(name);
+					if (userFeature != userSettings.end() && userFeature->is_object() && settings.contains(name)) {
+						// Feature migrations must distinguish missing fields from explicit defaults.
+						settings[name] = Util::Settings::SelectSettings(settings[name], *userFeature);
+					}
 				}
 				logger::info("Applied user settings from: {}", userConfigFilePath);
-			} catch (const nlohmann::json::parse_error& e) {
+			} catch (const nlohmann::json::exception& e) {
 				logger::warn("Error parsing user config file: {}", e.what());
 				userFile.close();
 			}
@@ -669,8 +669,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		overrideManager->CaptureAppliedSettings(appliedSettings);
 
 		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
-			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
-			Save(a_configMode, false);  // Use original config mode
+			logger::info("Loaded config for version {}; version {} will be written on save", (std::string)settings["Version"], Plugin::VERSION.string());
 		}
 
 		FeatureIssues::ScanForOrphanedFeatureINIs();
@@ -686,12 +685,10 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 
 		logger::info("Loading Settings Complete");
 	} catch (const json::exception& e) {
-		logger::info("General JSON error accessing settings: {}; recreating config", e.what());
-		Save(a_configMode, false);
+		logger::warn("General JSON error accessing settings: {}", e.what());
 		errorDetected = true;
 	} catch (const std::exception& e) {
-		logger::info("General error accessing settings: {}; recreating config", e.what());
-		Save(a_configMode, false);
+		logger::warn("General error accessing settings: {}", e.what());
 		errorDetected = true;
 	}
 	if (errorDetected && a_allowReload)

@@ -22,13 +22,18 @@ class Effects11HDRTests(unittest.TestCase):
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <exception>
 using uint = uint32_t;
+namespace logger {
+template<class... T> void error(T&&...) {}
+}
 namespace RE {
 using RENDER_TARGET = unsigned;
 struct TweenMenu { static constexpr int MENU_NAME = 1; };
 }
 struct Effects11 {
     uint tonemapReplacedFrame = UINT32_MAX;
+    bool tonemapFailed = false;
     bool RenderTonemap(RE::RENDER_TARGET, RE::RENDER_TARGET);
     bool ReplacedTonemapperThisFrame() const;
 };
