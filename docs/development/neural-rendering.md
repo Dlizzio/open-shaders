@@ -279,8 +279,9 @@ the fovea clip also narrowed the crop the last frame evaluated.
     render-eye resolution. The original scene-linear `kMAIN` RGB and alpha are
     retained separately for luminance-ratio writeback.
 -   Depth: the existing upscaling encoder reads the engine depth SRV,
-    including VR's R24 depth view, and writes non-inverted device depth to
-    R32 float. Depth is not linearized.
+    including VR's R24 depth view, and writes the device depth to R32 float
+    unchanged: inverted (1 is near) when Reverse Z is active. Depth is not
+    linearized.
 -   Motion: the same encoder's undilated path writes RG16 float, preserving
     correspondence with the center-pixel depth guide. The default Feature 18
     contract converts normalized eye-UV displacement to NR input pixels using
@@ -344,6 +345,11 @@ described below. The original scene-linear frame remains separate and is used
 for reconstruction after model evaluation. This D3D12 private ABI is observed
 rather than officially documented; successful creation and evaluation do not by
 themselves establish image quality or temporal correctness.
+
+`DLSSNR.DepthInverted` follows the Reverse Z-Buffer feature, which is restart-gated, so
+the depth guide's convention never changes while the game runs. Frame time and jitter
+reach Feature 18 sanitized: a non-finite or negative frame time reads as zero and a hitch
+is capped at 250 ms, and a non-finite jitter offset or one beyond a pixel reads as zero.
 
 Feature resources and frame parameters are updated in place after creation.
 Appearance tuning is written before creation, and committed UI tuning changes
