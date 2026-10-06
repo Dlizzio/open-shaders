@@ -339,8 +339,8 @@ namespace
 		return result;
 	}
 
-	using Util::Settings::GetCatalogDisplayPath;
 	using Util::Settings::GetCatalogContextPath;
+	using Util::Settings::GetCatalogDisplayPath;
 	using Util::Settings::GetCatalogSelectorPath;
 
 	using Util::Settings::GetCatalogLeafDisplayName;
