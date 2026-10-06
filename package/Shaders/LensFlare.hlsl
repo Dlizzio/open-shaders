@@ -47,9 +47,7 @@ PS_OUTPUT main(PS_INPUT input)
 	[unroll] for (uint i = 0; i < FlareOcclusion::SampleCount; ++i)
 	{
 		float2 sampleUV = light.xy + FlareOcclusion::GetSampleOffset(i);
-		if (FrameBuffer::IsOutsideFrame(sampleUV))
-			visibleSamples += 1.0;
-		else {
+		if (!FrameBuffer::IsOutsideFrame(sampleUV)) {
 			// Engine light depths use the standard projection.
 			float depth = FrameBuffer::ToStandardDepth(DepthTex.Sample(DepthSampler, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(sampleUV)));
 			visibleSamples += depth >= light.z;
