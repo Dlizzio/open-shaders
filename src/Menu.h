@@ -123,6 +123,8 @@ public:
 	void Load(json& o_json);
 	/** @brief Saves menu settings to JSON */
 	void Save(json& o_json);
+	/** @brief Overlays validated scalar or combo input bindings onto serialized menu defaults. */
+	static void OverlayInputSettings(json& merged, const json& defaults, const json& userSettings);
 
 	/** @brief Loads theme settings from a JSON object */
 	void LoadTheme(json& o_json);

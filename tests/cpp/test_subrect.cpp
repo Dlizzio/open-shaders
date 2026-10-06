@@ -9,6 +9,7 @@ using json = nlohmann::json;
 
 #include <imgui.h>  // ImDrawCallback declared in Subrect.h signature
 
+#include "Utils/SettingsPatch.h"
 #include "Utils/Subrect.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -106,6 +107,20 @@ TEST_CASE("MaterializeNewDefaults drops the placeholder after repeated empty loa
 	REQUIRE(out["CropPresets"][1]["name"].get<std::string>() == "Full Eye");
 	REQUIRE(out["SelectedPresetIndex"] == 0);
 	REQUIRE(UVApprox(c.GetUV(), { 0.125f, 0.125f, 0.75f, 0.75f }));
+}
+
+TEST_CASE("Validated legacy crop settings retain preset-derived UVs", "[subrect][settingsoverlay]")
+{
+	Controller controller;
+	json defaults;
+	controller.SaveSettings(defaults);
+	json merged{ { "Feature", defaults } };
+	const json user{ { "Feature", { { "CropPresets", json::array({ { { "name", "Legacy Crop" }, { "uv", { 0.1f, 0.2f, 0.5f, 0.6f } } } }) },
+									  { "SelectedPresetIndex", 0 } } } };
+	Util::Settings::OverlayRecognizedRootSettings(merged, user);
+	const auto selected = Util::Settings::SelectSettings(merged["Feature"], user["Feature"]);
+	controller.LoadSettings(selected);
+	REQUIRE(UVApprox(controller.GetUV(), { 0.1f, 0.2f, 0.5f, 0.6f }));
 }
 
 TEST_CASE("SaveSettings in mono mode emits no right-eye keys", "[subrect][backcompat]")
