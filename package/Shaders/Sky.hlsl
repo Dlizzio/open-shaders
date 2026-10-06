@@ -1,8 +1,8 @@
 #include "Common/Color.hlsli"
+#include "Common/FlareOcclusion.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Permutation.hlsli"
-#include "Common/Random.hlsli"
 #include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
@@ -102,9 +102,6 @@ cbuffer PerGeometry : register(b2)
 };
 
 #	if defined(DITHER) && defined(TEX)
-static const uint SunGlareOcclusionSampleCount = 16;
-static const float SunGlareOcclusionRadius = 0.02;
-
 float GetSunGlareVisibility(uint eyeIndex)
 {
 	if (SharedData::InInterior || SharedData::HideSky || SharedData::InMapMenu ||
@@ -116,15 +113,15 @@ float GetSunGlareVisibility(uint eyeIndex)
 		return 1.0;
 	float2 sunUV = sunPosition.xy / sunPosition.w * float2(0.5, -0.5) + 0.5;
 	float visibility = 0.0;
-	[unroll] for (uint i = 0; i < SunGlareOcclusionSampleCount; ++i)
+	[unroll] for (uint i = 0; i < FlareOcclusion::SampleCount; ++i)
 	{
-		float2 sampleUV = sunUV + Random::PoissonSampleOffsets16[i] * SunGlareOcclusionRadius;
+		float2 sampleUV = sunUV + FlareOcclusion::GetSampleOffset(i);
 		if (any(sampleUV <= 0.0) || any(sampleUV >= 1.0))
 			visibility += 1.0;
 		else
-			visibility += SharedData::GetDepth(sampleUV, eyeIndex) >= 1.0;
+			visibility += !FrameBuffer::IsNearerDepth(SharedData::GetDepth(sampleUV, eyeIndex), FrameBuffer::FarPlaneDepth());
 	}
-	return smoothstep(0.0, 1.0, visibility / SunGlareOcclusionSampleCount);
+	return FlareOcclusion::GetVisibility(visibility);
 }
 #	endif
 

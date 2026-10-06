@@ -79,7 +79,8 @@ void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_MOON)
 		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsMoon);
 	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN_GLARE) {
-		auto* depthSRV = Util::GetCurrentSceneDepthSRV(true);
+		// Sky binds the depth copy as its DSV, so sample main depth to avoid a read/write conflict.
+		auto* depthSRV = Util::AsReal(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV);
 		globals::d3d::context->VSSetShaderResources(17, 1, &depthSRV);
 	}
 }
