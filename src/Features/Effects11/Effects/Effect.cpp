@@ -352,20 +352,12 @@ bool Effect::LoadFXFile()
 		return false;
 	}
 	std::string sourceCode(file.data.get(), file.size);
-	EffectSourceCompatibility::PatchInteriorTimeOfDayMacro(sourceCode);
 
-	if (ENBExtender::IsEncryptedSource(sourceCode)) {
-		uiDefines.clear();
-		std::string error;
-		if (!ENBExtender::CreateEncryptedEffect(GetName(), effect, error)) {
-			errors.push_back(error);
-			return false;
-		}
-		ReflectCompiledEffect();
-		ENBExtender::ResolveCompiledGroups(*this, filePath.parent_path() / (GetName() + ".ini"));
-		logger::info("[EFFECTS11] Loaded encrypted FX file through ENB Extender: {}", filePath.string());
-		return true;
+	if (sourceCode.starts_with("KIEFX")) {
+		errors.push_back(T("feature.effects11.error.encrypted_unsupported", "Encrypted Shader 2 effects are not supported."));
+		return false;
 	}
+	EffectSourceCompatibility::PatchInteriorTimeOfDayMacro(sourceCode);
 
 	auto enbseriesPath = filePath.parent_path();
 	auto iniFilePath = enbseriesPath / (GetName() + ".ini");
