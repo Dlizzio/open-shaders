@@ -122,7 +122,9 @@ public:
 		// host-linked FSR3 SDK; falls back to FSR3 on any failure.
 		bool fsr4RuntimeEnable = false;
 
-		// A schema upgrade must preserve the user's runtime enablement.
+		// Tracks whether fsr4RuntimeEnable has been auto-migrated for the detected adapter.
+		// Defaults to current so a fresh config needs no migration; LoadSettings resets it to
+		// 0 when absent from JSON so pre-existing configs run the migration once.
 		uint32_t fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 	};
 

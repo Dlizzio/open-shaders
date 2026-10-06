@@ -211,12 +211,19 @@ std::string read(const std::string& path) {
 int main() {
     for (const auto adapter : {FidelityFX::Fsr4AdapterSupport::Unsupported,
             FidelityFX::Fsr4AdapterSupport::RadeonRx7000, FidelityFX::Fsr4AdapterSupport::RadeonRx9000}) {
-        for (const bool enabled : {false, true}) {
-            Upscaling::Settings settings;
-            settings.fsr4RuntimeEnable = enabled;
-            settings.fsr4RuntimeSelectionSchemaVersion = 0;
-            ApplyLegacyFsr4RuntimeSelectionMigration(settings, adapter);
-            check(settings.fsr4RuntimeEnable == enabled, "Legacy FSR4 migration preserves explicit enablement");
+        for (const unsigned schema : {0u, Upscaling::kFsr4RuntimeSelectionSchemaVersion}) {
+            for (const bool enabled : {false, true}) {
+                Upscaling::Settings settings;
+                settings.fsr4RuntimeEnable = enabled;
+                settings.fsr4RuntimeSelectionSchemaVersion = schema;
+                ApplyLegacyFsr4RuntimeSelectionMigration(settings, adapter);
+                const bool autoEnable = schema == 0 && adapter == FidelityFX::Fsr4AdapterSupport::RadeonRx7000;
+                check(settings.fsr4RuntimeEnable == (enabled || autoEnable),
+                    "FSR4 retains upstream's one-shot RX 7000 auto-enable migration");
+                check(settings.fsr4RuntimeSelectionSchemaVersion ==
+                    (adapter == FidelityFX::Fsr4AdapterSupport::Unsupported ? schema : Upscaling::kFsr4RuntimeSelectionSchemaVersion),
+                    "FSR4 migration stamps supported adapters only");
+            }
         }
     }
     PostProcessing post;
@@ -310,8 +317,9 @@ int main() {
                 "Community Shaders explicit character lighting choice is respected");
             check(simulatedSSS.settings.BaseProfile.BlurRadius == 1.25f, "Actual SSS deserializer retains the profile");
             check(simulatedSSS.settings.ScatterMode == 2, "Absent modern SSS fields use current defaults");
-            check(!simulatedUpscaling.neuralRenderingEnabled && !simulatedUpscaling.enableDLSSFrameGen && !simulatedUpscaling.fsr4RuntimeEnable,
+            check(!simulatedUpscaling.neuralRenderingEnabled && !simulatedUpscaling.enableDLSSFrameGen,
                 "Absent Open Shaders opt-ins stay off using actual current Upscaling settings");
+            check(!simulatedUpscaling.fsr4RuntimeEnable, "FSR4 starts from its declared default before adapter migration");
             check(json(simulatedUpscaling.neuralRenderingContexts) == json(NR::Context::Profiles{}),
                 "Old configs keep the new dialogue profiles at their unchanged defaults");
             check(migrated.live["Menu"]["ToggleKey"] == 36u, "Old and current Community Shaders menu keys survive");
