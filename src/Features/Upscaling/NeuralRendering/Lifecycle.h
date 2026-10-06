@@ -8,6 +8,7 @@ namespace NR
 	enum class FrameAction
 	{
 		ReleasePassResources,  ///< Disabled: free the pass resources, keep the device and NGX instance.
+		Suspend,               ///< Gated off this frame: skip dispatch and composite, keep resources, runtime and NGX features.
 		SkipNoWorld,           ///< No world rendered yet; the runtime starts on the first world frame.
 		RebuildThenRun,        ///< A retry was requested after a latched failure: rebuild, then run.
 		SkipLatched,           ///< Failed, with no retry pending.
@@ -21,6 +22,8 @@ namespace NR
 	{
 		/** @brief The user has NR switched on. */
 		bool enabled = false;
+		/** @brief Dialogue-only gating holds this frame: the pass is suspended but stays initialized. */
+		bool suspended = false;
 		/** @brief The engine drew a world this frame. */
 		bool worldRendered = false;
 		/** @brief A failure is latched on the current runtime. */
@@ -40,6 +43,8 @@ namespace NR
 	{
 		if (!inputs.enabled)
 			return FrameAction::ReleasePassResources;
+		if (inputs.suspended)
+			return FrameAction::Suspend;
 		if (!inputs.worldRendered)
 			return FrameAction::SkipNoWorld;
 		if (inputs.failed && inputs.retryRequested)

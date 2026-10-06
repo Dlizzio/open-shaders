@@ -104,6 +104,21 @@ TEST_CASE("DecideFrame initializes on the first world frame and runs after", "[n
 	REQUIRE(NR::DecideFrame(cold) == NR::FrameAction::InitializeThenRun);
 }
 
+TEST_CASE("DecideFrame suspends without freeing pass resources while dialogue-only gating holds", "[nr]")
+{
+	auto suspended = RunningFrame(50);
+	suspended.suspended = true;
+	REQUIRE(NR::DecideFrame(suspended) == NR::FrameAction::Suspend);
+
+	// Suspension outranks the world check: the pass stays initialized instead of looking not yet started.
+	suspended.worldRendered = false;
+	REQUIRE(NR::DecideFrame(suspended) == NR::FrameAction::Suspend);
+
+	// Switching the feature off still frees the pass resources, suspension or not.
+	suspended.enabled = false;
+	REQUIRE(NR::DecideFrame(suspended) == NR::FrameAction::ReleasePassResources);
+}
+
 TEST_CASE("OnFailure tears down only for a removed device", "[nr]")
 {
 	REQUIRE(NR::OnFailure(true) == NR::FailureAction::TeardownThenLatch);
