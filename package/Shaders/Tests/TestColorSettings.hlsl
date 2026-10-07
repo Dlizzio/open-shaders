@@ -98,3 +98,68 @@ namespace SharedData
 	float3 legacy = Color::EnbColorPow(Color::TextureToWorking(0.5.xxx, 0.5.xxx));
 	ASSERT(IsTrue, all(abs(legacy - 0.0625.xxx) < 0.000001));
 }
+
+/// @tags color, gamma, effects
+[numthreads(1, 1, 1)] void TestEffectSceneTransfer() {
+	SharedData::linearLightingSettings.conversionSaturation = 0.92;
+	const float3 samples[4] = { 0.0.xxx, 0.18.xxx, float3(0.8, 0.3, 0.02), float3(-0.02, 0.0, 4.0) };
+	for (uint enabled = 0; enabled < 2; enabled++) {
+		SharedData::linearLightingSettings.enableLinearLighting = enabled;
+		for (uint acescg = 0; acescg < 2; acescg++) {
+			SharedData::linearLightingSettings.enableACEScg = acescg;
+			for (uint i = 0; i < 4; i++) {
+				float3 workingColor = enabled ? Color::GamutTransform(samples[i]) : samples[i];
+				float3 encoded = Color::EffectLightToGamma(workingColor);
+				ASSERT(IsTrue, all(abs(Color::EffectLight(samples[i], true) - workingColor) < 0.00001));
+				ASSERT(IsTrue, all(abs(Color::EffectLight(encoded) - workingColor) < 0.00001));
+				if (enabled) {
+					ASSERT(IsTrue, all(abs(Color::SceneGammaToLinear(encoded) - workingColor) < 0.00001));
+				} else {
+					ASSERT(IsTrue, all(encoded == samples[i]));
+				}
+			}
+		}
+	}
+}
+
+	/// @tags color, gamma, effects
+	[numthreads(1, 1, 1)] void TestEffectLightingGain()
+{
+	SharedData::linearLightingSettings.enableLinearLighting = true;
+	const float gains[4] = { 0.0, 0.25, 1.0, 4.0 };
+	for (uint acescg = 0; acescg < 2; acescg++) {
+		SharedData::linearLightingSettings.enableACEScg = acescg;
+		float3 radiance = Color::GamutTransform(float3(0.18, 0.5, 2.0));
+		for (uint i = 0; i < 4; i++) {
+			SharedData::csUtilitySettings.effectLightingMult = gains[i];
+			float3 encoded = Color::EffectLightToGamma(radiance) * Color::EffectLightingMultiplier();
+			ASSERT(IsTrue, all(abs(Color::SceneGammaToLinear(encoded) - radiance * gains[i]) < 0.00001));
+		}
+	}
+	SharedData::linearLightingSettings.enableLinearLighting = false;
+	for (uint i = 0; i < 4; i++) {
+		SharedData::csUtilitySettings.effectLightingMult = gains[i];
+		ASSERT(AreEqual, Color::EffectLightingMultiplier(), gains[i]);
+	}
+}
+
+/// @tags color, colorspace, lighting
+[numthreads(1, 1, 1)] void TestProjectedTintGamut() {
+	SharedData::linearLightingSettings.enableLinearLighting = true;
+	SharedData::linearLightingSettings.diffuseGamma = 2.2;
+	SharedData::linearLightingSettings.diffuseCurve = 3.59479342;
+	SharedData::linearLightingSettings.diffuseWhiteReflectance = 1.0;
+	const float3 textureColor = float3(0.8, 0.3, 0.2);
+	const float3 tints[2] = { 1.0.xxx, float3(0.2, 0.7, 0.9) };
+	const float saturations[3] = { 0.0, 0.92, 1.0 };
+	for (uint i = 0; i < 3; i++) {
+		SharedData::linearLightingSettings.conversionSaturation = saturations[i];
+		for (uint j = 0; j < 2; j++) {
+			SharedData::linearLightingSettings.enableACEScg = false;
+			float3 linearSrgb = Color::ProjectedDiffuse(textureColor, tints[j], 1.0.xxx);
+			SharedData::linearLightingSettings.enableACEScg = true;
+			float3 acescg = Color::ProjectedDiffuse(textureColor, tints[j], 1.0.xxx);
+			ASSERT(IsTrue, all(abs(AP1TosRGB(acescg) - linearSrgb) < 0.00001));
+		}
+	}
+}

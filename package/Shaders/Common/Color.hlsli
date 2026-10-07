@@ -423,7 +423,8 @@ namespace Color
 		if (ENABLE_LL && projectedMaterialColorScale.x >= 0.0)
 			return GamutTransform(CompensateConvertedColor(SrgbToLinear(max(0, color * tint * projectedMaterialColorScale))));
 #		endif
-		return Albedo(DiffuseToWorking(color)) * AuthoredColor(tint);
+		float3 linearTint = CompensateConvertedColor(AuthoredGammaToLinear(tint));
+		return ApplyLinearSrgbTint(Albedo(DiffuseToWorking(color)), linearTint);
 #	endif
 	}
 
@@ -438,14 +439,17 @@ namespace Color
 #	endif
 	}
 
+	float3 SceneGammaToLinear(float3 color);
+	float3 SceneLinearToGamma(float3 color);
+
 	float3 EffectLight(float3 color, bool isLinear = false)
 	{
-		return ENABLE_LL ? GamutTransform(isLinear ? color : AuthoredGammaToLinear(color)) : color;
+		return ENABLE_LL ? (isLinear ? GamutTransform(color) : SceneGammaToLinear(color)) : color;
 	}
 
 	float3 EffectLightToGamma(float3 color)
 	{
-		return ENABLE_LL ? EncodeAuthoredColor(color) : color;
+		return ENABLE_LL ? SceneLinearToGamma(color) : color;
 	}
 
 	float3 SceneGammaToLinear(float3 color)
@@ -526,7 +530,7 @@ namespace Color
 	float EffectLightingMultiplier()
 	{
 		float multiplier = SharedData::csUtilitySettings.effectLightingMult;
-		return ENABLE_LL ? pow(abs(multiplier), 1.0 / AuthoredColorGamma) : multiplier;
+		return ENABLE_LL ? pow(abs(multiplier), 1.0 / GameGamma()) : multiplier;
 	}
 
 	float3 Ambient(float3 color)

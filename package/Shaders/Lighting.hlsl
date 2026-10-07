@@ -1652,8 +1652,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	else  // Non-landscape code
 	float4 rawBaseColor;
+#		if defined(WORLD_MAP)
+	MESH_TV_SAMPLE_BIAS(rawBaseColor, TexColorSampler, SampColorSampler, diffuseUv, false);
+	baseColor = float4(Color::Diffuse(rawBaseColor.rgb), rawBaseColor.a);
+#		else
 	MESH_TV_SAMPLE_BIAS(rawBaseColor, TexColorSampler, SampColorSampler, diffuseUv, true);
 	baseColor = float4(Color::Albedo(rawBaseColor.rgb), rawBaseColor.a);
+#		endif
 	float4 normalColor;
 	MESH_TV_SAMPLE_BIAS(normalColor, TexNormalSampler, SampNormalSampler, uv, false);
 	normal = normalColor;
