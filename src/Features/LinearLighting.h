@@ -31,7 +31,7 @@ struct LinearLighting : Feature
 		float conversionSaturation = 0.92f;
 
 		// Lighting multipliers
-		float ambientMult = 0.25f;
+		float ambientMult = 0.32f;
 	} settings;
 
 	struct alignas(16) PerFrameData

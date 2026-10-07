@@ -1999,6 +1999,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	} else {
 		if (projWeight > 0) {
 			baseColor.xyz = Color::AuthoredColor(ProjectedUVParams2.xyz);
+#			if !defined(TRUE_PBR)
+			baseColor.xyz = Color::EnbColorPow(baseColor.xyz);
+#			endif
 #			if defined(SNOW)
 			useSnowDecalSpecular = true;
 #			endif  // SNOW

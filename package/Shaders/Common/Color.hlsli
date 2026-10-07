@@ -305,9 +305,14 @@ namespace Color
 		return GamutTransform(linearSrgbColor * tint);
 	}
 
-	float3 AuthoredGammaToLinear(float3 color)
+	float3 AuthoredGammaToLinear(float3 color, float gammaOffset = 0.0)
 	{
-		return DecodeSRGB(color);
+		color = DecodeSRGB(color);
+		if (gammaOffset != 0.0) {
+			float gamma = clamp(AuthoredColorGamma + gammaOffset, MinAdjustedGamma, MaxAdjustedGamma);
+			color = SignedPow(color, gamma / AuthoredColorGamma);
+		}
+		return color;
 	}
 
 	float3 LinearToAuthoredGamma(float3 color)
@@ -346,12 +351,10 @@ namespace Color
 
 	float3 AdjustedAuthoredColor(float3 color, float gammaOffset)
 	{
-		if (gammaOffset == 0.0) {
-			color = ENABLE_LL ? AuthoredGammaToLinear(color) : color;
-		} else {
-			float gamma = (ENABLE_LL ? AuthoredColorGamma : 1.0) + gammaOffset;
-			color = SignedPow(color, clamp(gamma, MinAdjustedGamma, MaxAdjustedGamma));
-		}
+		if (ENABLE_LL)
+			color = AuthoredGammaToLinear(color, gammaOffset);
+		else if (gammaOffset != 0.0)
+			color = SignedPow(color, clamp(1.0 + gammaOffset, MinAdjustedGamma, MaxAdjustedGamma));
 		return ENABLE_LL ? GamutTransform(CompensateConvertedColor(color)) : color;
 	}
 
@@ -370,9 +373,13 @@ namespace Color
 		return float4(DiffuseToWorking(color.rgb, linearInput), color.a);
 	}
 
-	float3 TextureToWorking(float3 color)
+	float3 TextureToWorking(float3 color, float3 authoredTint = 1.0)
 	{
-		return ENABLE_LL ? GamutTransform(CompensateConvertedColor(pow(abs(color), LegacyTextureGamma))) : color;
+		if (!ENABLE_LL)
+			return color * authoredTint;
+		float3 linearColor = CompensateConvertedColor(pow(abs(color), LegacyTextureGamma));
+		float3 linearTint = CompensateConvertedColor(AuthoredGammaToLinear(authoredTint));
+		return GamutTransform(linearColor * linearTint);
 	}
 
 	float3 EnbColorPow(float3 color)
@@ -410,6 +417,8 @@ namespace Color
 		float3 projectedColor = max(0, color * tint * materialColorScale);
 		return ENABLE_LL ? GamutTransform(CompensateConvertedColor(SrgbToLinear(projectedColor))) : projectedColor;
 #	else
+		if (!ENABLE_LL)
+			return EnbColorPow(color * tint);
 #		if defined(PSHADER) && defined(LIGHTING) && (defined(LODOBJECTS) || defined(LODOBJECTSHD))
 		if (ENABLE_LL && projectedMaterialColorScale.x >= 0.0)
 			return GamutTransform(CompensateConvertedColor(SrgbToLinear(max(0, color * tint * projectedMaterialColorScale))));
@@ -579,10 +588,11 @@ namespace Color
 	float VolumetricLighting(float intensity)
 	{
 		float gammaOffset = SharedData::csUtilitySettings.vlGammaOffset;
-		if (gammaOffset == 0.0)
-			return (ENABLE_LL ? AuthoredGammaToLinear(intensity.xxx).x : intensity) * SharedData::csUtilitySettings.vlIntensity;
-		float gamma = (ENABLE_LL ? AuthoredColorGamma : 1.0) + gammaOffset;
-		return sign(intensity) * pow(abs(intensity), clamp(gamma, MinAdjustedGamma, MaxAdjustedGamma)) * SharedData::csUtilitySettings.vlIntensity;
+		if (ENABLE_LL)
+			intensity = AuthoredGammaToLinear(intensity.xxx, gammaOffset).x;
+		else if (gammaOffset != 0.0)
+			intensity = sign(intensity) * pow(abs(intensity), clamp(1.0 + gammaOffset, MinAdjustedGamma, MaxAdjustedGamma));
+		return intensity * SharedData::csUtilitySettings.vlIntensity;
 	}
 
 	float3 RadianceToLinear(float3 color)
