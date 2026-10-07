@@ -1255,7 +1255,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				{                                                                           \
 					DEST = TEX.SampleBias(SAMP, UV, SharedData::MipBias);                   \
 					if (COLOR)                                                              \
-						DEST = Color::DiffuseToWorking(DEST, pbrTextures);             \
+						DEST = Color::DiffuseToWorking(DEST, pbrTextures);                  \
 				}                                                                           \
 			}
 #		define MESH_TV_HEIGHT(DEST, TEX, SAMP, UV, MIP, CHANNEL)                            \

@@ -32,7 +32,7 @@ namespace LandscapeLayers
 				float weight = WEIGHT;                                                                                                                             \
 				float4 landColor = SampleTerrainColor(COLOR_TEX, COLOR_SAMP, uv, sharedOffset, LandscapeLayers::PbrTileUsesFullPBR(TILE));                         \
 				float3 landColorRGB = landColor.rgb;                                                                                                               \
-				[branch] if (!LandscapeLayers::PbrTileUsesFullPBR(TILE) && !ENABLE_LL)                                      \
+				[branch] if (!LandscapeLayers::PbrTileUsesFullPBR(TILE) && !ENABLE_LL)                                                                             \
 				{                                                                                                                                                  \
 					landColorRGB = Color::SrgbToLinear(landColorRGB / Color::PBRLightingScale);                                                                    \
 				}                                                                                                                                                  \

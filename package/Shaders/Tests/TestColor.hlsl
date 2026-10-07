@@ -177,8 +177,9 @@
 	}
 }
 
-/// @tags color, lighting
-[numthreads(1, 1, 1)] void TestDiffuseCalibrationBounds() {
+	/// @tags color, lighting
+	[numthreads(1, 1, 1)] void TestDiffuseCalibrationBounds()
+{
 	const float curve = 3.59479342f;
 	const float tolerance = 0.00001f;
 	float previous = 0.0f;
@@ -223,8 +224,9 @@
 	}
 }
 
-/// @tags color, lighting, gamma
-[numthreads(1, 1, 1)] void TestConversionSaturation() {
+	/// @tags color, lighting, gamma
+	[numthreads(1, 1, 1)] void TestConversionSaturation()
+{
 	const float3 colors[4] = {
 		float3(4.0f, 0.2f, 1.5f), float3(-0.05f, 0.6f, 0.2f), 0.5f.xxx, 3.0f.xxx
 	};

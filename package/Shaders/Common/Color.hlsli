@@ -334,8 +334,7 @@ namespace Color
 	/** @brief Compensates authored inputs that must retain their gamma blending domain. */
 	float3 CompensateGammaInput(float3 color, float gamma)
 	{
-		[branch]
-		if (ENABLE_LL && SharedData::linearLightingSettings.conversionSaturation < 1.0)
+		[branch] if (ENABLE_LL && SharedData::linearLightingSettings.conversionSaturation < 1.0)
 			color = SignedPow(CompensateConvertedColor(SignedPow(color, gamma)), 1.0 / gamma);
 		return color;
 	}
@@ -422,7 +421,7 @@ namespace Color
 	float3 Light(float3 color, bool isLinear = false)
 	{
 		color = (ENABLE_LL && !isLinear) ? AuthoredColor(color) : (ENABLE_LL && isLinear) ? GamutTransform(color) :
-		                                                                                          color;
+		                                                                                    color;
 #	if defined(TRUE_PBR)
 		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #	else
