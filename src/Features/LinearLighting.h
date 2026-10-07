@@ -28,12 +28,10 @@ struct LinearLighting : Feature
 	{
 		uint enableLinearLighting = false;
 		uint enableACEScg = false;
-		float authoredColorGamma = 2.2f;
+		float conversionSaturation = 0.92f;
 
 		// Lighting multipliers
-		float ambientMult = 0.32f;
-		float vanillaDiffuseColorMult = 1.5f;
-		float vanillaSpecularResponseMult = 0.5f;
+		float ambientMult = 0.25f;
 	} settings;
 
 	struct alignas(16) PerFrameData
@@ -42,17 +40,19 @@ struct LinearLighting : Feature
 		uint enableACEScg;
 		uint isDirLightLinear;
 		float dirLightMult;
-		float authoredColorGamma;
-		float vanillaDiffuseColorMult;
-		float vanillaSpecularResponseMult;
-		float pad0;
+		float diffuseGamma;
+		float diffuseCurve;
+		float diffuseWhiteReflectance;
+		float conversionSaturation;
 		RE::NiColor effectLightingColor;
 		float ambientMult;
 		RE::NiColor skyStaticsColor;
-		float pad1;
+		float pad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 	static_assert(sizeof(PerFrameData) == 0x40);
+	static_assert(offsetof(PerFrameData, conversionSaturation) == 0x1C);
+	static_assert(offsetof(PerFrameData, skyStaticsColor) == 0x30);
 
 	static constexpr std::array<float, 3> kNoProjectedMaterialColorScale{ -1.0f, -1.0f, -1.0f };
 
@@ -75,8 +75,8 @@ struct LinearLighting : Feature
 	RE::NiColor skyStaticsColor{ 1.0f, 1.0f, 1.0f };
 	RE::NiColor weatherEffectLightingSource{};
 	RE::NiColor weatherSkyStaticsSource{};
-	float weatherAuthoredColorGamma = 0.0f;
 	bool weatherLightingColorsInitialized = false;
+	float weatherConversionSaturation = 1.0f;
 
 	/** @brief Draws the Linear Lighting controls and lighting multipliers. */
 	virtual void DrawSettings() override;
@@ -101,7 +101,7 @@ struct LinearLighting : Feature
 	virtual void OnWorldRenderEnd(RE::RENDER_TARGET a_renderTarget) override;
 	/** @brief Finishes any pending scene decode before post-processing consumes its input. */
 	virtual void OnBeforePostProcessing(RE::RENDER_TARGET a_renderTarget) override;
-	/** @brief Suspends gamma-target storage for cubemap rendering and restores it on scope exit. */
+	/** @brief Uses a linear clear color and target for cubemap rendering, restoring both on scope exit. */
 	virtual std::function<void()> OnReflectionsRenderBegin() override;
 
 	/** @brief Populates and returns the per-frame constant buffer data with gamma and multiplier settings. */
@@ -117,10 +117,10 @@ struct LinearLighting : Feature
 	/**
 	 * @brief Decodes an authored Skyrim color into linear sRGB.
 	 * @param inColor The input color in gamma space.
-	 * @param authoredColorGamma The exponent used to decode the authored color.
+	 * @param saturation Luminance-preserving saturation of the decoded input.
 	 * @return The color converted to linear space.
 	 */
-	static RE::NiColor DecodeAuthoredColor(RE::NiColor inColor, float authoredColorGamma);
+	static RE::NiColor DecodeAuthoredColor(RE::NiColor inColor, float saturation = 1.0f);
 
 	/**
 	 * @brief Uploads emissive and projected material data during lighting geometry setup.

@@ -438,12 +438,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float4 sourceColor = TexSourceTexture.Sample(SampSourceTexture, input.TexCoord0);
 	float4 baseColor = input.Color * sourceColor;
-	baseColor.xyz = Color::Diffuse(baseColor.xyz);
 #	if defined(GRAYSCALE_TO_COLOR)
 	float3 grayScaleColor =
 		TexGrayscaleTexture.Sample(SampGrayscaleTexture, float2(sourceColor.y, input.Color.x)).xyz;
 	baseColor.xyz = grayScaleColor;
 #	endif
+	baseColor.xyz = Color::TextureToWorking(baseColor.xyz);
 #	if defined(GRAYSCALE_TO_ALPHA)
 	float grayScaleAlpha =
 		TexGrayscaleTexture.Sample(SampGrayscaleTexture, float2(sourceColor.w, input.Color.w)).w;
