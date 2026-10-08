@@ -41,6 +41,7 @@ namespace Color
 	static const uint MaxVanillaPointLightFlags = 8;
 	static const float MinAdjustedGamma = 0.1;
 	static const float MaxAdjustedGamma = 3.0;
+	static const float GameGamma = 1.6;
 	static const float LegacyTextureGamma = 1.8;
 	static const float AuthoredColorGamma = 2.2;
 	static const float SRGBEncodedThreshold = 0.04045;
@@ -144,29 +145,24 @@ namespace Color
 		return color;
 	}
 
-	float GameGamma()
-	{
-		return 1.6;
-	}
-
 	float SkyrimGammaToLinear(float color)
 	{
-		return pow(abs(color), GameGamma());
+		return pow(abs(color), GameGamma);
 	}
 
 	float LinearToSkyrimGamma(float color)
 	{
-		return pow(abs(color), 1.0 / GameGamma());
+		return pow(abs(color), 1.0 / GameGamma);
 	}
 
 	float3 SkyrimGammaToLinear(float3 color)
 	{
-		return pow(abs(color), GameGamma());
+		return pow(abs(color), GameGamma);
 	}
 
 	float3 LinearToSkyrimGamma(float3 color)
 	{
-		return pow(abs(color), 1.0 / GameGamma());
+		return pow(abs(color), 1.0 / GameGamma);
 	}
 
 	float3 SrgbToLinear(float3 color)
@@ -454,12 +450,12 @@ namespace Color
 
 	float3 SceneGammaToLinear(float3 color)
 	{
-		return ENABLE_LL ? GamutTransform(SignedPow(color, GameGamma())) : SkyrimGammaToLinear(color);
+		return ENABLE_LL ? GamutTransform(SignedPow(color, GameGamma)) : SkyrimGammaToLinear(color);
 	}
 
 	float3 SceneLinearToGamma(float3 color)
 	{
-		return ENABLE_LL ? SignedPow(ENABLE_ACEScg ? AP1TosRGB(color) : color, 1.0 / GameGamma()) : LinearToSkyrimGamma(color);
+		return ENABLE_LL ? SignedPow(ENABLE_ACEScg ? AP1TosRGB(color) : color, 1.0 / GameGamma) : LinearToSkyrimGamma(color);
 	}
 
 	float3 DirectionalLight(float3 color, bool isLinear = false)
@@ -530,7 +526,7 @@ namespace Color
 	float EffectLightingMultiplier()
 	{
 		float multiplier = SharedData::csUtilitySettings.effectLightingMult;
-		return ENABLE_LL ? pow(abs(multiplier), 1.0 / GameGamma()) : multiplier;
+		return ENABLE_LL ? pow(abs(multiplier), 1.0 / GameGamma) : multiplier;
 	}
 
 	float3 Ambient(float3 color)

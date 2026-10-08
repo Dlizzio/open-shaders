@@ -852,9 +852,9 @@ float3 GetSnowSpecularColor(PS_INPUT input, float3 worldNormal, float3 viewDirec
 #	if defined(FACEGEN)
 float3 GetFacegenBaseColor(float3 rawBaseColor, float2 uv)
 {
-	float3 detailColor = Color::CompensateGammaInput(TexDetailSampler.Sample(SampDetailSampler, uv).xyz, Color::GameGamma());
+	float3 detailColor = Color::CompensateGammaInput(TexDetailSampler.Sample(SampDetailSampler, uv).xyz, Color::GameGamma);
 	detailColor = float3(3.984375, 3.984375, 3.984375) * (float3(0.00392156886, 0, 0.00392156886) + detailColor);
-	float3 tintColor = Color::CompensateGammaInput(TexTintSampler.Sample(SampTintSampler, uv).xyz, Color::GameGamma());
+	float3 tintColor = Color::CompensateGammaInput(TexTintSampler.Sample(SampTintSampler, uv).xyz, Color::GameGamma);
 	tintColor = tintColor * rawBaseColor * 2.0.xxx;
 	tintColor = tintColor - tintColor * rawBaseColor;
 	return (rawBaseColor * rawBaseColor + tintColor) * detailColor;
@@ -864,7 +864,7 @@ float3 GetFacegenBaseColor(float3 rawBaseColor, float2 uv)
 #	if defined(FACEGEN_RGB_TINT)
 float3 GetFacegenRGBTintBaseColor(float3 rawBaseColor, float2 uv)
 {
-	float3 tintColor = Color::CompensateGammaInput(TintColor.xyz, Color::GameGamma()) * rawBaseColor * 2.0.xxx;
+	float3 tintColor = Color::CompensateGammaInput(TintColor.xyz, Color::GameGamma) * rawBaseColor * 2.0.xxx;
 	tintColor = tintColor - tintColor * rawBaseColor;
 	return float3(1.01171875, 0.99609375, 1.01171875) * (rawBaseColor * rawBaseColor + tintColor);
 }

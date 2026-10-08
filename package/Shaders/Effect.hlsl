@@ -901,7 +901,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float lightingInfluence = LightingInfluence.x;
 	float3 propertyColor = PropertyColor.xyz;
 #	if !defined(LIGHTING) && !defined(MEMBRANE)
-	propertyColor = Color::CompensateGammaInput(propertyColor, Color::GameGamma());
+	propertyColor = Color::CompensateGammaInput(propertyColor, Color::GameGamma);
 #	endif
 	float3 shadowedWeatherReference = 0.0;
 	float3 shadowedInfluencedWeatherReference = 0.0;
@@ -1127,7 +1127,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #	endif
 
-	baseColor.xyz = Color::CompensateGammaInput(baseColor.xyz, Color::GameGamma());
+	baseColor.xyz = Color::CompensateGammaInput(baseColor.xyz, Color::GameGamma);
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence);
 
 #	if !defined(MOTIONVECTORS_NORMALS)
