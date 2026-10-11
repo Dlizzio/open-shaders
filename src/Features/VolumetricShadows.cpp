@@ -170,6 +170,7 @@ void VolumetricShadows::CopyShadowLightData()
 					const float lit[4] = { 1.0f, 1.0f, 0.0f, 0.0f };
 					context->ClearUnorderedAccessViewFloat(shadowCopyMip0UAV, lit);
 					context->ClearUnorderedAccessViewFloat(shadowCopyMip1UAV, lit);
+					shadowCopyUpdated = true;
 				}
 
 				if (shadowTexture) {

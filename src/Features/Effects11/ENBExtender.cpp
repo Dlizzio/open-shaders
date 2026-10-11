@@ -1148,7 +1148,7 @@ namespace ENBExtender
 		// ENBExt_Compile takes no path and always reads <current directory>\enbseries
 		std::error_code ec;
 		if (!std::filesystem::equivalent(effectPath.parent_path(), std::filesystem::absolute("enbseries"), ec)) {
-			error = "Encrypted preset: ENB Extender only loads presets from the game folder's enbseries, not Data\\enbseries";
+			error = T("feature.effects11.error.encrypted_location", "Encrypted preset: ENB Extender only loads presets from the game folder's enbseries, not Data\\enbseries");
 			return false;
 		}
 

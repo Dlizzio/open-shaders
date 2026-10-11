@@ -1,4 +1,5 @@
 #include "TextureManager.h"
+#include "EffectManager.h"
 #include "GpuPass.h"
 
 #include "Globals.h"

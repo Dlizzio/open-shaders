@@ -12,7 +12,7 @@
 /**
  * @brief GPU hardware counters per named range through NVIDIA's Nsight Perf SDK (its D3D11 range profiler).
  *
- * A capture measures a set of metrics over the ranges State::BeginPerfEvent / EndPerfEvent open on the immediate
+ * A capture measures a set of metrics over the ranges State::BeginAnnotation / EndAnnotation open on the immediate
  * context. Each frame is one profiler pass, bracketed around the swap chain's Present (OnPresentBegin / OnPresentEnd);
  * the metrics need as many passes as the chip's counters allow per pass, so a sample takes several frames. A capture
  * collects one or more samples, then publishes a CaptureResult (and appends it to a CSV next to the log).

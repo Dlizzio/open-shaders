@@ -3336,7 +3336,8 @@ namespace SIE
 					ownedDefines.emplace_back("D3DCOMPILE_DEBUG", "");
 					flags = D3DCOMPILE_DEBUG;
 				}
-				for (const auto& [name, value] : *state->GetDefines())
+				const auto stateDefines = state->GetDefines();
+				for (const auto& [name, value] : *stateDefines)
 					ownedDefines.emplace_back(name, value);
 				if (state->enablePartialPrecision.load(std::memory_order_relaxed))
 					flags |= D3DCOMPILE_PARTIAL_PRECISION;

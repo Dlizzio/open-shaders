@@ -178,7 +178,6 @@ bool OverlayRenderer::ShouldSkipRendering()
 			 globals::features::performanceOverlay.settings.ShowInOverlay ||
 			 globals::features::sceneSelector.IsOverlayVisible() ||
 			 renderDoc->IsAvailable() ||
-			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
 			 globals::features::vr.HelperRequestsRender());
 }
 

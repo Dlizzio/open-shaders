@@ -138,7 +138,7 @@ namespace NvPerf
 
 	std::filesystem::path CsvPath()
 	{
-		return Util::PathHelpers::GetLogPath().parent_path() / "CommunityShaders-NvPerf.csv";
+		return Util::PathHelpers::GetLogPath().parent_path() / std::format("{}-NvPerf.csv", Plugin::LOG_NAME);
 	}
 
 #ifdef NVPERF_ENABLED

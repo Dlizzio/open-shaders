@@ -145,7 +145,7 @@ void LandscapeSeamsFix::Bind(RE::BSGeometry* a_geometry)
 			for (uint32_t texture = 0; texture < TexturesPerExtra; ++texture) {
 				const auto& source = resources->extras[extra][texture];
 				if (source != nullptr && source->rendererTexture != nullptr)
-					views[2 + extra * TexturesPerExtra + texture] = source->rendererTexture->resourceView;
+					views[2 + extra * TexturesPerExtra + texture] = Util::AsReal(source->rendererTexture->resourceView);
 			}
 		}
 	}
@@ -362,12 +362,12 @@ std::shared_ptr<LandscapeSeamsFix::Resources> LandscapeSeamsFix::CreateResources
 	auto& truePBR = globals::features::truePBR;
 
 	QuadData data{};
-	data.Origin = { static_cast<float>(a_healed.key.x) * QuadSize, static_cast<float>(a_healed.key.y) * QuadSize };
+	data.Origin = float2{ static_cast<float>(a_healed.key.x) * QuadSize, static_cast<float>(a_healed.key.y) * QuadSize };
 	data.Flags = FlagValid;
 	data.ExtraCount = a_healed.extraCount;
 
 	for (uint32_t extra = 0; extra < MaxExtraLayers; ++extra) {
-		data.PBRParams[extra] = { 1.0f, 1.0f, 0.04f, 0.0f };
+		data.PBRParams[extra] = float4{ 1.0f, 1.0f, 0.04f, 0.0f };
 	}
 
 	for (uint32_t extra = 0; extra < a_healed.extraCount; ++extra) {
@@ -387,8 +387,8 @@ std::shared_ptr<LandscapeSeamsFix::Resources> LandscapeSeamsFix::CreateResources
 				data.Flags |= FlagPbr << extra;
 				if (pbrData->glintParameters.enabled)
 					data.Flags |= FlagGlint << extra;
-				data.PBRParams[extra] = { pbrData->roughnessScale, pbrData->displacementScale, pbrData->specularLevel, 0.0f };
-				data.GlintParams[extra] = {
+				data.PBRParams[extra] = float4{ pbrData->roughnessScale, pbrData->displacementScale, pbrData->specularLevel, 0.0f };
+				data.GlintParams[extra] = float4{
 					pbrData->glintParameters.screenSpaceScale,
 					40.0f - pbrData->glintParameters.logMicrofacetDensity,
 					pbrData->glintParameters.microfacetRoughness,
@@ -605,7 +605,7 @@ void LandscapeSeamsFix::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land)
 					if (dx == 0 && dy == 0)
 						continue;
 					const QuadKey neighbourKey{ entry.key.worldSpace, entry.key.x + dx, entry.key.y + dy };
-					if (std::find(keys.begin(), keys.end(), neighbourKey) != keys.end())
+					if (std::ranges::any_of(keys, [&](const QuadKey& key) { return key == neighbourKey; }))
 						continue;
 					const auto it = quads.find(neighbourKey);
 					if (it != quads.end() && it->second.grid && it->second.geometry)

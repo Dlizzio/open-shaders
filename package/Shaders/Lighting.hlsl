@@ -1189,7 +1189,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // defined (SKINNED) || !defined (MODELSPACENORMALS)
 
 #	if defined(LANDSCAPE) && defined(LANDSCAPE_SEAMS)
-	LandscapeSeams::Load(input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy, input.LandBlendWeights1, input.LandBlendWeights2);
+	LandscapeSeams::Load(input.WorldPosition.xy + FrameBuffer::CameraPosAdjust[eyeIndex].xy, input.LandBlendWeights1, input.LandBlendWeights2);
 #	endif
 
 #	if !defined(TRUE_PBR)

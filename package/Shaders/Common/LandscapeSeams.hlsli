@@ -22,16 +22,16 @@ namespace LandscapeSeams
 	static const float QuadSize = 2048.0;
 	static const float GridCells = 16.0;
 
-	Texture2DArray<float4> Weights : register(t104);
-	StructuredBuffer<QuadData> Quad : register(t105);
+	Texture2DArray<float4> Weights : register(t105);
+	StructuredBuffer<QuadData> Quad : register(t106);
 
-	Texture2D<float4> Color0 : register(t106);
-	Texture2D<float4> Normal0 : register(t107);
-	Texture2D<float4> Rmaos0 : register(t108);
+	Texture2D<float4> Color0 : register(t107);
+	Texture2D<float4> Normal0 : register(t108);
+	Texture2D<float4> Rmaos0 : register(t109);
 
-	Texture2D<float4> Color1 : register(t109);
-	Texture2D<float4> Normal1 : register(t110);
-	Texture2D<float4> Rmaos1 : register(t111);
+	Texture2D<float4> Color1 : register(t110);
+	Texture2D<float4> Normal1 : register(t111);
+	Texture2D<float4> Rmaos1 : register(t112);
 
 	static QuadData Data;
 	static float2 ExtraWeights = 0;
@@ -76,9 +76,9 @@ namespace LandscapeSeams
 		[branch] if ((WEIGHT) > 0.01)                                                                                                                                                      \
 		{                                                                                                                                                                                  \
 			float weight = WEIGHT;                                                                                                                                                         \
-			float4 landColor = SampleTerrain(COLOR_TEX, SampColorSampler, uv, sharedOffset);                                                                                               \
+			float4 landColor = SampleTerrainColor(COLOR_TEX, SampColorSampler, uv, sharedOffset, LandscapeSeams::HasFlag(LandscapeSeams::FlagPbr, INDEX));                                 \
 			float3 landColorRGB = landColor.rgb;                                                                                                                                           \
-			[branch] if (!LandscapeSeams::HasFlag(LandscapeSeams::FlagPbr, INDEX))                                                                                                         \
+			[branch] if (!LandscapeSeams::HasFlag(LandscapeSeams::FlagPbr, INDEX) && !ENABLE_LL)                                                                                           \
 			{                                                                                                                                                                              \
 				landColorRGB = Color::SrgbToLinear(landColorRGB / Color::PBRLightingScale);                                                                                                \
 			}                                                                                                                                                                              \

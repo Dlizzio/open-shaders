@@ -3,7 +3,7 @@
 Remote Control can measure NVIDIA GPU hardware counters per render pass with the
 [Nsight Perf SDK](https://developer.nvidia.com/nsight-perf-sdk) range profiler. A capture records
 metrics such as `gpu__time_duration`, `sm__throughput` and the warp stall reasons over the
-frame's perf events (`State::BeginPerfEvent` / `EndPerfEvent`). These are the same named ranges
+frame's perf events (`State::BeginAnnotation` / `EndAnnotation`). These are the same named ranges
 RenderDoc and Tracy show.
 
 It is a developer build option, D3D11 only (the game's immediate context), and needs an NVIDIA GPU
@@ -55,8 +55,8 @@ Results:
 -   **Summary:** per filter (or per name, with no filters) and per frame. Counters are summed and
     rates are weighted by each range's `gpu__time_duration`. A range nested inside one that
     matches the same filter is already counted in it, so only the outer one is summarized.
--   **CSV:** every range of every sample is appended to `CommunityShaders-NvPerf.csv` next to
-    `CommunityShaders.log`.
+-   **CSV:** every range of every sample is appended to `OpenShaders-NvPerf.csv` next to
+    `OpenShaders.log`.
 
 Metrics are written `name[:kind]`, where the kind is one of:
 
@@ -81,7 +81,7 @@ Open **Remote Control → Nsight Perf (DX11)**:
 
 ## Through devbench
 
-The `communityshaders.nvperf` tool (MCP and REST) has these actions:
+The `openshaders.nvperf` tool (MCP and REST) has these actions:
 
 -   `status`
 -   `metrics`
@@ -89,7 +89,7 @@ The `communityshaders.nvperf` tool (MCP and REST) has these actions:
 -   `cancel`
 -   `result`, which returns `pending` until the capture ends; `detail: true` adds every range
 
-The host also emits `communityshaders.nvperf.completed` (`{captureId, success, error}`) when a
+The host also emits `openshaders.nvperf.completed` (`{captureId, success, error}`) when a
 capture ends. For example:
 
 ```json
@@ -104,7 +104,7 @@ capture ends. For example:
         session and passes, decodes and evaluates the ranges, and publishes the result.
     -   Every profiler call runs on the render thread. Requests and results cross threads under a mutex.
 -   `src/Hooks.cpp` (`IDXGISwapChain_Present`): `NvPerf::OnPresentBegin` / `OnPresentEnd`.
--   `src/State.cpp` (`BeginPerfEvent` / `EndPerfEvent`): `NvPerf::PushRange` / `PopRange`, behind
+-   `src/State.cpp` (`BeginAnnotation` / `EndAnnotation`, which `BeginPerfEvent` and `CS_GPU_PASS` both use): `NvPerf::PushRange` / `PopRange`, behind
     one atomic check when no pass is open.
 -   `src/Features/RemoteControl.cpp`: the panel.
 -   `src/Features/RemoteControl/DevBenchBridge.cpp`: the tool.

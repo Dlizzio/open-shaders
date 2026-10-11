@@ -276,7 +276,7 @@ public:
 		SetPerfMarker(std::string_view{ s_markerText });
 	}
 
-	/// RenderDoc/PIX annotation only - no Tracy CPU zone.
+	/// RenderDoc/PIX annotation and Nsight Perf range - no Tracy CPU zone.
 	/// Used by ScopedGpuPass which manages its own Tracy CPU zone unconditionally.
 	void BeginAnnotation(std::string_view title);
 	void EndAnnotation();
