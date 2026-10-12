@@ -2311,7 +2311,7 @@
     "feature.renderdoc.overlay_warning": "",
     "feature.renderdoc.refresh_list": "Обновить список",
     "feature.renderdoc.restart_to_disable": "Для отключения захвата RenderDoc требуется перезапуск; производительность будет серьёзно снижена.",
-    "feature.renderdoc.space_required": "Требуется не менее {} МБ свободного места.",
+    "feature.renderdoc.space_required": "Требуется не менее %llu МБ свободного места.",
     "feature.renderdoc.yes_delete": "Да, удалить всё",
     "feature.scene_manager.action.delete_loaded_overwrites": "Удалить загруженные переопределения",
     "feature.scene_manager.action.manage_all_locations": "Управление всеми локациями",

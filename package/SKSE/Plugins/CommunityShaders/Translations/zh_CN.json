@@ -2328,7 +2328,7 @@
     "feature.renderdoc.overlay_warning": "",
     "feature.renderdoc.refresh_list": "刷新列表",
     "feature.renderdoc.restart_to_disable": "",
-    "feature.renderdoc.space_required": "至少需要{} MB的可用空间。",
+    "feature.renderdoc.space_required": "至少需要%llu MB的可用空间。",
     "feature.renderdoc.yes_delete": "是，全部删除",
     "feature.scene_manager.action.delete_loaded_overwrites": "删除已加载的覆写",
     "feature.scene_manager.action.manage_all_locations": "管理所有地点",

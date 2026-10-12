@@ -6,6 +6,7 @@
 #include <pystring/pystring.h>
 
 #include "Deferred.h"
+#include "EngineFixes/LandscapeSeamsFix.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
 #include "Features/CSUtility.h"
@@ -22,6 +23,7 @@
 #include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
+#include "Features/RemoteControl/NvPerf.h"
 #include "Features/SceneManager.h"
 #include "Features/SceneSelector.h"
 #include "Features/Skin.h"
@@ -401,6 +403,7 @@ void State::Reset()
 	globals::profiler->EndFrame(frameCount);
 
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
+	LandscapeSeamsFix::GetInstance().Reset();
 
 	worldRenderedThisFrame = false;
 
@@ -1034,10 +1037,8 @@ spdlog::level::level_enum State::GetLogLevel()
 
 void State::SetDefines(std::string a_defines)
 {
-	shaderDefines.clear();
+	std::vector<std::pair<std::string, std::string>> parsedDefines;
 	shaderDefinesString = "";
-	std::string name = "";
-	std::string definition = "";
 	auto defines = pystring::split(a_defines, ";");
 	for (const auto& define : defines) {
 		auto cleanedDefine = pystring::strip(define);
@@ -1048,20 +1049,23 @@ void State::SetDefines(std::string a_defines)
 			logger::warn("Define string has too many '='; ignoring {}", define);
 			continue;
 		}
-		name = pystring::strip(token[0]);
-		if (token.size() == 2) {
-			definition = pystring::strip(token[1]);
-		}
+		std::string name = pystring::strip(token[0]);
+		std::string definition = token.size() == 2 ? pystring::strip(token[1]) : std::string{};
 		shaderDefinesString += pystring::strip(define) + ";";
-		shaderDefines.push_back(std::pair(name, definition));
+		parsedDefines.emplace_back(std::move(name), std::move(definition));
 	}
 	shaderDefinesString = shaderDefinesString.substr(0, shaderDefinesString.size() - 1);
+	{
+		std::scoped_lock lock(shaderDefinesMutex);
+		shaderDefines = std::make_shared<const std::vector<std::pair<std::string, std::string>>>(std::move(parsedDefines));
+	}
 	logger::debug("Shader Defines set to {}", shaderDefinesString);
 }
 
-std::vector<std::pair<std::string, std::string>>* State::GetDefines()
+std::shared_ptr<const std::vector<std::pair<std::string, std::string>>> State::GetDefines()
 {
-	return &shaderDefines;
+	std::scoped_lock lock(shaderDefinesMutex);
+	return shaderDefines;
 }
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
@@ -1199,13 +1203,17 @@ void State::SetupResources()
 
 	globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
 
-	if (frameAnnotations) {
-		globals::profiler->SetPerfEventCallbacks(
-			[this](std::string_view name) { BeginPerfEvent(name); },
-			[this](std::string_view) { EndPerfEvent(); });
-	} else {
-		globals::profiler->SetPerfEventCallbacks({}, {});
-	}
+	// Checked per pass rather than bound once, so annotations forced on at runtime (RenderDoc capture, Nsight Perf)
+	// also cover the profiler's passes. Toggles happen between frames, so a pass's begin and end agree.
+	globals::profiler->SetPerfEventCallbacks(
+		[this](std::string_view name) {
+			if (frameAnnotations)
+				BeginPerfEvent(name);
+		},
+		[this](std::string_view) {
+			if (frameAnnotations)
+				EndPerfEvent();
+		});
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
@@ -1229,7 +1237,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::AnisoLighting |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr);
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr |
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
@@ -1315,6 +1324,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 		default:
 			break;
 		}
+	} else if (a_shader.shaderType.get() == RE::BSShader::Type::Utility) {
+		a_vertexDescriptor &= ~(uint32_t)SIE::ShaderCache::UtilityShaderFlags::TruePbr;
 	}
 }
 
@@ -1370,10 +1381,7 @@ void State::BeginPerfEvent(std::string_view title)
 	const TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(srcloc, true);
 	s_tracyPerfZones.push_back(ctx);
 #endif
-	if (pPerf) {
-		thread_local std::wstring s_wtitle;
-		pPerf->BeginEvent(WidenAnnotation(s_wtitle, title));
-	}
+	BeginAnnotation(title);
 }
 
 void State::EndPerfEvent()
@@ -1386,20 +1394,23 @@ void State::EndPerfEvent()
 		logger::warn("EndPerfEvent called without a matching BeginPerfEvent");
 	}
 #endif
-	if (pPerf) {
-		pPerf->EndEvent();
-	}
+	EndAnnotation();
 }
 
 void State::BeginAnnotation(std::string_view title)
 {
 	if (pPerf) {
-		pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
+		thread_local std::wstring s_wtitle;
+		pPerf->BeginEvent(WidenAnnotation(s_wtitle, title));
 	}
+	if (NvPerf::RangesActive())
+		NvPerf::PushRange(title);
 }
 
 void State::EndAnnotation()
 {
+	if (NvPerf::RangesActive())
+		NvPerf::PopRange();
 	if (pPerf) {
 		pPerf->EndEvent();
 	}
