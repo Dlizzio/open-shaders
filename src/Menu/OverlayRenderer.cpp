@@ -170,6 +170,7 @@ bool OverlayRenderer::ShouldSkipRendering()
 
 	return !(shaderCache->IsCompiling() ||
 			 Menu::GetSingleton()->IsEnabled ||
+			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
 			 EditorWindow::GetSingleton()->open ||
 			 abTestingManager->IsEnabled() ||
 			 (failed && !hide) ||
