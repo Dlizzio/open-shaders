@@ -822,7 +822,7 @@ void Upscaling::DrawUpscalingSettings()
 			const float displayScale = 1.0f / GetQualityModeRatio(settings.qualityMode);
 			std::string labelWithScale = std::format("{} ( {:.2f}x )", baseLabel, displayScale);
 
-			ImGui::SliderInt(T(TKEY("upscale_preset"), "Upscale Preset"), (int*)&settings.qualityMode, 0, 4, labelWithScale.c_str());
+			ImGui::SliderInt(T(TKEY("upscale_preset"), "Upscale Preset"), (int*)&settings.qualityMode, 0, 4, labelWithScale.c_str(), ImGuiSliderFlags_AlwaysClamp);
 
 			// Pending-diff vs the boot snapshot the runtime upscaler actually
 			// uses; while an explicit scale is latched the preset is inert.
@@ -1231,8 +1231,8 @@ void Upscaling::LoadSettings(json& o_json)
 		settings.vrRenderScale = clamped;
 	}
 	if (settings.qualityMode > 4) {
-		logger::warn("[Upscaling] Loaded qualityMode {} out of range, clamping to 4", settings.qualityMode);
-		settings.qualityMode = 4;
+		logger::warn("[Upscaling] Loaded qualityMode {} out of range, resetting to 1", settings.qualityMode);
+		settings.qualityMode = 1;
 	}
 	if (settings.presetDLSS > 4) {
 		logger::warn("[Upscaling] Loaded presetDLSS {} out of range, resetting to 0 (Default)", settings.presetDLSS);
@@ -1706,7 +1706,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		// Update tracking for next call
 		previousUpscaleMode = a_upscalemethod;
 		previousFrameGenMode = (settings.frameGenerationMode && d3d12SwapChainActive);
-		previousUpscalingWasActive = IsUpscalingActive();
+		previousUpscalingWasActive = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
 	}
 }
 
@@ -3304,7 +3304,8 @@ void Upscaling::ApplySharpening()
 
 		float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
 		currentSharpness = exp2(-currentSharpness);
-		rcas.ApplySharpen(perfMode.GetRefraTempSRV(), perfMode.GetTestTextureUAV(), currentSharpness);
+		if (!rcas.ApplySharpen(perfMode.GetRefraTempSRV(), perfMode.GetTestTextureUAV(), currentSharpness))
+			globals::d3d::context->CopyResource(perfMode.GetTestTexture(), perfMode.GetRefraTempTex());
 		return;
 	}
 
@@ -3331,7 +3332,8 @@ void Upscaling::ApplySharpening()
 		currentSharpness = exp2(-currentSharpness);
 
 		// DLSS has already written to sharpenerTexture; sharpen directly into kMAIN.UAV.
-		rcas.ApplySharpen(sharpenerTexture->srv.get(), Util::AsReal(main.UAV), currentSharpness);
+		if (!rcas.ApplySharpen(sharpenerTexture->srv.get(), Util::AsReal(main.UAV), currentSharpness))
+			context->CopyResource(Util::AsReal(main.texture), sharpenerTexture->resource.get());
 	} else {
 		// Sharpening is disabled: resolve the DLSS output without altering it.
 		context->CopyResource(Util::AsReal(main.texture), sharpenerTexture->resource.get());

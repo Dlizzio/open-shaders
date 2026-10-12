@@ -110,7 +110,9 @@ namespace Util
 		int len = _vsnprintf_s(buffer, _TRUNCATE, Format, va);
 		va_end(va);
 
-		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, len, buffer);
+		if (len < 0)
+			len = static_cast<int>(strnlen(buffer, sizeof(buffer)));
+		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, static_cast<UINT>(len), buffer);
 	}
 
 	bool GetTexture2DDesc(ID3D11View* View, D3D11_TEXTURE2D_DESC& OutDesc)
