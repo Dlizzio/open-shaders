@@ -583,9 +583,26 @@ std::filesystem::path RenderDoc::GetRenderDocDllPath() const
 	return Util::PathHelpers::GetDataPath() / "Renderdoc" / "renderdoc.dll";
 }
 
+namespace
+{
+	/** @brief Nulls the output buffer on failure like the native runtime; RenderDoc leaves it untouched and the game uses it unchecked (e.g. zero-triangle skin partitions). */
+	struct ID3D11Device_CreateBuffer
+	{
+		static HRESULT STDMETHODCALLTYPE thunk(ID3D11Device* This, const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
+		{
+			const HRESULT hr = func(This, pDesc, pInitialData, ppBuffer);
+			if (FAILED(hr) && ppBuffer)
+				*ppBuffer = nullptr;
+			return hr;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
 void RenderDoc::SetupResources()
 {
-	// RenderDoc doesn't need any D3D resources
+	if (IsLoaded())
+		stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(globals::d3d::device);
 }
 
 void RenderDoc::SaveSettings(json& o_json)

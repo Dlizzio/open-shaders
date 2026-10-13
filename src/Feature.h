@@ -385,6 +385,9 @@ public:
 	/** @brief Called after engine weather colors and weather extensions have finished updating. */
 	virtual void OnWeatherColorsUpdated(RE::Sky* /*a_sky*/) {}
 
+	/** @brief Called after the sky's weather colors update and before Effects11 grades them; for features that rewrite colors the grading reads. */
+	virtual void OnBeforeWeatherColorGrading(RE::Sky* /*a_sky*/) {}
+
 	/** @brief Opts into point-light color processing before opacity and brightness scaling. */
 	virtual bool WantsPointLightColorOverride() const { return false; }
 	/** @brief Adjusts an unscaled point-light color on the render thread. */

@@ -70,6 +70,9 @@ public:
 	/** @brief While the sun is below the horizon, rebuilds the moon glare, plus the sunlight colour and VL when they are dimmed, from the weathers' night values only; runs before colour grading. */
 	void ApplyMoonlightColors(RE::Sky* sky);
 
+	/** @brief Rebuilds night sunlight and moon colours ahead of Effects11's grading, whose colour filter lifts zero. */
+	virtual void OnBeforeWeatherColorGrading(RE::Sky* sky) override { ApplyMoonlightColors(sky); }
+
 	/** @brief How far this frame's moon glare was moved to the night colour, 0 to 1, so moon grading can follow it. */
 	float GetMoonNightWeight() const { return moonNightWeight; }
 

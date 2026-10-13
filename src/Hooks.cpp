@@ -22,7 +22,6 @@
 #include "Features/PostProcessing.h"
 #include "Features/RainRefraction.h"
 #include "Features/RemoteControl/NvPerf.h"
-#include "Features/RenderDoc.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -351,8 +350,7 @@ namespace WeatherExtensions
 		static void thunk(RE::Sky* sky, float a_delta)
 		{
 			func(sky, a_delta);
-			// Moonlight colours feed Effects11's grading; the dim must follow it, as its colour filter lifts zero
-			globals::features::skySync.ApplyMoonlightColors(sky);
+			Feature::ForEachLoadedFeature("OnBeforeWeatherColorGrading", [sky](Feature* feature) { feature->OnBeforeWeatherColorGrading(sky); });
 #if defined(ENABLE_EFFECTS11)
 			if (globals::features::effects11.loaded)
 				globals::features::effects11.OnSkyUpdateColors(sky);
@@ -620,19 +618,6 @@ struct ID3D11Device_CreateSamplerState
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
-/** @brief Nulls the output buffer on failure like the native runtime; RenderDoc leaves it untouched and the game uses it unchecked (e.g. zero-triangle skin partitions). */
-struct ID3D11Device_CreateBuffer
-{
-	static HRESULT STDMETHODCALLTYPE thunk(ID3D11Device* This, const D3D11_BUFFER_DESC* pDesc, const D3D11_SUBRESOURCE_DATA* pInitialData, ID3D11Buffer** ppBuffer)
-	{
-		const HRESULT hr = func(This, pDesc, pInitialData, ppBuffer);
-		if (FAILED(hr) && ppBuffer)
-			*ppBuffer = nullptr;
-		return hr;
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
-
 struct BSShaderRenderTargets_Create
 {
 	/**
@@ -783,9 +768,6 @@ namespace Hooks
 			}
 
 			stl::detour_vfunc<23, ID3D11Device_CreateSamplerState>(globals::d3d::device);
-
-			if (RenderDoc::IsLoaded())
-				stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(globals::d3d::device);
 
 			globals::InstallD3DHooks(globals::d3d::context);
 
