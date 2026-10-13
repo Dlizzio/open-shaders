@@ -33,10 +33,6 @@ LODBlendRingFix& LODBlendRingFix::GetInstance()
 
 void LODBlendRingFix::Install()
 {
-	// The VR address library has no entry for this flag; a two-argument RelocationID without one aborts plugin load on VR.
-	if (REL::Module::IsVR())
-		return;
-
 	// Raised by TES on every grid shift; TES defers its per-cell LOD blend reflag until it clears.
 	blendInProgress = reinterpret_cast<bool*>(REL::RelocationID(527641, 414593).address());
 }
@@ -50,9 +46,6 @@ void LODBlendRingFix::EndSlide()
 
 void LODBlendRingFix::Update()
 {
-	if (!blendInProgress)
-		return;
-
 	auto* tes = globals::game::tes;
 	auto* player = globals::game::player;
 	if (!tes || !player || tes->interiorCell || !tes->GetRuntimeData2().worldSpace) {
