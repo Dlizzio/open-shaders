@@ -162,11 +162,30 @@ namespace ShadowCasterManager
 	extern std::unique_ptr<FormulaHelper> s_formulaRedrawInterval;
 	extern std::unique_ptr<FormulaHelper> s_formulaRedrawBudget;
 
+	/// Every input the engine's non-shadow EnableLight walk reads for one light;
+	/// an unchanged snapshot means a repeat call would reproduce the same state.
+	struct EnableInputs
+	{
+		RE::NiPoint3 translate;
+		RE::NiMatrix3 rotate;
+		float radius{ 0.0f };
+		float fade{ 0.0f };
+		bool hidden{ false };
+		bool dynamic{ false };
+		bool portalStrict{ false };
+		const void* portalGraph{ nullptr };
+		std::uint32_t roomCount{ 0 };
+
+		bool operator==(const EnableInputs& o) const;
+	};
+
 	// Lights converted to normal (non-shadow) lights for diffuse rendering
 	struct ConvertedLight
 	{
 		RE::BSShadowLight* light;
 		bool isNS;
+		bool enableValid{ false };
+		EnableInputs lastEnable{};
 	};
 	extern std::vector<ConvertedLight> s_normalConvert;
 	extern std::set<RE::NiLight*> s_shadowConvert;
@@ -595,6 +614,9 @@ namespace ShadowCasterManager
 	void FreeAllTiles();
 
 	bool GetSlotTileTexels(int32_t poolSlot, AtlasTileTexels& out);
+	/// True when the slot's rendered tile already covers `scale`'s class, so a redraw
+	/// would refill the same rect: a staged promotion is not a fit.
+	bool SlotTileFits(int32_t poolSlot, float scale);
 	int32_t FindFreeSlotByOwner(const void* a_owner);
 	void DumpSlotTileRegion(int32_t poolSlot, uint32_t a_stamp);
 

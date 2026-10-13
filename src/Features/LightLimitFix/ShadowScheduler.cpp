@@ -270,6 +270,18 @@ namespace ShadowCasterManager
 	/// Bakes retired (latched or dropped on slot reassignment) before any DynamicOnly accumulate reused them.
 	std::atomic<uint64_t> s_splitWastedBakeTotal{ 0 };
 
+	/// Tile-class changes that alone made a light dirty: promotions, and the demotions
+	/// whose retained tile already held the requested content (the redraws this saves).
+	/// Each counts once per scale-change event, not once per frame the change stays pending.
+	std::atomic<uint64_t> s_scalePromotionRedraws{ 0 };
+	std::atomic<uint64_t> s_scaleDemotionRedrawsAvoided{ 0 };
+	/// Promotions the previous `pendingScale > renderedScale` rule dirtied although the
+	/// retained tile already held the requested class (the redraws the tile test removes).
+	std::atomic<uint64_t> s_scalePromotionRedundantAvoided{ 0 };
+	/// Converted-light re-enables run versus skipped because no engine-walk input changed.
+	std::atomic<uint64_t> s_convertReEnableRun{ 0 };
+	std::atomic<uint64_t> s_convertReEnableSkipped{ 0 };
+
 	/// Cumulative s_pendingCellReset drains since load -- diagnostic for
 	/// whether Hook_ResetScene fires only on real zone transitions or also
 	/// on ordinary exterior cell-grid streaming during normal movement.
@@ -608,6 +620,14 @@ namespace ShadowCasterManager
 		return SplitPoseMatches(light, st);
 	}
 
+	/// Tests whether a scale change alone forces a redraw: only a larger requested class
+	/// can, and only when the retained tile does not already serve that class.
+	static bool ScaleChangeNeedsRedraw(const LightEntry& e, int32_t slot)
+	{
+		return e.pendingScale > e.renderedScale &&
+		       !(AtlasActive() && SlotTileFits(slot, e.pendingScale));
+	}
+
 	/// Schedule-time sleep predicate: every condition proving this light's
 	/// redraw would reproduce the tile it already holds, so the scheduler
 	/// skips it outright (no accumulate, no budget, no render). Slot state is
@@ -616,8 +636,8 @@ namespace ShadowCasterManager
 	{
 		if (e.LastDrawnFrame < 0 || SlotStaticCompositePending(slot))
 			return false;
-		// A staged class change must rerender before the light may sleep.
-		if (e.pendingScale != e.renderedScale)
+		// A staged promotion must rerender before the light may sleep.
+		if (ScaleChangeNeedsRedraw(e, slot))
 			return false;
 		const auto it = s_splitState.find(e.Light);
 		if (it == s_splitState.end())
@@ -667,8 +687,8 @@ namespace ShadowCasterManager
 		assert(slot == e.Index && e.Index == GetShadowSlot(e.Light));
 		if (e.LastDrawnFrame < 0)
 			return false;
-		// A staged class change must rerender before the light may be skipped.
-		if (e.pendingScale != e.renderedScale)
+		// A staged promotion must rerender before the light may be skipped.
+		if (ScaleChangeNeedsRedraw(e, slot))
 			return false;
 		AtlasTileTexels tile{};
 		if (!GetSlotTileTexels(slot, tile) || !tile.contentValid)
@@ -689,6 +709,38 @@ namespace ShadowCasterManager
 	}
 
 	// Light enable / disable helpers.
+
+	bool EnableInputs::operator==(const EnableInputs& o) const
+	{
+		for (int r = 0; r < 3; ++r)
+			for (int c = 0; c < 3; ++c)
+				if (rotate.entry[r][c] != o.rotate.entry[r][c])
+					return false;
+		return translate.x == o.translate.x && translate.y == o.translate.y && translate.z == o.translate.z &&
+		       radius == o.radius && fade == o.fade && hidden == o.hidden && dynamic == o.dynamic &&
+		       portalStrict == o.portalStrict && portalGraph == o.portalGraph && roomCount == o.roomCount;
+	}
+
+	/// Caller holds s_portalGraphMutex shared, so the graph pointer stays valid.
+	static EnableInputs CaptureEnableInputs(RE::BSShadowLight* light, RE::ShadowSceneNode* ssn)
+	{
+		EnableInputs in;
+		if (const auto* ni = light->light.get()) {
+			in.translate = ni->world.translate;
+			in.rotate = ni->world.rotate;
+			const auto& lightData = ni->GetLightRuntimeData();
+			in.radius = lightData.radius.x;
+			in.fade = lightData.fade;
+			in.hidden = ni->GetFlags().any(RE::NiAVObject::Flag::kHidden);
+		}
+		in.dynamic = light->dynamic;
+		in.portalStrict = light->portalStrict;
+		if (const auto* graph = ssn->GetRuntimeData().portalGraph) {
+			in.portalGraph = graph;
+			in.roomCount = graph->rooms.size();
+		}
+		return in;
+	}
 
 	static void EraseFromConvertList(RE::BSShadowLight* light)
 	{
@@ -715,11 +767,19 @@ namespace ShadowCasterManager
 	// capture distinguishes steady-state cost from fresh-conversion cost.
 	void ConvertLight(RE::BSShadowLight* light, RE::ShadowSceneNode* ssn, bool isNS)
 	{
-		// Already converted: just re-enable so geometry picks it up this frame.
+		// Already converted: re-enable only when an input of the engine walk changed.
 		for (auto& c : s_normalConvert) {
 			if (c.light == light) {
+				const EnableInputs now = CaptureEnableInputs(light, ssn);
+				if (c.enableValid && c.lastEnable == now) {
+					s_convertReEnableSkipped.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
 				ZoneNamedN(zReEnable, "SCM::Engine::ConvertLight::ReEnable", true);
 				GameEnableLight(ssn, light);
+				c.lastEnable = now;
+				c.enableValid = true;
+				s_convertReEnableRun.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
 		}
@@ -733,6 +793,8 @@ namespace ShadowCasterManager
 
 		s_normalConvert.push_back({ light, isNS });
 		GameEnableLight(ssn, light);
+		s_normalConvert.back().lastEnable = CaptureEnableInputs(light, ssn);
+		s_normalConvert.back().enableValid = true;
 	}
 
 	// Reset a promoted light's descriptor pool-slot indices to kNONE. BSShadowParabolicLight is
@@ -2119,14 +2181,34 @@ namespace ShadowCasterManager
 			const bool tileInvalid = AtlasActive() &&
 			                         (!GetSlotTileTexels(e->Index, schedDirtyTile) || !schedDirtyTile.contentValid);
 			const bool staticCompositePending = SlotStaticCompositePending(e->Index);
-			e->schedDirty = e->LastDrawnFrame < 0 ||
-			                e->lastGeomHash == 0 ||
-			                e->pendingGeomHash != e->lastGeomHash ||
-			                e->pendingScale != e->renderedScale ||
-			                displacementTexels >= 1.0 ||
-			                tileInvalid ||
-			                staticCompositePending ||
-			                (now - e->LastDrawnFrame) >= staggeredBackstopWindow;
+			const bool scaleDirty = ScaleChangeNeedsRedraw(*e, e->Index);
+			const bool otherDirty = e->LastDrawnFrame < 0 ||
+			                        e->lastGeomHash == 0 ||
+			                        e->pendingGeomHash != e->lastGeomHash ||
+			                        displacementTexels >= 1.0 ||
+			                        tileInvalid ||
+			                        staticCompositePending ||
+			                        (now - e->LastDrawnFrame) >= staggeredBackstopWindow;
+			if (e->pendingScale == e->renderedScale) {
+				e->countedScaleEvent = 0.0f;
+				e->countedPromotionRedundantEvent = 0.0f;
+			} else if (!otherDirty) {
+				if (scaleDirty) {
+					if (e->pendingScale != e->countedScaleEvent) {
+						s_scalePromotionRedraws.fetch_add(1, std::memory_order_relaxed);
+						e->countedScaleEvent = e->pendingScale;
+					}
+				} else if (e->pendingScale > e->renderedScale) {
+					if (e->pendingScale != e->countedPromotionRedundantEvent) {
+						s_scalePromotionRedundantAvoided.fetch_add(1, std::memory_order_relaxed);
+						e->countedPromotionRedundantEvent = e->pendingScale;
+					}
+				} else if (e->pendingScale != e->countedScaleEvent) {
+					s_scaleDemotionRedrawsAvoided.fetch_add(1, std::memory_order_relaxed);
+					e->countedScaleEvent = e->pendingScale;
+				}
+			}
+			e->schedDirty = otherDirty || scaleDirty;
 
 			// VSM-style demand tiebreaker: must stay in RedrawScore's native frame-count
 			// scale, or a too-large term becomes the sort key instead of a tiebreaker.
@@ -2971,6 +3053,11 @@ namespace ShadowCasterManager
 				snap.splitLatchMismatchTotal = s_splitLatchMismatchTotal.load(std::memory_order_relaxed);
 				snap.splitLatchWindowTotal = s_splitLatchWindowTotal.load(std::memory_order_relaxed);
 				snap.splitWastedBakesTotal = s_splitWastedBakeTotal.load(std::memory_order_relaxed);
+				snap.scalePromotionRedraws = s_scalePromotionRedraws.load(std::memory_order_relaxed);
+				snap.scaleDemotionRedrawsAvoided = s_scaleDemotionRedrawsAvoided.load(std::memory_order_relaxed);
+				snap.scalePromotionRedundantAvoided = s_scalePromotionRedundantAvoided.load(std::memory_order_relaxed);
+				snap.convertReEnableRun = s_convertReEnableRun.load(std::memory_order_relaxed);
+				snap.convertReEnableSkipped = s_convertReEnableSkipped.load(std::memory_order_relaxed);
 				snap.cellResetsTotal = s_cellResetTotal.load(std::memory_order_relaxed);
 				snap.sleepSkips = s_schedDiag.sleep_skips;
 				snap.sleepSkipsTotal = s_sleepSkipTotal.load(std::memory_order_relaxed);
