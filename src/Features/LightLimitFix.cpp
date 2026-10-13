@@ -948,13 +948,15 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	const bool isWorld = accumulator->GetRuntimeData().activeShadowSceneNode == shadowSceneNode;
 	const auto roomIndex = strictLightDataTemp.RoomIndex;
 	const bool isFirstPerson = strictLightDataTemp.FirstPerson != 0;
+	const bool worldEyeMoved = isFirstPerson && eyePositionCached[0] != previousWorldEyePosition;
 
-	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld || isFirstPerson != wasFirstPerson || previousRoomIndex != roomIndex) {
+	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld || isFirstPerson != wasFirstPerson || previousRoomIndex != roomIndex || worldEyeMoved) {
 		strictLightDataCB->Update(strictLightDataTemp);
 		wasEmpty = isEmpty;
 		wasWorld = isWorld;
 		wasFirstPerson = isFirstPerson;
 		previousRoomIndex = roomIndex;
+		previousWorldEyePosition = eyePositionCached[0];
 	}
 
 	if (frameChecker.IsNewFrame()) {

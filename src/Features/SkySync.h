@@ -105,14 +105,6 @@ public:
 		Zenith  // fallback when no moon is up: lights as a pseudo skylight, without VL
 	};
 
-	/**
-	 * @brief Gets the world-space direction towards a sun or moon, preferring the one Sky Sync computed this frame.
-	 * @param sky The sky whose root rotation maps Sky Sync's directions into world space.
-	 * @param caster The celestial body to query; must not be Caster::Zenith.
-	 * @return The unit direction, or straight up (0,0,1) if none is available.
-	 */
-	RE::NiPoint3 GetCelestialDirection(const RE::Sky* sky, Caster caster) const;
-
 	/** @brief Returns a body's synchronized world direction before shadow clamping, or nullopt when inactive. */
 	std::optional<RE::NiPoint3> GetCelestialDirection(Caster caster) const;
 

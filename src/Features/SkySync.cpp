@@ -768,26 +768,6 @@ void SkySync::ProcessMoon(const RE::Sky* sky, const Caster type, RE::NiPoint3 di
 	intensities[idx] = color.w * GetHorizonDim(GetHeightAboveHorizon(dirs[idx]));
 }
 
-RE::NiPoint3 SkySync::GetCelestialDirection(const RE::Sky* sky, const Caster caster) const
-{
-	const auto idx = static_cast<size_t>(caster);
-	assert(idx < std::size(rawDirections));
-	if (!sky || !sky->root)
-		return ZenithDirection;
-
-	RE::NiPoint3 dir = rawDirections[idx];
-	if (dir.SqrLength() > 0.0f)
-		dir = sky->root->world.rotate * dir;
-	else if (caster == Caster::Sun)  // SetSunPosition writes only the local translate, so the world one may be stale
-		dir = sky->sun && sky->sun->root ? sky->sun->root->world.translate - sky->root->world.translate : RE::NiPoint3{};
-	else
-		dir = Util::Moon::GetDirection(caster == Caster::Masser ? sky->masser : sky->secunda);
-
-	if (dir.Unitize() <= FLT_EPSILON)
-		return ZenithDirection;
-	return dir;
-}
-
 std::optional<RE::NiPoint3> SkySync::GetCelestialDirection(Caster caster) const
 {
 	if (caster == Caster::Zenith)
