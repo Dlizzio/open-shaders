@@ -517,7 +517,7 @@ void HDRDisplay::DrawSettings()
 		int displayedPeakNits = static_cast<int>(std::min(currentPeakNits, peakSliderMax));
 		if (ImGui::SliderInt(T(TKEY("peak_brightness_nits"), "Peak Brightness (nits)"), &displayedPeakNits, kHdrPeakNitsMin, peakSliderMax, "%d",
 				autoHDRActive ? ImGuiSliderFlags_None : ImGuiSliderFlags_Logarithmic))
-			currentPeakNits = static_cast<uint>(displayedPeakNits);
+			currentPeakNits = static_cast<uint>(std::clamp(displayedPeakNits, 0, static_cast<int>(kHdrPeakNitsMax)));
 		{
 			std::lock_guard<std::mutex> lock(settingsMutex);
 			if (currentPeakNits <= settings.hdrPaperWhite) {
