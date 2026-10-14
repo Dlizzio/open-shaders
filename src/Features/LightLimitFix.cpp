@@ -1866,7 +1866,7 @@ void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* Thi
 	constexpr auto sceneLightMask = static_cast<uint32_t>(EffectFlags::Lighting) | static_cast<uint32_t>(EffectFlags::Membrane);
 	const auto* state = globals::state;
 	const bool usesSceneLights = !state || state->currentShader != This ||
-	                            (state->currentVertexDescriptor & sceneLightMask) == static_cast<uint32_t>(EffectFlags::Lighting);
+	                             (state->currentVertexDescriptor & sceneLightMask) == static_cast<uint32_t>(EffectFlags::Lighting);
 
 	// Validate each raw scene-light pair on first use per frame; cache hits still SEH-read the
 	// BSLight field so unmapped or changed entries fall back to the full guard.
