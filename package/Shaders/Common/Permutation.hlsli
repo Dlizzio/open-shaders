@@ -86,7 +86,9 @@ namespace Permutation
 		static const uint IsCharacterRainSurface = (1u << 30);
 		static const uint IsHeldWeapon = (1u << 29);
 		static const uint GammaRenderTarget = (1u << 27);
+		static const uint CaptureReflectionRadiance = (1u << 26);
 	}
+
 
 	namespace ExtraFeatureFlags
 	{
@@ -140,6 +142,12 @@ namespace Permutation
 		float4 TreeWindProbeBase;
 		float4 TreeWindProbeTop;
 	};
+
+	bool IsReflectionRadianceCapture()
+	{
+		const uint flags = ExtraFlags::InReflection | ExtraFlags::CaptureReflectionRadiance;
+		return (ExtraShaderDescriptor & flags) == flags;
+	}
 
 }
 #endif  // __PERMUTATION_DEPENDENCY_HLSL__

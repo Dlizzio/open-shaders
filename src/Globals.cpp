@@ -52,6 +52,7 @@
 #include "Features/VanillaFresnel.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
+#include "Features/LODShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wind/Wind.h"
@@ -78,6 +79,7 @@ namespace globals
 		ProceduralSun proceduralSun{};
 		DynamicCubemaps dynamicCubemaps{};
 		VolumetricShadows volumetricShadows{};
+		LODShadows lodShadows{};
 		ExtendedMaterials extendedMaterials{};
 		GrassCollision grassCollision{};
 		GrassLighting grassLighting{};
