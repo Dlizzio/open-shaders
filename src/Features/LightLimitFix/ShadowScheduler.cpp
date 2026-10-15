@@ -1412,6 +1412,7 @@ namespace ShadowCasterManager
 				// promoted light added but never enabled before teardown reads it.
 				if (s_settings.ShadowLightCount > 4) {
 					if (auto* ni = l->light.get(); ni) {
+						ZoneScopedN("SCM::ScoreCandidates::PromotedInit");
 						std::scoped_lock lk(s_shadowConvertMutex);
 						if (s_shadowConvert.contains(ni) && !s_shadowConvertDescriptorInited.contains(ni)) {
 							InitPromotedDescriptorSlots(l);
@@ -1423,8 +1424,11 @@ namespace ShadowCasterManager
 				c.light = l;
 				c.sun = false;
 				float impact = 1.0f;
-				c.score = CalculateLightScore(l, camera, tmpIndex++,
-					s_settings.ShadowImpactFloor > 0.0f ? &impact : nullptr);
+				{
+					ZoneScopedN("SCM::ScoreCandidates::LightScore");
+					c.score = CalculateLightScore(l, camera, tmpIndex++,
+						s_settings.ShadowImpactFloor > 0.0f ? &impact : nullptr);
+				}
 				if (s_settings.ShadowImpactFloor > 0.0f && impact < s_settings.ShadowImpactFloor) {
 					// Exit hysteresis, own consecutive-count gate (unlike the recency-based
 					// s_lastValidFrame above): a light must fail 15 consecutive frames
@@ -1451,14 +1455,18 @@ namespace ShadowCasterManager
 		// wipe (deferred, races the new cell's promotions) and bulk ClearLightArrays bypasses
 		// the per-light erase, so without it promoted lights leak in and read as native.
 		{
+			ZoneScopedN("SCM::ScoreCandidates::PromotedCleanup");
 			std::scoped_lock lk(s_shadowConvertMutex);
 			if (!s_shadowConvert.empty() || !s_shadowConvertDescriptorInited.empty()) {
-				std::set<RE::NiLight*> liveNi;
+				static std::vector<RE::NiLight*> liveNi;
+				liveNi.clear();
 				for (auto& c : candidates)
 					if (auto* ni = c.light->light.get())
-						liveNi.insert(ni);
-				std::erase_if(s_shadowConvert, [&](RE::NiLight* ni) { return !liveNi.contains(ni); });
-				std::erase_if(s_shadowConvertDescriptorInited, [&](RE::NiLight* ni) { return !liveNi.contains(ni); });
+						liveNi.push_back(ni);
+				std::sort(liveNi.begin(), liveNi.end());
+				const auto isLive = [&](RE::NiLight* ni) { return std::binary_search(liveNi.begin(), liveNi.end(), ni); };
+				std::erase_if(s_shadowConvert, [&](RE::NiLight* ni) { return !isLive(ni); });
+				std::erase_if(s_shadowConvertDescriptorInited, [&](RE::NiLight* ni) { return !isLive(ni); });
 			}
 		}
 
@@ -1466,10 +1474,12 @@ namespace ShadowCasterManager
 		// light inheriting a stale splitExcluded latch renders full forever.
 		// Threshold avoids churning state for gate-flapping lights in small scenes.
 		if (s_splitState.size() > 128) {
-			std::set<RE::BSShadowLight*> liveLights;
+			static std::vector<RE::BSShadowLight*> liveLights;
+			liveLights.clear();
 			for (auto& c : candidates)
-				liveLights.insert(c.light);
-			std::erase_if(s_splitState, [&](const auto& kv) { return !liveLights.contains(kv.first); });
+				liveLights.push_back(c.light);
+			std::sort(liveLights.begin(), liveLights.end());
+			std::erase_if(s_splitState, [&](const auto& kv) { return !std::binary_search(liveLights.begin(), liveLights.end(), kv.first); });
 		}
 
 		// Apply debug pins: bias scoring so pinned-shadow lights sort to the top
@@ -1486,6 +1496,7 @@ namespace ShadowCasterManager
 		// Sort descending by score; sun always first. Deterministic tiebreak on exact
 		// ties (e.g. symmetric braziers): std::sort isn't stable, so an unstable tie
 		// flips which fixture claims a free slot first, producing visible flicker.
+		ZoneScopedN("SCM::ScoreCandidates::Sort");
 		std::sort(candidates.begin(), candidates.end(),
 			[](const CandidateLight& a, const CandidateLight& b) {
 				if (a.sun != b.sun)
@@ -1559,8 +1570,13 @@ namespace ShadowCasterManager
 					AuditFrustumCull(c, camera);
 				// frustrumCull != 0 does NOT mean geometrically off-screen --
 				// BSShadowParabolicLight also sets it for a shadow-distance LOD test.
-				if (!l->UpdateCamera(camera)) {
-					c.updateCameraFailed = true;
+				bool cameraValid;
+				{
+					ZoneScopedN("SCM::CandidateValidation::UpdateCamera");
+					cameraValid = l->UpdateCamera(camera);
+				}
+				c.updateCameraFailed = !cameraValid;
+				if (!cameraValid) {
 					// Exit hysteresis: honor invalid only after kCameraExitStreak frames.
 					// Age-prune (not PruneIfOversized): a missing entry means
 					// never-valid, so only drop entries past the exit-streak window.
@@ -1605,6 +1621,7 @@ namespace ShadowCasterManager
 				}
 				// No culling process/portal means unconditionally visible. Skip for
 				// promoted lights (rebuilt process never room-associates) and held lights.
+				ZoneScopedN("SCM::CandidateValidation::Portal");
 				auto* cull = (c.cameraHold || IsPromotedLight(l->light.get())) ? nullptr : GetLightCullingProcess(l);
 				if (cull) {
 					auto* portal = reinterpret_cast<RE::BSPortalGraphEntry*>(cull->portalGraphEntry);
@@ -1708,6 +1725,22 @@ namespace ShadowCasterManager
 		}  // end SCM::CandidateValidation
 	}
 
+	/// Sorted active shadow lights plus the sun, in a caller-owned buffer so the
+	/// per-frame membership tests binary-search instead of building a hash set.
+	static void CollectAliveShadowLights(RE::ShadowSceneNode* ssn, RE::BSShadowLight* sunLight,
+		std::vector<RE::BSShadowLight*>& out)
+	{
+		out.clear();
+		auto& alive = ssn->GetRuntimeData().activeShadowLights;
+		out.reserve(alive.size() + 1);
+		if (sunLight)
+			out.push_back(sunLight);
+		for (auto& sp : alive)
+			if (auto* l = sp.get())
+				out.push_back(l);
+		std::sort(out.begin(), out.end());
+	}
+
 	static void UpdatePoolMembership(RE::ShadowSceneNode* ssn, RE::BSShadowLight* sunLight,
 		std::vector<CandidateLight>& candidates)
 	{
@@ -1719,20 +1752,12 @@ namespace ShadowCasterManager
 			// Drop entries whose pointers are no longer in activeShadowLights (engine
 			// may have freed them since last frame), protecting later lookups from
 			// dereferencing dangling pointers.
-			std::unordered_set<RE::BSShadowLight*> aliveSet;
-			{
-				auto& alive = ssn->GetRuntimeData().activeShadowLights;
-				aliveSet.reserve(alive.size() + 1);
-				if (sunLight)
-					aliveSet.insert(sunLight);
-				for (auto& sp : alive)
-					if (auto* l = sp.get())
-						aliveSet.insert(l);
-			}
+			static std::vector<RE::BSShadowLight*> aliveSet;
+			CollectAliveShadowLights(ssn, sunLight, aliveSet);
 			for (int i = 0; i < s_lights.Size; i++) {
 				if (!s_lights.Lights[i].Light)
 					continue;
-				if (aliveSet.find(s_lights.Lights[i].Light) == aliveSet.end()) {
+				if (!std::binary_search(aliveSet.begin(), aliveSet.end(), s_lights.Lights[i].Light)) {
 					s_schedDiag.reconciliation_clears++;
 					s_lights.Lights[i].Clear();
 				}
@@ -1742,18 +1767,20 @@ namespace ShadowCasterManager
 			// lists (bulk cell-teardown bypasses Hook_ConvertLights_Remove), plus
 			// functionally-dead ones (fade=0/lodDimmer=0/null) GameEnableLight never deactivates.
 			if (!s_normalConvert.empty()) {
-				std::unordered_set<RE::BSLight*> normalAlive;
+				static std::vector<RE::BSLight*> normalAlive;
+				normalAlive.clear();
 				normalAlive.reserve(aliveSet.size() + ssn->GetRuntimeData().activeLights.size());
 				for (auto* p : aliveSet)
-					normalAlive.insert(static_cast<RE::BSLight*>(p));
+					normalAlive.push_back(static_cast<RE::BSLight*>(p));
 				for (auto& sp : ssn->GetRuntimeData().activeLights)
 					if (auto* l = sp.get())
-						normalAlive.insert(l);
+						normalAlive.push_back(l);
+				std::sort(normalAlive.begin(), normalAlive.end());
 
 				const std::size_t before = s_normalConvert.size();
 				std::erase_if(s_normalConvert, [&](const ConvertedLight& c) {
 					// Tier 1: dangling / engine-removed.
-					if (!c.light || normalAlive.find(static_cast<RE::BSLight*>(c.light)) == normalAlive.end())
+					if (!c.light || !std::binary_search(normalAlive.begin(), normalAlive.end(), static_cast<RE::BSLight*>(c.light)))
 						return true;
 					// Tier 2: functionally dead. Cheap derefs only -- no
 					// virtual calls or extra hash lookups.
@@ -1874,16 +1901,16 @@ namespace ShadowCasterManager
 			// Publish each occupant's score: it also orders the atlas cell budget
 			// (within a class band) and drives the redraw curve percentile.
 			{
-				std::unordered_map<const RE::BSShadowLight*, double> scoreByLight;
-				scoreByLight.reserve(candidates.size());
-				for (const auto& c : candidates)
-					scoreByLight.emplace(c.light, c.score);
 				for (int i = 0; i < s_lights.Size; i++) {
 					auto& e = s_lights.Lights[i];
 					if (!e.Light)
 						continue;
-					if (auto it = scoreByLight.find(e.Light); it != scoreByLight.end())
-						e.lastScore = it->second;
+					for (const auto& c : candidates) {
+						if (c.light == e.Light) {
+							e.lastScore = c.score;
+							break;
+						}
+					}
 				}
 			}
 		}  // end SCM::UpdatePoolMembership
@@ -2155,6 +2182,7 @@ namespace ShadowCasterManager
 
 			double interval = 0.0;
 			if (s_formulaRedrawInterval) {
+				ZoneScopedN("SCM::Score::Formula");
 				SetupLightFormula(e->Light, camera, 0);
 				// e->Index is the pool index. Beyond PointLightEnd are converted slots.
 				if (e->Index >= s_lights.PointLightEnd(s_settings.ShadowLightCount))
@@ -2184,6 +2212,7 @@ namespace ShadowCasterManager
 			float sizeProxy = 0.0f;
 
 			if (auto* ni = e->Light->light.get()) {
+				ZoneScopedN("SCM::Score::LightGeometry");
 				const auto geom = ComputeLightGeometry(e->Light, camera, ni->GetLightRuntimeData().radius.x);
 				// Legacy contribution metric, kept for the UI table and
 				// s_highImportanceLightCount; ranking decisions use lastScore
@@ -2245,6 +2274,7 @@ namespace ShadowCasterManager
 			                          geomSize != e->lastHashGeomListSize ||
 			                          (now - e->lastHashComputeFrame) >= kGeomHashRehashInterval;
 			if (dueForRehash) {
+				ZoneScopedN("SCM::Score::GeomHash");
 				e->cachedPendingGeomHash = ComputeShadowGeomHash(e->Light, posStep, e->cachedSkinnedCasters);
 				e->lastHashComputeFrame = now;
 				e->lastHashGeomListSize = geomSize;
@@ -2660,7 +2690,10 @@ namespace ShadowCasterManager
 			cameraHoldSkips.clear();
 			static std::vector<LightEntry*> newLightSkips;
 			newLightSkips.clear();
-			ClassifyPendingLights(now, pending, highPrioritySkips, sleepSkips, cameraHoldSkips, newLightSkips);
+			{
+				ZoneScopedN("SCM::ScheduleLoop::Classify");
+				ClassifyPendingLights(now, pending, highPrioritySkips, sleepSkips, cameraHoldSkips, newLightSkips);
+			}
 
 			// Base texels for the coverage classifier; lazily captured from the live
 			// texture, so fall back until it is readable.
@@ -2678,18 +2711,27 @@ namespace ShadowCasterManager
 					scoreRank.push_back(s_lights.Lights[i].lastScore);
 			std::sort(scoreRank.begin(), scoreRank.end());
 
-			LogAndRefreshSkippedLights(camera, baseTileTexels, scoreRank, highPrioritySkips, sleepSkips,
-				cameraHoldSkips, newLightSkips);
+			{
+				ZoneScopedN("SCM::ScheduleLoop::RefreshSkipped");
+				LogAndRefreshSkippedLights(camera, baseTileTexels, scoreRank, highPrioritySkips, sleepSkips,
+					cameraHoldSkips, newLightSkips);
+			}
 
-			ScorePendingLights(camera, now, baseTileTexels, auditDemand, scoreRank, pending);
+			{
+				ZoneScopedN("SCM::ScheduleLoop::Score");
+				ScorePendingLights(camera, now, baseTileTexels, auditDemand, scoreRank, pending);
+			}
 
 			int cfMaxRedrawStart = 0;
 			int32_t cfBudgetStart = 0;
 			bool cfIsFirstStart = false;
 			bool anyCostRejected = false;
 			uint32_t starvationFloorFrames = 0;
-			SortAndAdmitPendingLights(pending, now, maxRedraw, budgetRemain, isFirst, cfMaxRedrawStart,
-				cfBudgetStart, cfIsFirstStart, anyCostRejected, starvationFloorFrames);
+			{
+				ZoneScopedN("SCM::ScheduleLoop::SortAdmit");
+				SortAndAdmitPendingLights(pending, now, maxRedraw, budgetRemain, isFirst, cfMaxRedrawStart,
+					cfBudgetStart, cfIsFirstStart, anyCostRejected, starvationFloorFrames);
+			}
 
 			AuditDemandCounterfactual(auditDemand, pending, highPrioritySkips, cfMaxRedrawStart, cfBudgetStart,
 				cfIsFirstStart, starvationFloorFrames, maxRedraw, budgetRemain, anyCostRejected, now);
@@ -2913,16 +2955,8 @@ namespace ShadowCasterManager
 		// longer in the scene to avoid dereferencing freed memory below.
 		{
 			ZoneNamedN(zonePostAtomic, "SCM::PostAtomicRevalidate", true);
-			std::unordered_set<RE::BSShadowLight*> aliveAfterAtomic;
-			{
-				auto& alive = ssn->GetRuntimeData().activeShadowLights;
-				aliveAfterAtomic.reserve(alive.size() + 1);
-				if (sunLight)
-					aliveAfterAtomic.insert(sunLight);
-				for (auto& sp : alive)
-					if (auto* l = sp.get())
-						aliveAfterAtomic.insert(l);
-			}
+			static std::vector<RE::BSShadowLight*> aliveAfterAtomic;
+			CollectAliveShadowLights(ssn, sunLight, aliveAfterAtomic);
 
 			int endIdx = (int)*GetAccumLightSlot();
 
@@ -2933,7 +2967,7 @@ namespace ShadowCasterManager
 				if (e.Light && (!e.RedrawFrame || i >= s_lights.PointLightEnd(s_settings.ShadowLightCount))) {
 					// Membership check uses the snapshot built above (aliveAfterAtomic
 					// captures scene state for O(1) queries, since the atomic loop may have invalidated pointers).
-					if (aliveAfterAtomic.find(e.Light) == aliveAfterAtomic.end()) {
+					if (!std::binary_search(aliveAfterAtomic.begin(), aliveAfterAtomic.end(), e.Light)) {
 						s_schedDiag.reconciliation_clears++;
 						e.Clear();
 						continue;
@@ -3178,6 +3212,10 @@ namespace ShadowCasterManager
 				snap.scalePromotionRedundantAvoided = s_scalePromotionRedundantAvoided.load(std::memory_order_relaxed);
 				snap.convertReEnableRun = s_convertReEnableRun.load(std::memory_order_relaxed);
 				snap.convertReEnableSkipped = s_convertReEnableSkipped.load(std::memory_order_relaxed);
+				snap.convertReEnableToleranceSkipped = s_convertReEnableToleranceSkipped.load(std::memory_order_relaxed);
+				snap.convertedLights = static_cast<uint32_t>(s_normalConvert.size());
+				for (const auto& converted : s_normalConvert)
+					snap.convertedStrictLights += (converted.light && converted.light->portalStrict) ? 1u : 0u;
 				snap.cellResetsTotal = s_cellResetTotal.load(std::memory_order_relaxed);
 				snap.sleepSkips = s_schedDiag.sleep_skips;
 				snap.sleepSkipsTotal = s_sleepSkipTotal.load(std::memory_order_relaxed);
