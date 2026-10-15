@@ -3,7 +3,7 @@
 
 namespace ShadowCoverage
 {
-	static const float NativeFadeExponent = 16.0;
+	static const float NativeFadeStartFraction = 0.8;
 }
 
 #endif

@@ -284,7 +284,8 @@ namespace LightLimitFix
 		DirectionalShadowLightData shadowLightData = DirectionalShadowLights[0];
 
 		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(worldPosition, eyeIndex));
-		float fadeFactor = pow(saturate(shadowMapDepth / shadowLightData.EndSplitDistances.y), ShadowCoverage::NativeFadeExponent);
+		float fadeFactor = smoothstep(shadowLightData.EndSplitDistances.y * ShadowCoverage::NativeFadeStartFraction,
+			shadowLightData.EndSplitDistances.y, shadowMapDepth);
 		float farFallbackShadow = 1.0;
 		bool distantShadowsActive = ShadowSampling::HasDistantShadows();
 		if (distantShadowsActive)
