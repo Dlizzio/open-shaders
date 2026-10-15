@@ -2551,7 +2551,6 @@
     "feature.skin.wetness_perlin_noise_scale": "",
     "feature.skin.width_of_the_sss_transmittance_effect": "",
     "feature.sky_sync.caster_masser": "",
-    "feature.sky_sync.caster_none": "",
     "feature.sky_sync.caster_secunda": "",
     "feature.sky_sync.caster_sun": "",
     "feature.sky_sync.crescent_intensity": "",
@@ -2563,7 +2562,6 @@
     "feature.sky_sync.debug_shadow_dir": "",
     "feature.sky_sync.debug_shadow_target": "",
     "feature.sky_sync.debug_transitioning": "",
-    "feature.sky_sync.debug_vl_intensity": "",
     "feature.sky_sync.description": "",
     "feature.sky_sync.dim_sunlight_under_horizon": "",
     "feature.sky_sync.dim_sunlight_under_horizon_tooltip": "",
@@ -3982,5 +3980,7 @@
     "ui.vr.color_coding_primary": "",
     "ui.vr.color_coding_secondary": "",
     "ui.vr.primary_controller": "",
-    "ui.vr.secondary_controller": ""
+    "ui.vr.secondary_controller": "",
+    "feature.sky_sync.caster_none": "",
+    "feature.sky_sync.debug_vl_intensity": ""
 }

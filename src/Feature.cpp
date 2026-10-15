@@ -29,6 +29,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
+#include "Features/RainRefraction.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
 #include "Features/ReverseZ.h"
@@ -290,6 +291,7 @@ namespace
 #if defined(ENABLE_EFFECTS11)
 			&globals::features::effects11,
 #endif
+			&globals::features::rainRefraction,
 			&globals::features::unifiedWater,
 			&globals::features::horizonFix,
 			&globals::features::exponentialHeightFog,

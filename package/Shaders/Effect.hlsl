@@ -932,6 +932,11 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 #	endif
 
+#	if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
+	const bool isEnbVolumetricFog = SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) &&
+	                                (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && !(Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor);
+#	endif
+
 #	if defined(LIGHTING)
 	propertyColor = GetLightingColor(
 		input.MSPosition.xyz,
@@ -1096,14 +1101,12 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #	if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
-	const bool isEnbVolumetricFog = SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && !(Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor);
-#	endif
-
-#	if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
 	[branch] if (isEnbVolumetricFog)
 	{
 		alpha = saturate(alpha * SharedData::enbSettings.VolumetricFogOpacity);
-		float volumetricFogShadow = GetViewRayShadow(input.WorldPosition.xyz, depth, eyeIndex, screenNoise);
+		float volumetricFogShadow = 1.0;
+		[branch] if (SharedData::enbSettings.VolumetricFogEnableShadows)
+			volumetricFogShadow = GetViewRayShadow(input.WorldPosition.xyz, depth, eyeIndex, screenNoise);
 		float3 volumetricFogScale = SharedData::enbSettings.VolumetricFogIntensity * SharedData::enbSettings.VolumetricFogColorFilter;
 		[branch] if (SharedData::enbSettings.VolumetricFogEnableLighting)
 		{

@@ -22,6 +22,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
 #include "Features/ProceduralSun.h"
+#include "Features/RainRefraction.h"
 #include "Features/Skin.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
@@ -91,5 +92,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		Bloom::GetCommonBufferData(bloomSettings),
 		globals::features::postProcessing.GetCommonBufferData(),
 		globals::features::grassCollision.GetCommonBufferData(),
-		globals::features::horizonFix.GetCommonBufferData());
+		globals::features::horizonFix.GetCommonBufferData(),
+		globals::features::rainRefraction.GetCommonBufferData());
 }
