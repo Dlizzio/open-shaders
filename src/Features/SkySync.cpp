@@ -2,8 +2,8 @@
 #include "../I18n/I18n.h"
 #include "RE/B/BSVolumetricLightingRenderData.h"
 
-#include "Utils/Game.h"
 #include "Utils/DevBenchUx.h"
+#include "Utils/Game.h"
 
 #define I18N_KEY_PREFIX "feature.sky_sync."
 
@@ -653,7 +653,7 @@ inline void SkySync::CalculateAlternateSunDirectionAndDistance(RE::NiPoint3& out
 	const float daylightHours = sunset - sunrise;
 	const float elapsedHours = time >= sunrise ? time - sunrise : time - sunrise + HoursPerDay;
 	const float phase = elapsedHours < daylightHours ? elapsedHours / daylightHours :
-	                                                                 1.0f + (elapsedHours - daylightHours) / (HoursPerDay - daylightHours);
+	                                                   1.0f + (elapsedHours - daylightHours) / (HoursPerDay - daylightHours);
 	const float phi = DirectX::XM_PI * phase;
 	float sinPhi, cosPhi;
 	DirectX::XMScalarSinCosEst(&sinPhi, &cosPhi, phi);
@@ -863,6 +863,7 @@ RE::Moon* SkySync::GetVisibleMoonLightSource(const RE::Sky* sky) const
 		return secunda > 0.0f ? sky->secunda : nullptr;
 	default:
 		const auto caster = SelectMoonCaster(masser, secunda, shadowFader.target);
-		return caster == Caster::None ? nullptr : caster == Caster::Secunda ? sky->secunda : sky->masser;
+		return caster == Caster::None ? nullptr : caster == Caster::Secunda ? sky->secunda :
+		                                                                      sky->masser;
 	}
 }

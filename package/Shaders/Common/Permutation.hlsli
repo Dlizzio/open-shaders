@@ -89,7 +89,6 @@ namespace Permutation
 		static const uint CaptureReflectionRadiance = (1u << 26);
 	}
 
-
 	namespace ExtraFeatureFlags
 	{
 		static const int THLand0HasDisplacement = (1 << 0);

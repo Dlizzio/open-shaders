@@ -9,8 +9,8 @@
 
 #include "Globals.h"
 #include "GpuPass.h"
-#include "LODShadows.h"
 #include "I18n/I18n.h"
+#include "LODShadows.h"
 #include "SkySync.h"
 #include "State.h"
 #include "Util.h"

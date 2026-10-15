@@ -228,7 +228,12 @@ private:
 	uint32_t hiddenNodes = 0;
 	uint32_t enabledSegments = 0;
 	uint32_t disabledSegments = 0;
-	enum class TraceRequest { None, Start, Stop };
+	enum class TraceRequest
+	{
+		None,
+		Start,
+		Stop
+	};
 	std::atomic<TraceRequest> traceRequest{ TraceRequest::None };
 	std::atomic_bool traceWriting{ false };
 	bool traceEnabled = false;

@@ -84,7 +84,7 @@ namespace LODShadows
 				visibility = DepthMaps.SampleCmpLevelZero(ComparisonSampler, float3(uv, slice), clipPosition.z - bias);
 			else
 #endif
-			visibility = CompareBilinear(uv, 0.0, slice, clipPosition.z - bias, depthGradient, texelSize, linearSampler);
+				visibility = CompareBilinear(uv, 0.0, slice, clipPosition.z - bias, depthGradient, texelSize, linearSampler);
 		}
 		return visibility;
 	}
@@ -94,7 +94,8 @@ namespace LODShadows
 	{
 		float visibility = SampleMap(worldPosition, positionDx, positionDy, map.worldToClip,
 			map.parameters.x, map.parameters.z, map.filter.xyz, linearSampler, coverage, hardwareComparison);
-		[branch] if (map.history.z > 0.0 && map.history.y < 1.0) {
+		[branch] if (map.history.z > 0.0 && map.history.y < 1.0)
+		{
 			float previousCoverage;
 			float previousVisibility = SampleMap(worldPosition, positionDx, positionDy, map.historyWorldToClip,
 				map.history.x, map.parameters.z, map.filter.xyz, linearSampler, previousCoverage, hardwareComparison);
@@ -132,10 +133,13 @@ namespace LODShadows
 	{
 		RayProjection ray = (RayProjection)0;
 		ray.mode = RayUnshadowed;
-		[branch] if (enabled) {
-			[loop] for (uint i = 0; i < MapCount; ++i) {
+		[branch] if (enabled)
+		{
+			[loop] for (uint i = 0; i < MapCount; ++i)
+			{
 				MapData map = Maps[i];
-				if (map.parameters.y == 0.0) continue;
+				if (map.parameters.y == 0.0)
+					continue;
 				float3 start = mul(float4(startPosition, 1), map.worldToClip).xyz;
 				float3 end = mul(float4(endPosition, 1), map.worldToClip).xyz;
 				start.xy = start.xy * float2(0.5, -0.5) + 0.5;
@@ -143,7 +147,8 @@ namespace LODShadows
 				float3 lower = min(start, end);
 				float3 upper = max(start, end);
 				if (any(upper <= 0.0) || any(lower >= 1.0)) {
-					[branch] if (map.history.z > 0.0 && map.history.y < 1.0) {
+					[branch] if (map.history.z > 0.0 && map.history.y < 1.0)
+					{
 						float3 historyStart = mul(float4(startPosition, 1), map.historyWorldToClip).xyz;
 						float3 historyEnd = mul(float4(endPosition, 1), map.historyWorldToClip).xyz;
 						historyStart.xy = historyStart.xy * float2(0.5, -0.5) + 0.5;
@@ -162,7 +167,8 @@ namespace LODShadows
 					ray.end = end;
 					ray.parameters = float3(map.parameters.x, map.parameters.z, map.filter.x);
 					ray.historyParameters = float3(map.history.x, 1.0, map.history.w);
-					[branch] if (map.history.z > 0.0 && map.history.y < 1.0) {
+					[branch] if (map.history.z > 0.0 && map.history.y < 1.0)
+					{
 						ray.historyStart = mul(float4(startPosition, 1), map.historyWorldToClip).xyz;
 						ray.historyEnd = mul(float4(endPosition, 1), map.historyWorldToClip).xyz;
 						ray.historyStart.xy = ray.historyStart.xy * float2(0.5, -0.5) + 0.5;
@@ -189,23 +195,26 @@ namespace LODShadows
 			visibility = DepthMaps.SampleCmpLevelZero(ComparisonSampler, float3(position.xy, slice), position.z - bias);
 		else
 #endif
-		visibility = CompareBilinear(position.xy, 0.0, slice, position.z - bias, 0.0, texelSize, linearSampler);
+			visibility = CompareBilinear(position.xy, 0.0, slice, position.z - bias, 0.0, texelSize, linearSampler);
 		return visibility;
 	}
 
 	float SampleRay(RayProjection ray, float t, float3 worldPosition, SamplerState linearSampler)
 	{
 		float visibility = 1.0;
-		[branch] if (ray.mode < MapCount) {
+		[branch] if (ray.mode < MapCount)
+		{
 			float3 position = lerp(ray.start, ray.end, t);
 			visibility = CompareRayDepth(position, ray.parameters.x, ray.parameters.y, ray.parameters.z, ray.historyParameters.z > 0.0, linearSampler);
-			[branch] if (ray.historyParameters.y < 1.0) {
+			[branch] if (ray.historyParameters.y < 1.0)
+			{
 				float3 previousPosition = lerp(ray.historyStart, ray.historyEnd, t);
 				float previousVisibility = CompareRayDepth(previousPosition, ray.historyParameters.x, ray.parameters.y, ray.parameters.z, ray.historyParameters.z > 0.0, linearSampler);
 				visibility = lerp(previousVisibility, visibility, ray.historyParameters.y);
 			}
 		}
-		else [branch] if (ray.mode == RayFallback) {
+		else[branch] if (ray.mode == RayFallback)
+		{
 			float coverage;
 			visibility = FilterShadow(worldPosition, 0.0, 0.0, linearSampler, coverage, true);
 		}
@@ -232,7 +241,8 @@ namespace LODShadows
 			// The distant terrain depth offset must not become a displaced shadow receiver.
 			matchingDepth = FrameBuffer::ToStandardClipZ(positionCS, FrameBuffer::IsReverseProjection(eyeIndex)) <= LodLandscape::DepthBiasStart;
 #		endif
-			[branch] if (Maps[0].filter.w > 0.0 && matchingDepth) {
+			[branch] if (Maps[0].filter.w > 0.0 && matchingDepth)
+			{
 				float2 dimensions = float2(Maps[1].filter.w, Maps[2].filter.w);
 				float2 pixel = Stereo::ConvertToStereoUV(uv, eyeIndex) * dimensions - 0.5;
 				int2 base = int2(floor(pixel));
@@ -246,11 +256,12 @@ namespace LODShadows
 #		endif
 				float3 result = 0.0;
 				[unroll] for (int y = 0; y < 2; ++y)
-					[unroll] for (int x = 0; x < 2; ++x) {
-						float4 sample = FilteredMask.Load(int3(clamp(base + int2(x, y), lower, upper), 0));
-						float weight = (x ? fraction.x : 1.0 - fraction.x) * (y ? fraction.y : 1.0 - fraction.y) * MaskDepthWeight(depth, sample.z);
-						result += float3(sample.xy, 1) * weight;
-					}
+					[unroll] for (int x = 0; x < 2; ++x)
+				{
+					float4 sample = FilteredMask.Load(int3(clamp(base + int2(x, y), lower, upper), 0));
+					float weight = (x ? fraction.x : 1.0 - fraction.x) * (y ? fraction.y : 1.0 - fraction.y) * MaskDepthWeight(depth, sample.z);
+					result += float3(sample.xy, 1) * weight;
+				}
 				if (result.z > MinMaskWeight) {
 					coverage = result.y / result.z;
 					visibility = result.x / result.z;

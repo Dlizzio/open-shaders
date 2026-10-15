@@ -794,12 +794,12 @@ float GetViewRayShadow(float3 worldPosition, float depth, uint eyeIndex, float n
 		for (uint i = 0; i < sampleCount; i++) {
 			float t = (float(i) + noise) * rcpSampleCount;
 			float3 samplePositionWS = lerp(startPosition, endPosition, t);
-#			if defined(LOD_SHADOWS)
+#		if defined(LOD_SHADOWS)
 			shadow += ShadowSampling::GetTerrainCloudShadow(samplePositionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex) *
 			          LODShadows::SampleRay(lodRay, t, samplePositionWS + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, LinearSampler);
-#			else
+#		else
 			shadow += ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex, false, sampleDistantShadow);
-#			endif
+#		endif
 		}
 		shadow *= rcpSampleCount;
 	}

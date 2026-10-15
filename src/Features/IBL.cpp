@@ -343,9 +343,9 @@ void IBL::OnDraw()
 			continue;
 		auto* currentShader = globals::state->currentShader;
 		if (!currentShader || (currentShader->shaderType.get() != RE::BSShader::Type::Lighting &&
-		                         currentShader->shaderType.get() != RE::BSShader::Type::Sky &&
-		                         currentShader->shaderType.get() != RE::BSShader::Type::DistantTree &&
-		                         currentShader->shaderType.get() != RE::BSShader::Type::Effect)) {
+								  currentShader->shaderType.get() != RE::BSShader::Type::Sky &&
+								  currentShader->shaderType.get() != RE::BSShader::Type::DistantTree &&
+								  currentShader->shaderType.get() != RE::BSShader::Type::Effect)) {
 			captureFailed = true;
 			return;
 		}

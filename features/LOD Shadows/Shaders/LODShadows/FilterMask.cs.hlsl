@@ -38,10 +38,9 @@ float3 GetPosition(uint2 pixel, uint eyeIndex)
 	return position.xyz / max(position.w, MinProjectionW);
 }
 
-[numthreads(8, 8, 1)]
-void main(uint2 id : SV_DispatchThreadID)
-{
-	if (any(id >= MaskDimensions)) return;
+[numthreads(8, 8, 1)] void main(uint2 id : SV_DispatchThreadID) {
+	if (any(id >= MaskDimensions))
+		return;
 	float2 uv = (id + 0.5) / MaskDimensions;
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 	int2 lower = 0;
@@ -53,7 +52,8 @@ void main(uint2 id : SV_DispatchThreadID)
 #if defined(FILTER)
 	float4 center = InputMask.Load(int3(id, 0));
 	float3 result = float3(center.xy, 1) * CrossCenterWeight;
-	[unroll] for (uint i = 0; i < 4; ++i) {
+	[unroll] for (uint i = 0; i < 4; ++i)
+	{
 		float4 sample = InputMask.Load(int3(clamp(int2(id) + CrossOffsets[i], lower, upper), 0));
 		float weight = LODShadows::MaskDepthWeight(center.z, sample.z);
 		result += float3(sample.xy, 1) * weight;

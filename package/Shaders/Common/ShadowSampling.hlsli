@@ -91,7 +91,8 @@ namespace ShadowSampling
 	{
 		float shadow = 1.0;
 #if defined(LOD_SHADOWS)
-		[branch] if (HasDistantShadows()) {
+		[branch] if (HasDistantShadows())
+		{
 			float coverage = 0.0;
 			shadow = LODShadows::GetShadow(positionWS, LinearSampler, eyeIndex, surface, coverage);
 		}

@@ -2856,7 +2856,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(CHARACTER_RAIN_SURFACE)
 	float3 radianceRainDifference = 0.0;
 #		endif
-	[branch] if (captureRadiance) {
+	[branch] if (captureRadiance)
+	{
 		DirectContext radianceContext = dirLightContext;
 		radianceContext.lightColor = radianceDirLightColor;
 #		if defined(TRUE_PBR)
@@ -2871,7 +2872,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(CHARACTER_RAIN_SURFACE)
 		if (characterCoatMask > 0.0f)
 			radianceRainDifference = CharacterRainSpots::EvaluateLighting(characterSpotSurfaceNormal, radianceContext,
-				characterSpotRoughness, characterCoatMask, characterCoatIntensity) - characterRainSpecular;
+										 characterSpotRoughness, characterCoatMask, characterCoatIntensity) -
+			                         characterRainSpecular;
 #			endif
 #		endif
 		radianceLightDifference.diffuse = radianceLightOutput.diffuse - dirLightOutput.diffuse;
@@ -3439,9 +3441,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 		{
 			specularColor += envColor * Color::IrradianceToLinear(diffuseColor);
-#			if defined(CAPTURE_REFLECTION_RADIANCE)
+#		if defined(CAPTURE_REFLECTION_RADIANCE)
 			radianceSpecularColor += envColor * Color::IrradianceToLinear(diffuseColor + radianceLightDifference.diffuse);
-#			endif
+#		endif
 		}
 	indirectLobeWeights.diffuse += envColor;
 #	endif
@@ -3450,7 +3452,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(VANILLA_FRESNEL)
 	if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableGGX))
 #		endif
-		{
+	{
 		specularColor *= complexSpecular;
 #		if defined(CAPTURE_REFLECTION_RADIANCE)
 		radianceSpecularColor *= complexSpecular;
@@ -3591,9 +3593,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (SharedData::exponentialHeightFogSettings.enabled) {
 			if (!ExponentialHeightFog::ShouldDisableVanillaFog()) {
 				color.xyz = Color::BlendFog(color.xyz, vanillaFogColor, vanillaFogFactor);
-#				if defined(CAPTURE_REFLECTION_RADIANCE)
+#			if defined(CAPTURE_REFLECTION_RADIANCE)
 				radianceColor = Color::BlendFog(radianceColor, vanillaFogColor, vanillaFogFactor);
-#				endif
+#			endif
 			}
 			color.xyz = lerp(color.xyz, fogColor, fogFactor);
 #			if defined(CAPTURE_REFLECTION_RADIANCE)
@@ -3607,9 +3609,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 #		else
 		color.xyz = Color::BlendFog(color.xyz, fogColor, fogFactor);
-#		if defined(CAPTURE_REFLECTION_RADIANCE)
+#			if defined(CAPTURE_REFLECTION_RADIANCE)
 		radianceColor = Color::BlendFog(radianceColor, fogColor, fogFactor);
-#		endif
+#			endif
 #		endif
 	}
 #	endif
@@ -3837,9 +3839,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const bool gammaRenderTarget = ENABLE_LL && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget);
 	if (gammaRenderTarget) {
 		psout.Diffuse.xyz = Color::SceneLinearToGamma(psout.Diffuse.xyz);
-#		if defined(CAPTURE_REFLECTION_RADIANCE)
+#	if defined(CAPTURE_REFLECTION_RADIANCE)
 		radianceColor = Color::SceneLinearToGamma(radianceColor);
-#		endif
+#	endif
 	}
 
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.

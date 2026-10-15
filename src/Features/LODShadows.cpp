@@ -321,7 +321,8 @@ void LODShadows::DrawMask()
 	if (measured)
 		query.batch.BeginInterval(globals::d3d::device, context);
 	const SKSE::stl::scope_exit finishTiming([&]() noexcept {
-		if (!measured) return;
+		if (!measured)
+			return;
 		query.batch.CommitInterval(context);
 		query.batch.EndBatch(context);
 		query.pending = true;
@@ -343,7 +344,8 @@ void LODShadows::DrawMask()
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		context->CSSetShaderResources(0, uint32_t(savedViews.size()), savedViews.data());
 		for (auto* view : savedViews)
-			if (view) view->Release();
+			if (view)
+				view->Release();
 		auto* buffer = savedBuffer.get();
 		auto* sampler = savedSampler.get();
 		auto* uav = savedUAV.get();
@@ -745,7 +747,8 @@ ID3D11InputLayout* LODShadows::GetLayout(const Caster& a_caster)
 void LODShadows::ResolveTimings()
 {
 	for (auto& query : filterQueries) {
-		if (!query.pending) continue;
+		if (!query.pending)
+			continue;
 		const auto status = query.batch.TryResolve(globals::d3d::context, [&](uint32_t, uint64_t ticks, uint64_t frequency) {
 			lastFilterMs = double(ticks) * 1000.0 / double(frequency);
 			lastFilterFrame = query.frame;
@@ -987,7 +990,7 @@ bool LODShadows::ReplacesTerrainShadows() const
 		return false;
 	const auto* manager = RE::BGSTerrainManager::GetActiveManager();
 	return manager && manager->worldSpace && manager->worldSpace->GetFormID() == worldSpaceID && !manager->mapMode &&
-		!RE::BGSTerrainManager::LoadScreenUp() && std::ranges::all_of(maps, [](const Map& map) { return map.valid && map.terrainValid; });
+	       !RE::BGSTerrainManager::LoadScreenUp() && std::ranges::all_of(maps, [](const Map& map) { return map.valid && map.terrainValid; });
 }
 
 void LODShadows::Publish()
@@ -1211,8 +1214,7 @@ void LODShadows::RecordTrace(const RE::NiPoint3& a_direction, bool a_refreshImme
 			const auto& data = geometry->GetGeometryRuntimeData();
 			const auto* mesh = static_cast<RE::BSGraphics::TriShape*>(data.rendererData);
 			const auto* shape = geometry->AsTriShape();
-			record.terrainGeometry.push_back({
-				{ "geometry", reinterpret_cast<uintptr_t>(geometry.get()) }, { "name", geometry->name.c_str() },
+			record.terrainGeometry.push_back({ { "geometry", reinterpret_cast<uintptr_t>(geometry.get()) }, { "name", geometry->name.c_str() },
 				{ "renderer", reinterpret_cast<uintptr_t>(mesh) },
 				{ "vertices", mesh ? reinterpret_cast<uintptr_t>(mesh->vertexBuffer) : 0 },
 				{ "indices", mesh ? reinterpret_cast<uintptr_t>(mesh->indexBuffer) : 0 },
@@ -1256,7 +1258,7 @@ void LODShadows::SaveTrace()
 	if (traceFrames.empty())
 		return;
 	const auto path = Util::PathHelpers::GetCommunityShaderPath() / "Captures" /
-		std::format("LODShadows_{}_{}.json", GetCurrentProcessId(), traceFrames.front().frame);
+	                  std::format("LODShadows_{}_{}.json", GetCurrentProcessId(), traceFrames.front().frame);
 	const auto runtime = REL::Module::get().version().string();
 	{
 		std::scoped_lock lock(diagnosticsMutex);
