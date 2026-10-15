@@ -10,6 +10,7 @@ struct RainRefraction : Feature
 {
 public:
 	virtual bool IsCore() const override { return true; }
+	virtual bool SupportsVR() override { return true; }
 
 	virtual inline std::string GetName() override { return "Rain Refraction"; }
 	virtual std::string GetDisplayName() override { return T("feature.rain_refraction.name", "Rain Refraction"); }
@@ -47,6 +48,9 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
+	/** @brief Supplies the rain shader data while a preset owns the rain settings, or nothing otherwise. */
+	using PresetResolver = std::function<std::optional<PerFrame>()>;
+
 	/** @brief A loaded raindrop texture, or the reason it failed to load. */
 	struct RaindropTexture
 	{
@@ -57,6 +61,9 @@ public:
 	RaindropTexture defaultRaindrops;  ///< Bundled with the feature
 	RaindropTexture presetRaindrops;   ///< enbraindrops.png from the Effects 11 preset
 
+	PresetResolver presetResolver;
+	bool presetManaged = false;
+
 	virtual void RestoreDefaultSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -64,9 +71,12 @@ public:
 	/** @brief Loads the bundled default raindrop texture. */
 	virtual void SetupResources() override;
 
-	/** @brief Shader data for the current frame, taken from the Effects 11 preset while IsManagedByENB(). */
+	/** @brief Lets a preset provider (Effects 11) take over the rain settings; this feature never reads that provider directly. */
+	void SetPresetResolver(PresetResolver a_resolver);
+
+	/** @brief Shader data for the current frame, taken from the preset resolver while it supplies data. */
 	PerFrame GetCommonBufferData();
-	/** @brief Returns true while Effects 11 is active, which then owns the rain settings. */
+	/** @brief Returns true while a preset owns the rain settings, as of the last GetCommonBufferData. */
 	bool IsManagedByENB() const;
 	/** @brief The preset's raindrop texture while managed by ENB and it loaded, otherwise the bundled default; null if neither loaded. */
 	ID3D11ShaderResourceView* GetRaindropSRV() const;

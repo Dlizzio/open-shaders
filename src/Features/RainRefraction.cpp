@@ -2,10 +2,6 @@
 
 #include <DirectXTex.h>
 
-#include "Effects11.h"
-#include "Effects11/EffectManager.h"
-#include "Effects11/SettingManager.h"
-
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -148,10 +144,14 @@ void RainRefraction::LoadPresetRaindrops(const std::filesystem::path& a_presetPa
 	presetRaindrops = LoadRaindropTexture(a_presetPath / "enbraindrops.png", "RainRefraction::PresetRaindrops");
 }
 
+void RainRefraction::SetPresetResolver(PresetResolver a_resolver)
+{
+	presetResolver = std::move(a_resolver);
+}
+
 bool RainRefraction::IsManagedByENB() const
 {
-	const auto& effects11 = globals::features::effects11;
-	return effects11.loaded && effects11.enableEffect;
+	return presetManaged;
 }
 
 ID3D11ShaderResourceView* RainRefraction::GetRaindropSRV() const
@@ -163,11 +163,6 @@ ID3D11ShaderResourceView* RainRefraction::GetRaindropSRV() const
 
 RainRefraction::PerFrame RainRefraction::GetCommonBufferData()
 {
-	// Effects 11 resolves its active state and time of day on first use each frame
-	auto& effects11 = globals::features::effects11;
-	if (effects11.loaded)
-		effects11.CheckCommonData();
-
 	if (!perFrameCacheChecker.IsNewFrame())
 		return perFrameCache;
 
@@ -177,12 +172,10 @@ RainRefraction::PerFrame RainRefraction::GetCommonBufferData()
 		.MotionTransparency = settings.MotionTransparency
 	};
 
-	if (IsManagedByENB()) {
-		auto& settingManager = SettingManager::GetSingleton();
-		data.Enable = settingManager.GetValue<bool>(EffectManager::GetSingleton().ids.enableRain);
-		data.MotionStretch = settingManager.GetInterpolatedTimeOfDayValue("MotionStretch", "RAIN");
-		data.MotionTransparency = settingManager.GetInterpolatedTimeOfDayValue("MotionTransparency", "RAIN");
-	}
+	const auto preset = presetResolver ? presetResolver() : std::nullopt;
+	presetManaged = preset.has_value();
+	if (preset)
+		data = *preset;
 	data.Enable = data.Enable && GetRaindropSRV() && alphaBlendState;
 
 	perFrameCache = data;

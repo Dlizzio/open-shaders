@@ -121,8 +121,23 @@ void EffectManager::LogPresetStatus() const
 
 void EffectManager::Apply()
 {
-	if (auto& rainRefraction = globals::features::rainRefraction; rainRefraction.loaded)
+	if (auto& rainRefraction = globals::features::rainRefraction; rainRefraction.loaded) {
 		rainRefraction.LoadPresetRaindrops(PresetManager::GetSingleton().GetENBSeriesPath());
+		rainRefraction.SetPresetResolver([]() -> std::optional<RainRefraction::PerFrame> {
+			auto& effects11 = globals::features::effects11;
+			if (!effects11.loaded)
+				return std::nullopt;
+			effects11.CheckCommonData();
+			if (!effects11.enableEffect)
+				return std::nullopt;
+			auto& settingManager = SettingManager::GetSingleton();
+			return RainRefraction::PerFrame{
+				.Enable = settingManager.GetValue<bool>(EffectManager::GetSingleton().ids.enableRain),
+				.MotionStretch = settingManager.GetInterpolatedTimeOfDayValue("MotionStretch", "RAIN"),
+				.MotionTransparency = settingManager.GetInterpolatedTimeOfDayValue("MotionTransparency", "RAIN")
+			};
+		});
+	}
 
 	enbDepthOfField.Apply();
 	enbBloom.Apply();
