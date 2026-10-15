@@ -52,7 +52,7 @@ bool SunShadowMaskFix::ShouldSetSunBits(const RE::BSLightingShaderProperty* prop
 		return false;
 
 	const auto& bound = geometry->worldBound;
-	return (bound.center - accumulator->GetRuntimeData()->eyePosition).Length() - bound.radius < *shadowDistance;
+	return (bound.center - accumulator->GetRuntimeData().eyePosition).Length() - bound.radius < *shadowDistance;
 }
 
 RE::BSShaderProperty::RenderPassArray* SunShadowMaskFix::BSLightingShaderProperty_GetRenderPasses::thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, uint32_t renderMode, RE::BSShaderAccumulator* accumulator)

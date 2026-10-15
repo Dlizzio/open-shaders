@@ -679,12 +679,6 @@ namespace BackgroundBlur
 		cachedSourceTexture = nullptr;
 	}
 
-	void ReleaseSourceCache()
-	{
-		cachedSourceSRV = nullptr;
-		cachedSourceTexture = nullptr;
-	}
-
 	void Cleanup()
 	{
 		std::lock_guard<std::mutex> lock(resourceMutex);
