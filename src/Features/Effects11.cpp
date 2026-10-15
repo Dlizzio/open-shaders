@@ -12,7 +12,6 @@
 #include "Deferred.h"
 #include "Globals.h"
 #include "GpuPass.h"
-#include "IBL.h"
 #include "ShaderCache.h"
 #include "SkySync.h"
 #include "State.h"
@@ -1149,10 +1148,7 @@ void Effects11::DrawVolumetricScattering()
 	}
 
 	if (!applyVolumetricRaysPS) {
-		std::vector<std::pair<const char*, const char*>> defines;
-		if (globals::features::ibl.loaded)
-			defines.push_back({ "IBL", nullptr });
-		applyVolumetricRaysPS.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\Effects11\\ApplyVolumetricRaysPS.hlsl", defines, "ps_5_0")));
+		applyVolumetricRaysPS.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\Effects11\\ApplyVolumetricRaysPS.hlsl", {}, "ps_5_0")));
 		if (!applyVolumetricRaysPS) {
 			volumetricRaysFailed = true;
 			return;
@@ -1294,14 +1290,6 @@ void Effects11::DrawVolumetricScattering()
 
 		ID3D11ShaderResourceView* srvs[2] = { vlTexA->srv.get(), vlDepthHalf->srv.get() };
 		context->PSSetShaderResources(0, 2, srvs);
-		auto& ibl = globals::features::ibl;
-		if (ibl.loaded) {
-			ID3D11ShaderResourceView* iblSRVs[2] = {
-				ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr,
-				ibl.skyIBLTexture ? ibl.skyIBLTexture->srv.get() : nullptr
-			};
-			context->PSSetShaderResources(14, 2, iblSRVs);
-		}
 		context->PSSetSamplers(0, 1, &sampler);
 
 		// Half-res dimensions for the bilateral upsample.
