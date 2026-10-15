@@ -586,7 +586,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	// Interiors light VL from the lighting template, which the sunlight grade never touched
 	data.GameVolumetricRaysLightScale = Util::IsInterior() ? float3{ 1.0f, 1.0f, 1.0f } : directLightingUngradeScale;
 	data.GameVolumetricRaysCustomContribution = gameVolumetricLighting.customColor.contribution;
-	data.GameVolumetricRaysCustomColor = { gameVolumetricLighting.color.red, gameVolumetricLighting.color.green, gameVolumetricLighting.color.blue };
+	data.GameVolumetricRaysCustomColor = float3{ gameVolumetricLighting.color.red, gameVolumetricLighting.color.green, gameVolumetricLighting.color.blue };
 
 	data.ParticleIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "PARTICLE");
 	data.ParticleLightingInfluence = settingManager.GetInterpolatedTimeOfDayValue("LightingInfluence", "PARTICLE");
@@ -817,7 +817,7 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		// The game lights its VL with this colour too, but ENB presets tune [GAMEVOLUMETRICRAYS] against the ungraded sunlight
 		static constexpr float minGradedChannel = 1e-6f;
 		auto ungradeScale = [](float a_ungraded, float a_graded) { return a_graded > minGradedChannel ? a_ungraded / a_graded : 1.0f; };
-		directLightingUngradeScale = { ungradeScale(ungradedDirLightColor.x, dirLightColorF3.x), ungradeScale(ungradedDirLightColor.y, dirLightColorF3.y),
+		directLightingUngradeScale = float3{ ungradeScale(ungradedDirLightColor.x, dirLightColorF3.x), ungradeScale(ungradedDirLightColor.y, dirLightColorF3.y),
 			ungradeScale(ungradedDirLightColor.z, dirLightColorF3.z) };
 
 		dirLightColor = F3ToNi(dirLightColorF3);
