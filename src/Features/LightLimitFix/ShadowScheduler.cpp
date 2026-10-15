@@ -92,7 +92,21 @@ namespace ShadowCasterManager
 		// counts as "moved".
 		const float kPosStep = std::max(posStep, 1.0f);
 		constexpr float kRadiusStep = 1.0f;
+		// worldBound and skinInstance sit on different cache lines of a geometry
+		// that the walk has not touched this frame: pull a few ahead.
+		constexpr int kPrefetchAhead = 8;
+		auto lookahead = light->geomList.begin();
+		const auto listEnd = light->geomList.end();
+		for (int i = 0; i < kPrefetchAhead && lookahead != listEnd; ++i)
+			++lookahead;
 		for (auto& nip : light->geomList) {
+			if (lookahead != listEnd) {
+				if (const auto* ahead = (*lookahead).get()) {
+					_mm_prefetch(reinterpret_cast<const char*>(&ahead->worldBound), _MM_HINT_T0);
+					_mm_prefetch(reinterpret_cast<const char*>(&ahead->GetGeometryRuntimeData().skinInstance), _MM_HINT_T0);
+				}
+				++lookahead;
+			}
 			auto* ts = nip.get();
 			if (!ts)
 				continue;
@@ -3089,6 +3103,9 @@ namespace ShadowCasterManager
 				snap.frontAppendTotal = s_frontAppendTotal.load(std::memory_order_relaxed);
 				snap.backOnlyAppendTotal = s_backOnlyAppendTotal.load(std::memory_order_relaxed);
 				snap.hemisphereDropTotal = s_hemisphereDropTotal.load(std::memory_order_relaxed);
+				snap.passlessCasterSkipTotal = s_passlessCasterSkipTotal.load(std::memory_order_relaxed);
+				for (int reason = 1; reason < 5; ++reason)
+					snap.passlessCasterSkipByReason[reason] = s_passlessCasterSkipByReason[reason].load(std::memory_order_relaxed);
 				if (const uint32_t n = s_cpuAccumN.exchange(0, std::memory_order_relaxed))
 					snap.cpuAccumUsAvg = static_cast<uint32_t>(s_cpuAccumUs.exchange(0, std::memory_order_relaxed) / n);
 				if (const uint32_t n = s_cpuSubmitN.exchange(0, std::memory_order_relaxed))
