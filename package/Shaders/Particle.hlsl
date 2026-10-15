@@ -334,6 +334,7 @@ namespace Raindrop
 	static const float WaterF0 = 0.02;
 	static const float Roughness = 0.3;              // Perceptual roughness of the drop's surface highlight
 	static const float TransmissionExponent = 32.0;  // Tightness of the glow of a light seen through a drop
+	static const float HalfVectorEpsilon = 1e-8;     // Keeps the half vector finite when the light is opposite the view
 }
 #	endif
 
@@ -351,7 +352,10 @@ float3 ShadeLight(ParticleSurface surface, float3 lightColor, float intensity, f
 {
 #	if defined(REFRACTIVE_RAIN)
 	if (surface.isRaindrop) {
-		float3 H = normalize(surface.view + L);
+		if (intensity <= 0.0)
+			return 0.0;
+
+		float3 H = (surface.view + L) * rsqrt(max(dot(surface.view + L, surface.view + L), Raindrop::HalfVectorEpsilon));
 		float NdotL = saturate(dot(surface.normal, L));
 		float NdotV = saturate(dot(surface.normal, surface.view));
 		float NdotH = saturate(dot(surface.normal, H));
