@@ -1620,6 +1620,25 @@ namespace ShadowCasterManager
 											"actually changing (e.g. a lit interior with the player standing still).\n"
 											"Worst-case staleness stays bounded by Shadow Staleness Ceiling above."));
 
+			ImGui::Checkbox(T(TKEY("demand_tile_cap"), "Shrink Tiles of Blocked Lights"), &settings.DemandTileCap);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", T(TKEY("demand_tile_cap_tooltip"),
+											"Gives a light the GPU measures as lit on screen far less than the\n"
+											"best-lit light a small shadow tile, so blocked lights stop taking large tiles."));
+
+			ImGui::TreePop();
+		}
+
+		// ---- Spot lights ----------------------------------------------------
+		if (ImGui::TreeNode(T(TKEY("spot_lights"), "Spot Lights##SpotLights"))) {
+			ImGui::Checkbox(T(TKEY("spot_lit_region"), "Score Spot Lights by Their Lit Area"), &settings.SpotLitRegion);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", T(TKEY("spot_lit_region_tooltip"),
+											"Measures a spot light's distance to the camera and player from the\n"
+											"frustum it lights instead of from its emitter, which can be far from\n"
+											"the lit area, and wakes its shadow for the player only inside that\n"
+											"frustum."));
+
 			ImGui::TreePop();
 		}
 
