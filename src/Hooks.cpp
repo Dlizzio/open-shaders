@@ -4,6 +4,7 @@
 #include "ShaderTools/LegacyGraphicsCompatibility.h"
 #include "Utils/ExternalEmittance.h"
 
+#include "EngineFix.h"
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -19,6 +20,7 @@
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PostProcessing.h"
+#include "Features/RainRefraction.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
@@ -115,6 +117,7 @@ struct BSShader_LoadShaders
 				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
 					feature->GenerateShaderPermutations(shader);
 				});
+				EngineFix::GenerateAllShaderPermutations(shader);
 			}
 
 			for (const auto& entry : shader->vertexShaders) {
@@ -347,6 +350,7 @@ namespace WeatherExtensions
 		static void thunk(RE::Sky* sky, float a_delta)
 		{
 			func(sky, a_delta);
+			Feature::ForEachLoadedFeature("OnBeforeWeatherColorGrading", [sky](Feature* feature) { feature->OnBeforeWeatherColorGrading(sky); });
 #if defined(ENABLE_EFFECTS11)
 			if (globals::features::effects11.loaded)
 				globals::features::effects11.OnSkyUpdateColors(sky);
@@ -445,10 +449,8 @@ namespace PostProcessingExtensions
 		static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 		{
 			func(This, Pass, RenderFlags);
-#if defined(ENABLE_EFFECTS11)
-			if (globals::features::effects11.loaded)
-				globals::features::effects11.ModifyParticle(Pass);
-#endif
+			if (globals::features::rainRefraction.loaded)
+				globals::features::rainRefraction.ModifyParticle();
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

@@ -333,6 +333,7 @@ public:
 	bool wasEmpty = false;
 	bool wasWorld = false;
 	bool wasFirstPerson = false;
+	RE::NiPoint3 previousWorldEyePosition{};
 	int previousRoomIndex = -1;
 
 	Util::FrameChecker frameChecker;

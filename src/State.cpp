@@ -6,7 +6,9 @@
 #include <pystring/pystring.h>
 
 #include "Deferred.h"
+#include "EngineFixes/LODBlendRingFix.h"
 #include "EngineFixes/LandscapeSeamsFix.h"
+#include "EngineFixes/SunShadowMaskFix.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
 #include "Features/CSUtility.h"
@@ -23,6 +25,7 @@
 #include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
+#include "Features/RainRefraction.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/SceneManager.h"
 #include "Features/SceneSelector.h"
@@ -200,12 +203,10 @@ void State::Draw()
 			cloudShadows.SkyShaderHacks();
 		}
 
-#if defined(ENABLE_EFFECTS11)
-		if (globals::features::effects11.loaded) {
-			ZoneScopedN("Effects11::ParticleShaderHacks");
-			globals::features::effects11.ParticleShaderHacks();
+		if (globals::features::rainRefraction.loaded) {
+			ZoneScopedN("RainRefraction::ParticleShaderHacks");
+			globals::features::rainRefraction.ParticleShaderHacks();
 		}
-#endif
 
 		if (terrainHelper.loaded) {
 			ZoneScopedN("TerrainHelper::SetShaderResources");
@@ -407,6 +408,8 @@ void State::Reset()
 
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	LandscapeSeamsFix::GetInstance().Reset();
+	LODBlendRingFix::GetInstance().Update();
+	SunShadowMaskFix::Update();
 
 	worldRenderedThisFrame = false;
 
