@@ -21,6 +21,10 @@ namespace Effects11Util
 	// HS/DS/GS/SO aren't used here). The destructor covers a throw between Save() and Restore().
 	struct D3D11FullStateBackup
 	{
+		D3D11FullStateBackup() = default;
+		D3D11FullStateBackup(const D3D11FullStateBackup&) = delete;
+		D3D11FullStateBackup& operator=(const D3D11FullStateBackup&) = delete;
+
 		ID3D11DeviceContext* savedCtx = nullptr;
 		bool released = false;
 

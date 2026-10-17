@@ -613,7 +613,7 @@ bool GrassBucketStore::EnsureBucketCapacity(GrassBucket& b, uint32_t needed, ID3
 		return false;
 	}
 
-	uint32_t cap = b.capacityInstances ? b.capacityInstances : std::clamp(std::bit_ceil(needed), 256u, kMaxBucketInstances);
+	uint32_t cap = b.capacityInstances ? b.capacityInstances : std::clamp(std::bit_ceil(needed), 256u, maxInstances);
 	while (cap < needed)
 		cap = std::min(cap * 2, maxInstances);
 
