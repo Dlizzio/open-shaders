@@ -86,10 +86,10 @@ void LightLimitFix::CopyShadowLightData()
 	ZoneScoped;
 	CS_GPU_PASS("LightLimitFix::CopyShadowLightData");
 
-	// Shared by every early-out below: clears slot state and unbinds t102 so
+	// Shared by every early-out below: clears slot state and unbinds t102-t104 so
 	// overlay/shaders degrade to unshadowed instead of stale prior-frame data.
 	auto unbindShadowSRVs = []() {
-		ID3D11ShaderResourceView* nullSRVs[2]{ nullptr, nullptr };
+		ID3D11ShaderResourceView* nullSRVs[3]{ nullptr, nullptr, nullptr };
 		globals::d3d::context->PSSetShaderResources(102, ARRAYSIZE(nullSRVs), nullSRVs);
 	};
 	auto degradeToUnshadowed = [this, &unbindShadowSRVs]() {
