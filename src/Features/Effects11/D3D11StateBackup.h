@@ -183,6 +183,11 @@ namespace Effects11Util
 	// ranges in sync with its bindings.
 	struct D3D11ScopedPostFxBackup
 	{
+		D3D11ScopedPostFxBackup() = default;
+		D3D11ScopedPostFxBackup(const D3D11ScopedPostFxBackup&) = delete;
+		D3D11ScopedPostFxBackup& operator=(const D3D11ScopedPostFxBackup&) = delete;
+		~D3D11ScopedPostFxBackup() { Release(); }
+
 		static constexpr UINT kPSSRVs = 16;
 		static constexpr UINT kPSCBs = 2;
 		static constexpr UINT kCSSRVs = 2;
