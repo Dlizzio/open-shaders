@@ -402,9 +402,7 @@ namespace SharedData
 		float FireIntensity;
 
 		float FireCurve;
-		uint EnableRain;
-		float RainMotionStretch;
-		float RainMotionTransparency;
+		float3 pad0;
 
 		float CloudsCurve;
 		float CloudsDesaturation;
@@ -433,7 +431,7 @@ namespace SharedData
 
 		uint EnableVolumetricRays;
 		float VolumetricRaysIntensity;
-		float VolumetricRaysExtinction;
+		float VolumetricRaysDensity;
 		float VolumetricRaysSkyColorAmount;
 
 		float VolumetricRaysDesaturation;
@@ -510,7 +508,7 @@ namespace SharedData
 		uint VolumetricFogEnableLighting;
 
 		float3 VolumetricRaysSkyColor;
-		float VolumetricRaysPad0;
+		uint VolumetricFogEnableShadows;
 
 		float StarsCurve;
 		float StarsIntensity;
@@ -524,6 +522,16 @@ namespace SharedData
 
 		float AuroraCurve;
 		float3 NightSkyPad;
+
+		uint VolumetricRaysSampleCount;
+		uint GameVolumetricRaysDisableDithering;
+		float2 GameVolumetricRaysPad0;
+
+		float3 GameVolumetricRaysLightScale;
+		float GameVolumetricRaysCustomContribution;
+
+		float3 GameVolumetricRaysCustomColor;
+		float GameVolumetricRaysPad1;
 	};
 	struct TerrainBlendingSettings
 	{
@@ -592,7 +600,15 @@ namespace SharedData
 		float volumetricFogNoiseThreshold;
 		float2 pad3;
 		float3 volumetricFogNoiseVelocity;
-		float pad4;
+		uint volumetricFogNoiseType;
+		uint mistsEnabled;
+		float mistStrength;
+		float mistRange;
+		float mistSize;
+		float mistDriftSpeed;
+		uint mistFollowWind;
+		float mistWindMultiplier;
+		float pad5;
 	};
 
 	struct TruePBRSettings
@@ -677,6 +693,14 @@ namespace SharedData
 		float3 pad;
 	};
 
+	struct RainRefractionSettings
+	{
+		uint Enable;
+		float MotionStretch;
+		float MotionTransparency;
+		float pad0;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -708,6 +732,7 @@ namespace SharedData
 		PostProcessingSettings postProcessingSettings;
 		GrassCollisionData grassCollisionData;
 		HorizonFixSettings horizonFixSettings;
+		RainRefractionSettings rainRefractionSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

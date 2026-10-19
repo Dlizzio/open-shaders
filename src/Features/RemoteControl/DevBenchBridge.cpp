@@ -63,7 +63,9 @@ namespace
 		return storage.emplace_back(I18n::ExpandBrand(a_template)).c_str();
 	}
 
-	std::unordered_set<Feature*> g_bootLoadedFeatures;
+	// Main thread only: the only features toggle may switch back on. One off for any other
+	// reason was never loaded, or turned itself off during boot, and must stay off.
+	std::unordered_set<Feature*> g_toggledOffFeatures;
 
 	// Current render frame, used as a coarse "enqueued at" stamp so callers can poll
 	// `inspect kind=openshaders` until frame_count advances past it (i.e. a queued
@@ -245,7 +247,7 @@ namespace
 			const bool explicitVal = a_args.value("enabled", false);
 			task->AddTask([target, hasExplicit, explicitVal, shortName]() {
 				const bool applied = hasExplicit ? explicitVal : !target->loaded;
-				if (applied && !target->loaded && !g_bootLoadedFeatures.contains(target)) {
+				if (applied && !target->loaded && !g_toggledOffFeatures.contains(target)) {
 					if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 						const std::string payload = json{ { "shortName", shortName }, { "error", "feature was not loaded at boot; enable it at boot and restart" } }.dump();
 						dvb->EmitEvent("openshaders.feature.changed", payload.c_str());
@@ -267,8 +269,10 @@ namespace
 				}
 				if (wantsUnsupportedRuntime)
 					logger::warn("DevBenchBridge: enabling '{}' via Developer Mode override despite being unsupported on the current runtime", shortName);
-				if (target->loaded && !applied)
+				if (target->loaded && !applied) {
 					target->OnRuntimeDisabled();
+					g_toggledOffFeatures.insert(target);
+				}
 				target->loaded = applied;
 				if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 					const std::string payload = json{ { "shortName", shortName }, { "enabled", applied } }.dump();
@@ -655,6 +659,31 @@ namespace
 				{ "ptr", std::format("{:#018x}", ptr) },
 				{ "reason", ShadowCasterManager::SchedReasonName(reason) },
 			});
+		json visibility = json::array();
+		int visEngineOutOursIn = 0;
+		int visEngineInOursOut = 0;
+		for (const auto& v : snap.visibility) {
+			visEngineOutOursIn += (v.engineCulled && v.ownInFrustum) ? 1 : 0;
+			visEngineInOursOut += (!v.engineCulled && !v.ownInFrustum) ? 1 : 0;
+			visibility.push_back(json{
+				{ "ptr", std::format("{:#018x}", v.light) },
+				{ "chosen", v.chosen },
+				{ "engineCulled", v.engineCulled },
+				{ "frustrumCull", v.frustrumCull },
+				{ "lodDimmer", v.lodDimmer },
+				{ "distance", v.distance },
+				{ "radius", v.radius },
+				{ "ownInFrustum", v.ownInFrustum },
+				{ "cameraHold", v.cameraHold },
+				{ "hidden", v.hidden },
+				{ "shadowDistanceCulled", v.shadowDistanceCulled },
+				{ "frustumCulled", v.frustumCulled },
+				{ "name", v.name },
+				{ "x", v.x },
+				{ "y", v.y },
+				{ "z", v.z },
+			});
+		}
 		json slots = json::array();
 		// Bucketed from tile.size, not renderedScale, which reflects the requested
 		// scale -- a starved light can request full and get only the smallest tile.
@@ -680,6 +709,14 @@ namespace
 				{ "budgetScale", s.budgetScale },
 				{ "pendingScale", s.pendingScale },
 				{ "renderedScale", s.renderedScale },
+				{ "demandMax", s.demandMax },
+				{ "untouchedSamples", s.untouchedSamples },
+				{ "litMax", s.litMax },
+				{ "litReason", s.litReason },
+				{ "litTile", s.litTile },
+				{ "litSum", s.litSum },
+				{ "litSmoothed", s.litSmoothed },
+				{ "litCapped", s.litCapped },
 				{ "tile", json{ { "x", s.tileX }, { "y", s.tileY }, { "size", s.tileSize }, { "contentValid", s.tileContentValid } } },
 				{ "geomListSize", s.geomListSize },
 				{ "staticValid", s.staticValid },
@@ -708,6 +745,9 @@ namespace
 			{ "invalidOther", snap.invalidOther },
 			{ "slotsInUse", snap.slotsInUse },
 			{ "lights", lights },
+			{ "visibility", visibility },
+			{ "visEngineOutOursIn", visEngineOutOursIn },
+			{ "visEngineInOursOut", visEngineInOursOut },
 			{ "slots", slots },
 			{ "classes", json{ { "full", classes[0] }, { "half", classes[1] }, { "quarter", classes[2] }, { "eighth", classes[3] }, { "sixteenth", classes[4] }, { "none", classNone } } },
 			{ "atlas", json{
@@ -756,6 +796,14 @@ namespace
 							{ "scalePromotionRedundantAvoided", snap.scalePromotionRedundantAvoided },
 							{ "convertReEnableRun", snap.convertReEnableRun },
 							{ "convertReEnableSkipped", snap.convertReEnableSkipped },
+							{ "convertReEnableToleranceSkipped", snap.convertReEnableToleranceSkipped },
+							{ "originPinnedLights", snap.originPinnedLights },
+							{ "warpsRun", snap.warpsRun },
+							{ "warpsSkippedSubPixel", snap.warpsSkippedSubPixel },
+							{ "warpsSkippedOffscreen", snap.warpsSkippedOffscreen },
+							{ "warpsSkippedNoDemand", snap.warpsSkippedNoDemand },
+							{ "convertedLights", snap.convertedLights },
+							{ "convertedStrictLights", snap.convertedStrictLights },
 							{ "cellResetsTotal", snap.cellResetsTotal },
 							{ "cullPoolDropsTotal", snap.cullPoolDropsTotal },
 							{ "casterCullDropsTotal", snap.casterCullDropsTotal },
@@ -763,6 +811,11 @@ namespace
 							{ "frontAppendTotal", snap.frontAppendTotal },
 							{ "backOnlyAppendTotal", snap.backOnlyAppendTotal },
 							{ "hemisphereDropTotal", snap.hemisphereDropTotal },
+							{ "passlessCasterSkipTotal", snap.passlessCasterSkipTotal },
+							{ "passlessSkipNoShadowShader", snap.passlessCasterSkipByReason[1] },
+							{ "passlessSkipRefraction", snap.passlessCasterSkipByReason[2] },
+							{ "passlessSkipAlphaBlend", snap.passlessCasterSkipByReason[3] },
+							{ "passlessSkipFaded", snap.passlessCasterSkipByReason[4] },
 							{ "sleepSkips", snap.sleepSkips },
 							{ "sleepSkipsTotal", snap.sleepSkipsTotal },
 							{ "demandSkips", snap.demandSkips },
@@ -941,13 +994,18 @@ namespace
 			task->AddTask([cache]() { cache->RestorePreviousDiskCache(); });
 			return json{ { "action", "restorePrevious" }, { "queued", true }, { "enqueued_at_frame", frame }, { "note", "cancels any in-progress compile and needs a compatible previous cache; check OpenShaders.log or inspect(kind=shadercache).featureSetRevertPending for the outcome, then restart to load it" } };
 		}
+		if (action == "discardPrevious") {
+			// Mirrors the in-game "keep current cache" button: drops the rollback cache so the mismatch notice clears.
+			task->AddTask([cache]() { cache->DiscardPreviousDiskCache(); });
+			return json{ { "action", "discardPrevious" }, { "queued", true }, { "enqueued_at_frame", frame }, { "note", "refused while a feature-set change awaits commit or a restore is pending; check inspect(kind=shadercache).featureSetChanged and OpenShaders.log for the outcome" } };
+		}
 		if (action == "exportTrace") {
 			// Only reads records (mutex-guarded) and writes a file -- safe off-thread. Don't
 			// add render/UI-state access here without marshalling like the actions above.
 			const auto logDir = Util::PathHelpers::GetLogPath().parent_path();
 			std::filesystem::path path = logDir / "compile-trace.json";
 			if (a_args.contains("path")) {
-				const std::filesystem::path requested(a_args.value("path", std::string{}));
+				const std::filesystem::path requested = Util::PathHelpers::FromUtf8(a_args.value("path", std::string{}));
 				if (requested.is_absolute()) {
 					return json{ { "action", "exportTrace" }, { "success", false }, { "error", "path must be relative to the log directory, not absolute" } };
 				}
@@ -963,9 +1021,26 @@ namespace
 			if (!ok) {
 				return json{ { "action", "exportTrace" }, { "success", false }, { "error", "export failed or no task records for the current build; see OpenShaders.log" } };
 			}
-			return json{ { "action", "exportTrace" }, { "success", true }, { "path", path.string() } };
+			return json{ { "action", "exportTrace" }, { "success", true }, { "path", Util::PathHelpers::ToUtf8(path) } };
 		}
-		return json{ { "error", "unknown action (clear|deleteDisk|activeOnly|backgroundCompile|contentStore|acceptRebuild|restorePrevious|exportTrace)" }, { "action", action } };
+		return json{ { "error", "unknown action (clear|deleteDisk|activeOnly|backgroundCompile|contentStore|acceptRebuild|restorePrevious|discardPrevious|exportTrace)" }, { "action", action } };
+	}
+
+	json BuildLightHighlightResult(const json& a_args)
+	{
+		uintptr_t key = 0;
+		if (a_args.contains("ptr") && a_args["ptr"].is_string()) {
+			const std::string text = a_args["ptr"].get<std::string>();
+			if (text != "none")
+				key = static_cast<uintptr_t>(std::stoull(text, nullptr, 16));
+		}
+		ShadowCasterManager::SetDebugHighlightLight(key);
+		return json{ { "ptr", std::format("{:#018x}", key) } };
+	}
+
+	void LightHighlightToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		RunHandler(&BuildLightHighlightResult, a_argsJson, a_sink, a_write);
 	}
 
 	void ShadercacheToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
@@ -1132,7 +1207,7 @@ namespace
 			{ "startFrame", a_result.startFrame }, { "endFrame", a_result.endFrame }, { "samples", a_result.samples },
 			{ "passesPerSample", a_result.passesPerSample }, { "droppedRanges", a_result.droppedRanges },
 			{ "droppedTraceBytes", a_result.droppedTraceBytes }, { "ranges", a_result.ranges }, { "metrics", std::move(metrics) },
-			{ "unsupportedMetrics", std::move(unsupported) }, { "summary", std::move(summary) }, { "csvPath", a_result.csvPath.string() } };
+			{ "unsupportedMetrics", std::move(unsupported) }, { "summary", std::move(summary) }, { "csvPath", Util::PathHelpers::ToUtf8(a_result.csvPath) } };
 		if (a_detail) {
 			json ranges = json::array();
 			for (const auto& range : a_result.rangeResults)
@@ -1161,7 +1236,7 @@ namespace
 			const auto device = NvPerf::GetDeviceInfo();
 			return json{ { "built", device.built }, { "available", device.available }, { "gpuSupported", device.gpuSupported },
 				{ "device", device.deviceName }, { "chip", device.chipName }, { "deviceError", device.error },
-				{ "library", device.libraryPath.string() }, { "capture", StatusJson(NvPerf::GetStatus()) } };
+				{ "library", Util::PathHelpers::ToUtf8(device.libraryPath) }, { "capture", StatusJson(NvPerf::GetStatus()) } };
 		}
 
 		if (action == "metrics") {
@@ -1239,7 +1314,7 @@ namespace
 			return json{ { "error", "capture provider needs outputPath and requestId" } };
 
 		ScreenshotFeature::CaptureRequest request;
-		request.outputPath = std::filesystem::path(outputPath);
+		request.outputPath = Util::PathHelpers::FromUtf8(outputPath);
 		if (!request.outputPath.is_absolute() || request.outputPath.extension() != ".png")
 			return json{ { "error", "outputPath must be an absolute .png path" } };
 		request.excludeUi = a_args.value("excludeUi", true);
@@ -1391,11 +1466,17 @@ namespace
 
 	// ---- menu handler: open / close / toggle the Community Shaders settings menu -------
 
+	/** @brief Longest tab label the menu call accepts; real tab names are far shorter. */
+	constexpr size_t kMaxTabLabelLength = 128;
+
 	json BuildMenuResult(const json& a_args)
 	{
 		const auto editorMode = a_args.find("editorMode");
 		if (editorMode != a_args.end() && (!editorMode->is_string() || (*editorMode != "browser" && *editorMode != "menu")))
 			return json{ { "error", "editorMode must be browser or menu" } };
+		const auto tabArg = a_args.find("tab");
+		if (tabArg != a_args.end() && (!tabArg->is_string() || tabArg->get_ref<const std::string&>().size() > kMaxTabLabelLength))
+			return json{ { "error", std::format("tab must be a string of at most {} characters", kMaxTabLabelLength) } };
 		const auto sidebarVisibility = a_args.find("sidebarVisible");
 		if (sidebarVisibility != a_args.end() && !sidebarVisibility->is_boolean())
 			return json{ { "error", "sidebarVisible must be a boolean" } };
@@ -1419,6 +1500,9 @@ namespace
 			page = it->get<std::string>();
 		if (!page.empty())
 			Menu::GetSingleton()->RequestFeatureMenu(page);
+		const std::string tab = tabArg != a_args.end() ? tabArg->get<std::string>() : std::string{};
+		if (!tab.empty())
+			Menu::GetSingleton()->RequestTab(tab);
 
 		// SetVisible touches the ImGui context and the IsEnabled flag the render thread owns, so
 		// it can't run on this listener thread (nor on the SKSE main thread). Enqueue an atomic
@@ -1428,7 +1512,7 @@ namespace
 			Menu::GetSingleton()->RequestSidebarVisibility(sidebarVisibility->get<bool>());
 		if (editorMode != a_args.end())
 			EditorWindow::GetSingleton()->RequestBrowserMode(*editorMode == "menu" ? EditorWindow::BrowserMode::Menu : EditorWindow::BrowserMode::Editor);
-		return json{ { "op", op }, { "page", page }, { "queued", true } };
+		return json{ { "op", op }, { "page", page }, { "tab", tab }, { "queued", true } };
 	}
 
 	void MenuHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
@@ -1559,10 +1643,6 @@ namespace DevBenchBridge
 {
 	void Install()
 	{
-		for (auto* feature : Feature::GetFeatureList())
-			if (feature->loaded)
-				g_bootLoadedFeatures.insert(feature);
-
 		auto* dvb = DevBenchAPI::GetDevBenchInterface001();
 		if (!dvb) {
 			logger::info("DevBenchBridge: devbench not present; CS tools not registered");
@@ -1576,7 +1656,7 @@ namespace DevBenchBridge
 		// so existing MCP clients keep working under the new prefix.
 
 		static constexpr const char* featureDesc =
-			R"({"description":"All {brand} graphics-feature operations — enumerate, inspect settings, mutate settings, restore defaults, toggle on/off, read live diagnostics, read/write runtime-only debug flags. Action-dispatched. list: returns an array of {name,shortName,loaded,version,category,isCore,supportsVR,inMenu,favorite,enabledAtBoot}; features with restart-gated settings also include restartFields:[{key,label,pending}]. get: params shortName, returns the SaveSettings blob (null if the feature has no override; set/reset then no-op). Upscaling exposes enableDLSSFrameGen (boolean, default false); existing configurations must opt in explicitly and restart to use NVIDIA DLSS-G. PostProcessing includes cinematic_camera settings for the optional linked physical camera; use get/set with shortName PostProcessing to inspect or change them without saving. LinearLighting uses Jiaye's per-channel diffuse calibration with fixed gamma 2.2, reflectance 0.5 at encoded 0.5, and white reflectance 1.0. These calibration values are not settings. PBR texture inputs bypass calibration. Scene storage gamma is fixed at 1.6. conversionSaturation (0-1, default 0.92) compensates gamma-authored inputs entering linear lighting, including diffuse, tint, glow, lights, effects, sky, fog, water and cached weather colors. It preserves linear-sRGB luminance and neutral colors; 1 is unchanged. Already-linear material and light inputs bypass it; converted shared lighting still affects PBR surfaces. Scene storage and gamma round trips do not apply compensation again. ambientMult (0-5, default 0.32) scales ambient lighting. CSUtility atmosphere settings include independent sky/cloud brightness, saturation and gamma, vanilla fog intensity (opacity multiplier), volumetric lighting intensity and sun glare intensity (0 off, 1 unchanged), useAmbientEffectLighting (boolean, default false; replaces weather Effect Lighting and Sky Statics lighting with ambient/IBL plus shadowed directional light), effect brightness and sky static brightness (0-2, scale their respective weather or ambient/directional lighting; 1 unchanged at the center) and sky static transparency (0 unchanged, 1 fully transparent). CSUtility Light and Materials color controls are nested objects containing saturation (0-2, default 1) and gammaOffset (-1 to 1, default 0): sceneColor, ambientLightColor, directionalLightColor, pointLightColor, linearPointLightColor, spotlightColor, linearSpotlightColor, omnidirectionalBulbColor, linearOmnidirectionalBulbColor, emitColor, glowmapColor and effectLightingColor. Existing multiplier keys remain unchanged. sceneColor adjusts the lighting and atmosphere inputs, not the finished image. The atmosphere adds effectColor, skyStaticColor and sunGlareColor with the same object shape, plus fogSaturation and vlSaturation (0-2, default 1). Existing sky/cloud saturation, gamma offsets and opacity controls retain their meanings. set: params shortName, settings (object) — a partial blob merged over the current settings, so it MUST use the same shape get returns, including nested groups (e.g. LightLimitFix's shadow settings live under settings.ShadowSettings.*, NOT at the top level). Keys the feature does not define are rejected with unknownKeys rather than silently ignored; call get first if unsure of the shape. Restart-gated keys (see list's restartFields) apply on the next launch, so verify with get rather than assuming a set took effect immediately. reset: params shortName, calls RestoreDefaultSettings. toggle: params shortName, enabled (boolean, OPTIONAL — omit to flip the current loaded state); flips Feature::loaded. Rejects enabling a feature unsupported on the current runtime unless Developer Mode is on, which force-enables it with a logged warning instead. Rejects enabling a feature that was not loaded at boot, since its resources were never set up; enable it with boot and restart. diagnostics: params shortName, returns the feature's live runtime stats via GetDiagnostics (an empty object if the feature does not override it); use this instead of adding a new inspect kind for a new counter. runtimeGet: params shortName, returns the feature's live runtime-only debug flags via GetRuntimeFlags as {name: bool} (an empty object if the feature does not override it) — these are deliberately never persisted to SettingsUser.json (e.g. a debug instrumentation toggle that would otherwise cost every user extra GPU work on every load), so 'set' cannot reach them and they reset to their code default on every relaunch. runtimeSet: params shortName, name (string), value (boolean) — sets one flag via SetRuntimeFlag; fails with an error if the feature has no runtime flag by that name (call runtimeGet first to see valid names). favorite: params shortName, enabled (required boolean); automatically saves favorite status for a loaded menu feature. Unloaded favorites retain their status but remain in Unloaded Features and cannot be changed until loaded. boot: params shortName, enabled (required boolean); automatically saves whether the feature loads next launch, without changing its current loaded state. Both actions persist only the selected preference and preserve unrelated unsaved settings; failures return an error.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","reset","toggle","diagnostics","runtimeGet","runtimeSet","favorite","boot"]},"shortName":{"type":"string"},"settings":{"type":"object","description":"Partial SaveSettings object from get. Upscaling exposes enableDLSSFrameGen (boolean, default false, restart required). Upscaling Neural Rendering material strengths live under settings.neuralRenderingTuning.materialStrength (the master switch), strengthSkin, strengthHair, strengthEyes, strengthFoliage, strengthLandscape, strengthCloth, strengthMetal and strengthOther (each 0 to 1) and strengthEdgeSoftness (0 to 4 pixels); read the live state and the active strengths back with the neuralRenderingStatus query. The material map debug view adds settings.neuralRenderingTuning.showMaterialMap (boolean), materialMapMode (0 category colours, 1 strength ramp) and materialMapFilter (bitmask of the categories it draws: bit 0 None, 1 Skin, 2 Hair, 3 Eyes, 4 Foliage, 5 Landscape, 6 Cloth, 7 Metal; the low eight bits only). Eye-staggered gain reuse is settings.neuralRenderingTuning.skipFrameReuse (boolean, default false; VR only, on in the Performance profile, and forced off while frame generation is active) with settings.neuralRenderingTuning.skipFrameGapMode (0 notify the model, 1 reset the eye's history); read the live state and the per-eye reuse from the neuralRenderingStatus query. PostProcessing exposes cinematic_camera including Enabled, Lens.FocalLengthMM, Lens.FNumber and Exposure.ISO. LinearLighting keys: enableLinearLighting (integer, 0/1), enableACEScg (integer, 0/1), conversionSaturation (number, 0-1, default 0.92), ambientMult (number, 0-5, default 0.32). CSUtility atmosphere keys: useAmbientEffectLighting (boolean), skyBrightness, cloudBrightness, skySaturation, cloudSaturation, skyGammaOffset, cloudGammaOffset, effectBrightness, skyStaticBrightness, skyStaticTransparency, fogGammaOffset, fogAlphaGammaOffset, fogIntensity, vlGammaOffset, vlIntensity, sunGlareIntensity. CSUtility Light and Materials color controls are nested objects containing saturation (0-2, default 1) and gammaOffset (-1 to 1, default 0): sceneColor, ambientLightColor, directionalLightColor, pointLightColor, linearPointLightColor, spotlightColor, linearSpotlightColor, omnidirectionalBulbColor, linearOmnidirectionalBulbColor, emitColor, glowmapColor and effectLightingColor. Existing multiplier keys remain unchanged. sceneColor adjusts the lighting and atmosphere inputs, not the finished image. The atmosphere adds effectColor, skyStaticColor and sunGlareColor with the same object shape, plus fogSaturation and vlSaturation (0-2, default 1). Existing sky/cloud saturation, gamma offsets and opacity controls retain their meanings."},"enabled":{"type":"boolean"},"name":{"type":"string"},"value":{"type":"boolean"}},"oneOf":[{"properties":{"action":{"enum":["favorite","boot"]},"shortName":{"minLength":1}},"required":["action","shortName","enabled"]},{"properties":{"action":{"not":{"enum":["favorite","boot"]}}}}]}})";
+			R"({"description":"All {brand} graphics-feature operations — enumerate, inspect settings, mutate settings, restore defaults, toggle on/off, read live diagnostics, read/write runtime-only debug flags. Action-dispatched. list: returns an array of {name,shortName,loaded,version,category,isCore,supportsVR,inMenu,favorite,enabledAtBoot}; features with restart-gated settings also include restartFields:[{key,label,pending}]. get: params shortName, returns the SaveSettings blob (null if the feature has no override; set/reset then no-op). Upscaling exposes enableDLSSFrameGen (boolean, default false); existing configurations must opt in explicitly and restart to use NVIDIA DLSS-G. PostProcessing includes cinematic_camera settings for the optional linked physical camera; use get/set with shortName PostProcessing to inspect or change them without saving. LinearLighting uses Jiaye's per-channel diffuse calibration with fixed gamma 2.2, reflectance 0.5 at encoded 0.5, and white reflectance 1.0. These calibration values are not settings. PBR texture inputs bypass calibration. Scene storage gamma is fixed at 1.6. conversionSaturation (0-1, default 0.92) compensates gamma-authored inputs entering linear lighting, including diffuse, tint, glow, lights, effects, sky, fog, water and cached weather colors. It preserves linear-sRGB luminance and neutral colors; 1 is unchanged. Already-linear material and light inputs bypass it; converted shared lighting still affects PBR surfaces. Scene storage and gamma round trips do not apply compensation again. ambientMult (0-5, default 0.32) scales ambient lighting. CSUtility atmosphere settings include independent sky/cloud brightness, saturation and gamma, vanilla fog intensity (opacity multiplier), volumetric lighting intensity and sun glare intensity (0 off, 1 unchanged), useAmbientEffectLighting (boolean, default false; replaces weather Effect Lighting and Sky Statics lighting with ambient/IBL plus shadowed directional light), effect brightness and sky static brightness (0-2, scale their respective weather or ambient/directional lighting; 1 unchanged at the center) and sky static transparency (0 unchanged, 1 fully transparent). CSUtility Light and Materials color controls are nested objects containing saturation (0-2, default 1) and gammaOffset (-1 to 1, default 0): sceneColor, ambientLightColor, directionalLightColor, pointLightColor, linearPointLightColor, spotlightColor, linearSpotlightColor, omnidirectionalBulbColor, linearOmnidirectionalBulbColor, emitColor, glowmapColor and effectLightingColor. Existing multiplier keys remain unchanged. sceneColor adjusts the lighting and atmosphere inputs, not the finished image. The atmosphere adds effectColor, skyStaticColor and sunGlareColor with the same object shape, plus fogSaturation and vlSaturation (0-2, default 1). Existing sky/cloud saturation, gamma offsets and opacity controls retain their meanings. set: params shortName, settings (object) — a partial blob merged over the current settings, so it MUST use the same shape get returns, including nested groups (e.g. LightLimitFix's shadow settings live under settings.ShadowSettings.*, NOT at the top level; its flicker-shadow keys are TolerantSplitCache, FlickerShadowMode (0 live, 1 pinned, 2 warped), WarpVisibilityGate, WarpZeroDemandSkip, SpotLitRegion (scores spot lights by the frustum they light) and DemandTileCap (holds weakly lit lights at a quarter-size tile)). Keys the feature does not define are rejected with unknownKeys rather than silently ignored; call get first if unsure of the shape. Restart-gated keys (see list's restartFields) apply on the next launch, so verify with get rather than assuming a set took effect immediately. reset: params shortName, calls RestoreDefaultSettings. toggle: params shortName, enabled (boolean, OPTIONAL — omit to flip the current loaded state); flips Feature::loaded. Rejects enabling a feature unsupported on the current runtime unless Developer Mode is on, which force-enables it with a logged warning instead. Rejects enabling a feature that was not loaded at boot or turned itself off during boot (a missing companion plugin or a conflicting mod), since its resources were never set up; enable it with boot and restart. diagnostics: params shortName, returns the feature's live runtime stats via GetDiagnostics (an empty object if the feature does not override it); use this instead of adding a new inspect kind for a new counter. runtimeGet: params shortName, returns the feature's live runtime-only debug flags via GetRuntimeFlags as {name: bool} (an empty object if the feature does not override it) — these are deliberately never persisted to SettingsUser.json (e.g. a debug instrumentation toggle that would otherwise cost every user extra GPU work on every load), so 'set' cannot reach them and they reset to their code default on every relaunch. runtimeSet: params shortName, name (string), value (boolean) — sets one flag via SetRuntimeFlag; fails with an error if the feature has no runtime flag by that name (call runtimeGet first to see valid names). favorite: params shortName, enabled (required boolean); automatically saves favorite status for a loaded menu feature. Unloaded favorites retain their status but remain in Unloaded Features and cannot be changed until loaded. boot: params shortName, enabled (required boolean); automatically saves whether the feature loads next launch, without changing its current loaded state. Both actions persist only the selected preference and preserve unrelated unsaved settings; failures return an error.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","reset","toggle","diagnostics","runtimeGet","runtimeSet","favorite","boot"]},"shortName":{"type":"string"},"settings":{"type":"object","description":"Partial SaveSettings object from get. Upscaling exposes enableDLSSFrameGen (boolean, default false, restart required). Upscaling Neural Rendering material strengths live under settings.neuralRenderingTuning.materialStrength (the master switch), strengthSkin, strengthHair, strengthEyes, strengthFoliage, strengthLandscape, strengthCloth, strengthMetal and strengthOther (each 0 to 1) and strengthEdgeSoftness (0 to 4 pixels); read the live state and the active strengths back with the neuralRenderingStatus query. The material map debug view adds settings.neuralRenderingTuning.showMaterialMap (boolean), materialMapMode (0 category colours, 1 strength ramp) and materialMapFilter (bitmask of the categories it draws: bit 0 None, 1 Skin, 2 Hair, 3 Eyes, 4 Foliage, 5 Landscape, 6 Cloth, 7 Metal; the low eight bits only). Eye-staggered gain reuse is settings.neuralRenderingTuning.skipFrameReuse (boolean, default false; VR only, on in the Performance profile, and forced off while frame generation is active) with settings.neuralRenderingTuning.skipFrameGapMode (0 notify the model, 1 reset the eye's history); read the live state and the per-eye reuse from the neuralRenderingStatus query. PostProcessing exposes cinematic_camera including Enabled, Lens.FocalLengthMM, Lens.FNumber and Exposure.ISO. LinearLighting keys: enableLinearLighting (integer, 0/1), enableACEScg (integer, 0/1), conversionSaturation (number, 0-1, default 0.92), ambientMult (number, 0-5, default 0.32). CSUtility atmosphere keys: useAmbientEffectLighting (boolean), skyBrightness, cloudBrightness, skySaturation, cloudSaturation, skyGammaOffset, cloudGammaOffset, effectBrightness, skyStaticBrightness, skyStaticTransparency, fogGammaOffset, fogAlphaGammaOffset, fogIntensity, vlGammaOffset, vlIntensity, sunGlareIntensity. CSUtility Light and Materials color controls are nested objects containing saturation (0-2, default 1) and gammaOffset (-1 to 1, default 0): sceneColor, ambientLightColor, directionalLightColor, pointLightColor, linearPointLightColor, spotlightColor, linearSpotlightColor, omnidirectionalBulbColor, linearOmnidirectionalBulbColor, emitColor, glowmapColor and effectLightingColor. Existing multiplier keys remain unchanged. sceneColor adjusts the lighting and atmosphere inputs, not the finished image. The atmosphere adds effectColor, skyStaticColor and sunGlareColor with the same object shape, plus fogSaturation and vlSaturation (0-2, default 1). Existing sky/cloud saturation, gamma offsets and opacity controls retain their meanings."},"enabled":{"type":"boolean"},"name":{"type":"string"},"value":{"type":"boolean"}},"oneOf":[{"properties":{"action":{"enum":["favorite","boot"]},"shortName":{"minLength":1}},"required":["action","shortName","enabled"]},{"properties":{"action":{"not":{"enum":["favorite","boot"]}}}}]}})";
 		dvb->RegisterTool("openshaders.feature", BrandedDescription(featureDesc), &FeatureToolHandler, nullptr);
 
 		// One-time: builds Util::DevBenchUx::Registry from every feature's
@@ -1588,8 +1668,12 @@ namespace DevBenchBridge
 		dvb->RegisterTool("openshaders.actions", BrandedDescription(actionsDesc), &ActionsToolHandler, nullptr);
 
 		static constexpr const char* shadercacheDesc =
-			R"({"description":"Manage {brand}' compiled shader cache. clear, deleteDisk, activeOnly, acceptRebuild, and restorePrevious are queued onto the main thread, fire-and-forget. backgroundCompile and contentStore are immediate atomic state changes made on the calling (devbench listener) thread. clear: drop the IN-MEMORY cache only; with the disk cache enabled shaders reload from Data/ShaderCache rather than recompiling, so this does NOT guarantee a recompile. deleteDisk: delete the on-disk cache AND drop the in-memory cache, forcing a full cold recompile (use this for compile benchmarks). activeOnly: the in-game 'smart clear' -- captures whatever shaders are on screen over two windows, then evicts+recompiles just those (needs something rendering; a menu-only screen may capture nothing). backgroundCompile: skip the boot-time wait for the FULL eager compile queue to drain -- same effect as the in-game 'Skip Compilation' hotkey. Compilation keeps running in the background afterward (fewer threads, so it doesn't starve gameplay), but the game becomes playable/scriptable immediately. For a benchmark harness: call this once right after launch, then drive one throwaway replay to demand-compile just that scene's own shaders before the timed run, instead of waiting out every permutation the whole install could ever need (can be 20-30 minutes on a large AIO modlist). acceptRebuild: when a feature-set change is holding the disk cache (see inspect(kind=shadercache).diskCacheHeld/cacheMismatches), accept it and rebuild for the current setup -- mirrors the in-game prompt's 'rebuild' button. restorePrevious: swap the rollback slot (the pre-change cache) back into the active slot -- mirrors the in-game prompt's 'restore previous' button; cancels an in-progress compile if one is running, only takes effect after a restart, check inspect(kind=shadercache).featureSetRevertPending or the log for the outcome. contentStore (param enabled: bool): toggle the developer/tester Advanced setting that persists compiled blobs keyed by the preprocessed source, entry, profile, flags and compiler; the store lives in Data/ShaderCache/ContentStore and survives invalidation, rotation and file-watcher wipes, but deleteDisk removes it too. Watch progress via inspect kind=shadercache and the openshaders.shaderRecompiled event. Read-only status (including rollback/backup-slot state) is inspect kind=shadercache. exportTrace: write every task record from the current build to a Chrome Trace Event Format JSON file (importable at ui.perfetto.dev or chrome://tracing) -- a timeline can localize external CPU contention during a build in a way aggregate stats can't. Runs synchronously on the calling thread (read-only over the record set plus a file write). Optional 'path' overrides the default (next to OpenShaders.log); fails if the current build has no recorded tasks yet.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["clear","deleteDisk","activeOnly","backgroundCompile","contentStore","acceptRebuild","restorePrevious","exportTrace"]},"enabled":{"type":"boolean","description":"contentStore only: turn the content-addressed compile store on or off."},"path":{"type":"string","description":"exportTrace only: destination file path; defaults to OpenShaders.log's directory."}},"required":["action"]}})";
+			R"({"description":"Manage {brand}' compiled shader cache. clear, deleteDisk, activeOnly, acceptRebuild, restorePrevious, and discardPrevious are queued onto the main thread, fire-and-forget. backgroundCompile and contentStore are immediate atomic state changes made on the calling (devbench listener) thread. clear: drop the IN-MEMORY cache only; with the disk cache enabled shaders reload from Data/ShaderCache rather than recompiling, so this does NOT guarantee a recompile. deleteDisk: delete the on-disk cache AND drop the in-memory cache, forcing a full cold recompile (use this for compile benchmarks). activeOnly: the in-game 'smart clear' -- captures whatever shaders are on screen over two windows, then evicts+recompiles just those (needs something rendering; a menu-only screen may capture nothing). backgroundCompile: skip the boot-time wait for the FULL eager compile queue to drain -- same effect as the in-game 'Skip Compilation' hotkey. Compilation keeps running in the background afterward (fewer threads, so it doesn't starve gameplay), but the game becomes playable/scriptable immediately. For a benchmark harness: call this once right after launch, then drive one throwaway replay to demand-compile just that scene's own shaders before the timed run, instead of waiting out every permutation the whole install could ever need (can be 20-30 minutes on a large AIO modlist). acceptRebuild: when a feature-set change is holding the disk cache (see inspect(kind=shadercache).diskCacheHeld/cacheMismatches), accept it and rebuild for the current setup -- mirrors the in-game prompt's 'rebuild' button. restorePrevious: swap the rollback slot (the pre-change cache) back into the active slot -- mirrors the in-game prompt's 'restore previous' button; cancels an in-progress compile if one is running, only takes effect after a restart, check inspect(kind=shadercache).featureSetRevertPending or the log for the outcome. discardPrevious: delete the rollback slot so the current cache is kept and the home-page mismatch notice clears -- mirrors the in-game 'keep current cache' button; refused while a feature-set change awaits commit (featureSetChanged), a restore is pending, or the cache is held. contentStore (param enabled: bool): toggle the developer/tester Advanced setting that persists compiled blobs keyed by the preprocessed source, entry, profile, flags and compiler; the store lives in Data/ShaderCache/ContentStore and survives invalidation, rotation and file-watcher wipes, but deleteDisk removes it too. Watch progress via inspect kind=shadercache and the openshaders.shaderRecompiled event. Read-only status (including rollback/backup-slot state) is inspect kind=shadercache. exportTrace: write every task record from the current build to a Chrome Trace Event Format JSON file (importable at ui.perfetto.dev or chrome://tracing) -- a timeline can localize external CPU contention during a build in a way aggregate stats can't. Runs synchronously on the calling thread (read-only over the record set plus a file write). Optional 'path' overrides the default (next to OpenShaders.log); fails if the current build has no recorded tasks yet.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["clear","deleteDisk","activeOnly","backgroundCompile","contentStore","acceptRebuild","restorePrevious","discardPrevious","exportTrace"]},"enabled":{"type":"boolean","description":"contentStore only: turn the content-addressed compile store on or off."},"path":{"type":"string","description":"exportTrace only: destination file path; defaults to OpenShaders.log's directory."}},"required":["action"]}})";
 		dvb->RegisterTool("openshaders.shadercache", BrandedDescription(shadercacheDesc), &ShadercacheToolHandler, nullptr);
+
+		static constexpr const char* lightHighlightDesc =
+			R"({"description":"Forces one shadow-scheduler light to bright magenta (intensity 40) so a capture shows every pixel that light reaches. ptr is a light pointer string from inspect kind=llfshadows (slots[].ptr or visibility[].ptr); pass 'none' to clear. One light at a time; it persists until cleared.","inputSchema":{"type":"object","properties":{"ptr":{"type":"string"}},"required":["ptr"]}})";
+		dvb->RegisterTool("openshaders.lighthighlight", BrandedDescription(lightHighlightDesc), &LightHighlightToolHandler, nullptr);
 
 		static constexpr const char* profilerDesc =
 			R"({"description":"Enable or disable {brand}' runtime GPU/CPU profiler capture. Action-dispatched. enable/disable: SetUserEnabled(true/false) -- the same flag the in-game Profiling page's checkbox drives, so this is the one state transition (off->on) a script can reach no other way. Read timing data via inspect kind=profiler; that tool also requests a capture on its own, so a script doesn't need to enable AND separately request one, only enable if disabled.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["enable","disable"]}},"required":["action"]}})";
@@ -1626,7 +1710,7 @@ namespace DevBenchBridge
 		// up with the on-screen window.
 		if (dvb->GetBuildNumber() >= 10500) {
 			static constexpr const char* menuDesc =
-				R"({"description":"Open, close, or toggle the {brand} in-game settings menu headlessly, the same window the ToggleKey (default End) shows. op: open|close|toggle (default toggle). page: OPTIONAL built-in page name (e.g. \"Performance\", \"Home\") or a feature's shortName (see openshaders.feature list) to navigate to on the next frame, same as clicking it in the left pane. sidebarVisible: OPTIONAL boolean to show or hide the sidebar with its slide animation without saving settings; false suppresses hover auto-hide expansion, true restores the configured auto-hide behavior. Use op=open when changing sidebar visibility. editorMode: OPTIONAL browser|menu to switch the OS Editor panel without saving settings; use op=open and page=CSEditor to open the editor first. Sidebar visibility only affects the standalone menu. Returns {op,page,queued:true}; the change is applied on the render thread on the next frame (open is a no-op while first-time setup is pending).","inputSchema":{"type":"object","properties":{"op":{"type":"string","enum":["open","close","toggle"]},"page":{"type":"string"},"sidebarVisible":{"type":"boolean"},"editorMode":{"type":"string","enum":["browser","menu"]}}}})";
+				R"({"description":"Open, close, or toggle the {brand} in-game settings menu headlessly, the same window the ToggleKey (default End) shows. op: open|close|toggle (default toggle). page: OPTIONAL built-in page name (e.g. \"Performance\", \"Home\") or a feature's shortName (see openshaders.feature list) to navigate to on the next frame, same as clicking it in the left pane. tab: OPTIONAL tab label, at most 128 characters (visible text such as \"Neural Rendering\", or the id after ### with or without the ###; case is ignored and so is any [Alpha]-style suffix on the visible text) to select in whichever tab bar the menu draws, same as clicking it; give page too, and a tab inside another tab is found once that one is selected (call again with the inner tab). A request that finds no such tab within 600 menu frames is dropped with a warning in the log; the call still reports queued. sidebarVisible: OPTIONAL boolean to show or hide the sidebar with its slide animation without saving settings; false suppresses hover auto-hide expansion, true restores the configured auto-hide behavior. Use op=open when changing sidebar visibility. editorMode: OPTIONAL browser|menu to switch the OS Editor panel without saving settings; use op=open and page=CSEditor to open the editor first. Sidebar visibility only affects the standalone menu. Returns {op,page,tab,queued:true}; the change is applied on the render thread on the next frame (open is a no-op while first-time setup is pending).","inputSchema":{"type":"object","properties":{"op":{"type":"string","enum":["open","close","toggle"]},"page":{"type":"string"},"tab":{"type":"string","maxLength":128},"sidebarVisible":{"type":"boolean"},"editorMode":{"type":"string","enum":["browser","menu"]}}}})";
 			dvb->RegisterToolExtension("menu", "CommunityShaders", BrandedDescription(menuDesc), &MenuHandler, nullptr);
 
 			static constexpr const char* inspectStateDesc =
@@ -1638,7 +1722,7 @@ namespace DevBenchBridge
 			dvb->RegisterToolExtension("inspect", "shadercache", BrandedDescription(inspectCacheDesc), &InspectShadercacheHandler, nullptr);
 
 			static constexpr const char* inspectShadowsDesc =
-				R"({"description":"{brand} Light Limit Fix shadow-scheduler diagnostics -> {valid,frame,total,chosen,excess,invalid*,slotsInUse,lights:[{ptr,reason}],slots:[{slot,ptr,importance,score,desiredScale,budgetScale,pendingScale,renderedScale,tile:{x,y,size,contentValid}}],classes:{full,half,quarter,eighth,sixteenth},atlas:{dim,capacityCells,occupancy,vramBytes},budget:{avgLightCostUs,avgRedrawsPerFrame,estPassMsPerFrame,frontAppendTotal,backOnlyAppendTotal,hemisphereReassignTotal,hemisphereDropTotal,staticBakesTotal,splitAccumAllTotal,splitAccumStaticOnlyTotal,splitAccumDynamicOnlyTotal,splitLatchMismatchTotal,splitLatchWindowTotal,splitWastedBakesTotal,scalePromotionRedraws,scaleDemotionRedrawsAvoided,scalePromotionRedundantAvoided,convertReEnableRun,convertReEnableSkipped,passGuardChecksTotal,passGuardCycleSkipsTotal,passGuardFaultSkipsTotal,passGuardCapExceededTotal,passGuardCycleRepairsTotal,staleAccumulatesTotal,staleAfterRenderSkipTotal,stalePassClearsTotal,renderSkipSessionResetTotal,renderSkipPortalTransitionTotal,renderSkipTeardownWaitingTotal,renderSkipTeardownRaceTotal,passRegChecksTotal,passRegRingsTotal,stalePromotedTotal,passGuardRepairsPromotedTotal,passRegRingsPromotedTotal}}. reason: portal|frustum|lod|excess|other -- why a non-chosen light was demoted from a shadow caster. slots covers occupied point-light pool slots (tile.size 0 = no atlas tile); classes buckets renderedScale; atlas is all-zero when the shadow atlas is inactive; passGuard* count pass-chain guard activity during SCM shadow renders (cycles repaired in place, calls skipped when a repair failed or a link was unreadable, chains too long to prove); staleAccumulatesTotal counts lights accumulated in an earlier frame and never rendered since (staleAfterRenderSkipTotal: those whose accumulate frame was a render-function early exit; stalePassClearsTotal: times such a light's pass groups were unlinked before re-accumulating), renderSkip*Total count RenderScheduledShadowLights early exits by reason, *Promoted* count the subset of stale accumulates, in-place repairs and registration rings that involved a promoted (normal->shadow) light; passReg* count pass registrations checked and rings they closed (only while LightLimitFix tracePassRegistration is on); budget is the GPU-timestamp tracker (estPassMsPerFrame = avg cost x avg redraws, the REST perf A/B metric). scalePromotionRedraws counts tile-class promotions that alone forced a redraw, scaleDemotionRedrawsAvoided the demotions skipped because the retained larger tile already held that content; scalePromotionRedundantAvoided counts the promotions the previous pendingScale > renderedScale rule would have dirtied although the retained tile already held that class; convertReEnableRun counts engine EnableLight calls on converted (normal) lights and convertReEnableSkipped the calls skipped because pose, radius, fade, hidden state and portal graph were unchanged since the last enable; each scale counter counts once per scale-change event, not once per frame the change stays pending. frontAppendTotal/backOnlyAppendTotal/hemisphereReassignTotal/hemisphereDropTotal count caster appends by destination list plus the wholly-behind casters the back-side fix reassigns to the back map or drops outright, and accumulate only across primed windows rather than the whole session. The scheduler fills this only while the settings menu is open or a dump was recently requested; calling this primes it, so if valid==false (idle) poll again after a frame (use inspect kind=openshaders frame_count to know a tick passed).","readOnly":true,"inputSchema":{"type":"object"}})";
+				R"({"description":"{brand} Light Limit Fix shadow-scheduler diagnostics -> {valid,frame,total,chosen,excess,invalid*,slotsInUse,lights:[{ptr,reason}],visibility:[{ptr,chosen,engineCulled,frustrumCull,lodDimmer,distance,radius,ownInFrustum,cameraHold,hidden,shadowDistanceCulled,frustumCulled,name,x,y,z}],visEngineOutOursIn,visEngineInOursOut,slots:[{slot,ptr,importance,score,desiredScale,budgetScale,pendingScale,renderedScale,demandMax,untouchedSamples,litMax,litTile,litSum,litReason,litSmoothed,litCapped,tile:{x,y,size,contentValid}}],classes:{full,half,quarter,eighth,sixteenth},atlas:{dim,capacityCells,occupancy,vramBytes},budget:{avgLightCostUs,avgRedrawsPerFrame,estPassMsPerFrame,frontAppendTotal,backOnlyAppendTotal,hemisphereReassignTotal,hemisphereDropTotal,passlessCasterSkipTotal,passlessSkipNoShadowShader,passlessSkipRefraction,passlessSkipAlphaBlend,passlessSkipFaded,staticBakesTotal,splitAccumAllTotal,splitAccumStaticOnlyTotal,splitAccumDynamicOnlyTotal,splitLatchMismatchTotal,splitLatchWindowTotal,splitWastedBakesTotal,scalePromotionRedraws,scaleDemotionRedrawsAvoided,scalePromotionRedundantAvoided,convertReEnableRun,convertReEnableSkipped,convertReEnableToleranceSkipped,originPinnedLights,warpsRun,warpsSkippedSubPixel,warpsSkippedOffscreen,warpsSkippedNoDemand,convertedLights,convertedStrictLights,passGuardChecksTotal,passGuardCycleSkipsTotal,passGuardFaultSkipsTotal,passGuardCapExceededTotal,passGuardCycleRepairsTotal,staleAccumulatesTotal,staleAfterRenderSkipTotal,stalePassClearsTotal,renderSkipSessionResetTotal,renderSkipPortalTransitionTotal,renderSkipTeardownWaitingTotal,renderSkipTeardownRaceTotal,passRegChecksTotal,passRegRingsTotal,stalePromotedTotal,passGuardRepairsPromotedTotal,passRegRingsPromotedTotal}}. reason: portal|frustum|lod|excess|other -- why a non-chosen light was demoted from a shadow caster. visibility audits every candidate light: engineCulled is the UpdateCamera verdict (frustrumCull reads 0xff for every rejection) split into exclusive causes hidden, shadowDistanceCulled and frustumCulled; ownInFrustum is an independent sphere-versus-side-planes test from the published view-projection (any eye in VR) that ignores the far plane; distance is the light centre to the nearest eye; visEngineOutOursIn counts lights the engine culled although their sphere touches the view frustum, visEngineInOursOut the reverse. slots covers occupied point-light pool slots (tile.size 0 = no atlas tile); demandMax and untouchedSamples are the GPU screen-demand reading and its zero streak; litSum is that demand weighted by the light's own shadow test, summed over the taps (lit area x brightness); litReason ORs 1 no shadow projection, 2 spot, 4 no tile yet, 8 fading in, 16 behind a hemisphere, 32 lit, 64 blocked; litSmoothed is litSum after the release filter and litCapped is the DemandTileCap latch holding the tile class at a quarter size; litMax and litTile are the best lit tap and its tile id and stay zero unless Shadow Demand Instrumentation is on; classes buckets renderedScale; atlas is all-zero when the shadow atlas is inactive; passGuard* count pass-chain guard activity during SCM shadow renders (cycles repaired in place, calls skipped when a repair failed or a link was unreadable, chains too long to prove); staleAccumulatesTotal counts lights accumulated in an earlier frame and never rendered since (staleAfterRenderSkipTotal: those whose accumulate frame was a render-function early exit; stalePassClearsTotal: times such a light's pass groups were unlinked before re-accumulating), renderSkip*Total count RenderScheduledShadowLights early exits by reason, *Promoted* count the subset of stale accumulates, in-place repairs and registration rings that involved a promoted (normal->shadow) light; passReg* count pass registrations checked and rings they closed (only while LightLimitFix tracePassRegistration is on); budget is the GPU-timestamp tracker (estPassMsPerFrame = avg cost x avg redraws, the REST perf A/B metric). scalePromotionRedraws counts tile-class promotions that alone forced a redraw, scaleDemotionRedrawsAvoided the demotions skipped because the retained larger tile already held that content; scalePromotionRedundantAvoided counts the promotions the previous pendingScale > renderedScale rule would have dirtied although the retained tile already held that class; convertReEnableRun counts engine EnableLight calls on converted (normal) lights and convertReEnableSkipped the calls skipped because pose, radius, fade, hidden state and portal graph were unchanged since the last enable, or (convertReEnableToleranceSkipped) because only flicker-scale drift occurred (position within 1 unit, radius within 2 percent, fade on the same side of the engine's 0.05 on/off threshold) and the staggered 8 to 15 frame refresh was not yet due; originPinnedLights counts lights currently rendering from their bake pose instead of the live pose (Pinned and Warped modes); warpsRun counts warped-mode static-tile seeds that passed the visibility gate and reprojected on the GPU, warpsSkippedOffscreen those skipped because the light's sphere is outside every eye frustum, warpsSkippedNoDemand those skipped because the light's measured screen demand stayed zero for 30 samples and warpsSkippedSubPixel those skipped because the projected edge error stayed under a pixel; convertedLights and convertedStrictLights count the lights currently converted to normal lights and how many of them use strict portal membership (the case where the re-enable also keys on rotation); passlessCasterSkipTotal counts casters dropped from the cull walk because the engine registers no shadow-map pass for them, split into effect/particle/water shader properties (passlessSkipNoShadowShader), refraction, alpha-blended lit meshes and faded (fade x material alpha below 1) meshes; each scale counter counts once per scale-change event, not once per frame the change stays pending. frontAppendTotal/backOnlyAppendTotal/hemisphereReassignTotal/hemisphereDropTotal count caster appends by destination list plus the wholly-behind casters the back-side fix reassigns to the back map or drops outright, and accumulate only across primed windows rather than the whole session. The scheduler fills this only while the settings menu is open or a dump was recently requested; calling this primes it, so if valid==false (idle) poll again after a frame (use inspect kind=openshaders frame_count to know a tick passed).","readOnly":true,"inputSchema":{"type":"object"}})";
 			dvb->RegisterToolExtension("inspect", "llfshadows", BrandedDescription(inspectShadowsDesc), &InspectShadowsHandler, nullptr);
 
 			static constexpr const char* inspectProfilerDesc =
