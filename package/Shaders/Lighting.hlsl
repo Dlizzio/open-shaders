@@ -2732,12 +2732,7 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (inWorld || inReflection) {
-#	if defined(LIGHT_LIMIT_FIX) && (defined(DEFERRED) || !defined(VOLUMETRIC_SHADOWS)) && !defined(LOD)
-		if (!inReflection)
-			dirLightColor *= ShadowSampling::GetTerrainCloudShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
-		else
-#	endif
-			dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex, true);
+		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex, true);
 	}
 
 	float dirLightAngle = dot(worldNormal.xyz, DirLightDirection.xyz);
@@ -2805,8 +2800,7 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 		float llfDirectionalCoverage = 0.0;
 		dirDetailedShadow = LightLimitFix::GetDirectionalShadow(input.WorldPosition.xyz, worldPositionWS, rotationMatrix, eyeIndex, llfDirectionalCoverage, nativeContactWeight);
 #				if defined(TREE_ANIM)
-		if (!ShadowSampling::HasDistantShadows())
-			foliageDirectionalShadowScale = Foliage::GetDirectionalShadowScale(dirDetailedShadow, llfDirectionalCoverage);
+		foliageDirectionalShadowScale = Foliage::GetDirectionalShadowScale(dirDetailedShadow, llfDirectionalCoverage);
 #				endif
 #			else
 		float llfDirectionalCoverage;
@@ -2819,12 +2813,7 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 #		if defined(VOLUMETRIC_SHADOWS)
 		float vsmDetailedShadow = 1.0;
 		dirSoftShadow = VolumetricShadows::GetVSMShadow2D(input.WorldPosition.xyz, worldPositionWS, eyeIndex, vsmDetailedShadow);
-#			if defined(LIGHT_LIMIT_FIX) && defined(DEFERRED)
-		float farSoftShadow = ShadowSampling::HasDistantShadows() ? min(dirSoftShadow, dirDetailedShadow) : dirSoftShadow;
-		dirSoftShadow = lerp(farSoftShadow, max(dirSoftShadow, dirDetailedShadow), llfDirectionalCoverage);
-#			else
 		dirSoftShadow = max(dirSoftShadow, dirDetailedShadow);
-#			endif
 
 #			if !defined(LIGHT_LIMIT_FIX)
 		if (!(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir))

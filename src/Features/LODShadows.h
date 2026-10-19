@@ -1,7 +1,5 @@
 #pragma once
 
-#include <thread>
-
 #include "Buffer.h"
 #include "Utils/GpuTimestamps.h"
 #include "Utils/LazyShader.h"
@@ -44,6 +42,9 @@ struct LODShadows : Feature
 	void Prepass() override;
 	/** @brief Binds the completed maps for reflection shading. */
 	void ReflectionsPrepass() override;
+	bool WantsDrawHook() const override { return true; }
+	/** @brief Binds comparison filtering after the engine applies effect and particle samplers. */
+	void OnDraw() override;
 	/** @brief Invalidates depth when a saved game loads. */
 	void GameLoaded() override;
 	/** @brief Queues cache invalidation across loading screens. */
@@ -56,16 +57,20 @@ struct LODShadows : Feature
 	bool SetRuntimeFlag(std::string_view a_name, bool a_value) override;
 	/** @brief Returns whether complete terrain maps can replace heightmap shadows. */
 	bool ReplacesTerrainShadows() const;
+	/** @brief Returns the comparison sampler for standalone pixel passes. */
+	ID3D11SamplerState* GetComparisonSampler() const { return comparisonSampler.get(); }
+	/** @brief Pixel sampler slot shared with LOD shadow consumers. */
+	static constexpr uint32_t kComparisonSamplerSlot = 14;
 
 private:
 	static constexpr uint32_t kMapCount = 3;
 	static constexpr uint32_t kDepthSlicesPerMap = 3;
+	static constexpr uint32_t kDepthSliceCount = kMapCount * kDepthSlicesPerMap;
 	static constexpr uint32_t kResolution = 2048;
-	static constexpr uint32_t kDepthSlot = 125;
-	static constexpr uint32_t kMaskSlot = 124;
+	static constexpr uint32_t kDepthSlot = 117;
+	static constexpr uint32_t kMaskSlot = 127;
 	static constexpr uint32_t kMaskDownsample = 2;
-	static constexpr uint32_t kDataSlot = 126;
-	static constexpr uint32_t kComparisonSamplerSlot = 14;
+	static constexpr uint32_t kDataSlot = 118;
 	static constexpr uint32_t kQueryFrames = 4;
 	static constexpr uint32_t kInitialTriangleBudget = 8192;
 	static constexpr float kDepthExtent = 196608.0f;
@@ -109,6 +114,7 @@ private:
 		uint32_t instanceStride = 0;
 		uint32_t instanceCount = 1;
 		bool lodLandscape = false;
+		bool nativeShadowCaster = false;
 	};
 	struct Map
 	{
@@ -123,8 +129,6 @@ private:
 		double blendDurationMs = 0;
 		double buildDurationMs = 0;
 		uint64_t triangleCount = 0;
-		std::array<uint64_t, 4> sourceTriangles{};
-		std::array<uint32_t, 4> sourceCasters{};
 		bool valid = false;
 		bool terrainValid = false;
 	};
@@ -138,45 +142,6 @@ private:
 		bool pending = false;
 	};
 
-	struct TraceFrame
-	{
-		uint32_t frame;
-		double timeMs;
-		uint32_t world;
-		float hour;
-		RE::NiPoint3 camera;
-		RE::NiPoint3 cameraRoot;
-		RE::NiPoint3 cameraAnchor;
-		bool cameraAnchorValid;
-		RE::NiPoint3 light;
-		RE::NiPoint3 cascadeLight;
-		std::array<DirectX::XMFLOAT4X4, 2> cascadeProjections;
-		std::array<uint64_t, 4> sourceHashes;
-		std::array<uint64_t, 8> terrainHashes;
-		json terrainGeometry;
-		std::array<uint32_t, 4> geometryCounts;
-		uint32_t loadedTerrainGeometryCount;
-		float4 landBounds;
-		uint32_t hiddenNodes;
-		uint32_t enabledSegments;
-		uint32_t disabledSegments;
-		std::array<Map, kMapCount> maps;
-		std::array<uint32_t, kMapCount> historyFrames;
-		std::array<float, kMapCount> historyWeights;
-		Map pending;
-		int pendingIndex;
-		size_t remainingCasters;
-		uint32_t completedMaps;
-		uint32_t draws;
-		uint32_t triangles;
-		uint32_t triangleBudget;
-		uint32_t unsupportedCasters;
-		bool immediateRefresh;
-		double collectionMs;
-		std::array<double, 3> gpuMs;
-		std::array<uint32_t, 3> gpuFrames;
-	};
-
 	void CompileShaders();
 	void Invalidate();
 	void Publish();
@@ -184,14 +149,12 @@ private:
 	void DrawMask();
 	void CollectTerrain();
 	void CollectLoadedObjects();
-	void ProcessTraceRequest();
-	void RecordTrace(const RE::NiPoint3& a_direction, bool a_refreshImmediately, double a_collectionMs);
-	void SaveTrace();
-	void Collect(RE::NiAVObject* a_object, bool a_root = false, bool a_loadedObject = false);
+	void Collect(RE::NiAVObject* a_object, bool a_ignoreAppCulling = false, bool a_loadedObject = false);
 	void AddCaster(RE::BSGeometry* a_geometry);
 	void BeginMap(uint32_t a_index, const RE::NiPoint3& a_center, const RE::NiPoint3& a_direction);
 	void UpdateMaps(const RE::NiPoint3& a_center, const RE::NiPoint3& a_direction, bool a_refreshImmediately);
 	void RenderBatch(bool a_refreshImmediately);
+	void CaptureDistantDepth();
 	void ResolveTimings();
 	float GetHistoryBlend(uint32_t a_index) const;
 	void PublishCompletedMaps(bool a_refreshImmediately);
@@ -202,6 +165,7 @@ private:
 	std::atomic_bool resetRequested{ true };
 	bool ready = false;
 	bool clearPending = false;
+	bool distantDepthCaptured = false;
 	bool wasEnabled = false;
 	bool refreshEveryFrame = false;
 	bool interpolateHistory = true;
@@ -223,24 +187,7 @@ private:
 	std::vector<Caster> casters;
 	std::unordered_set<RE::BSGeometry*> collectedGeometry;
 	std::array<uint64_t, 4> sourceHashes{};
-	std::array<uint64_t, 8> terrainHashes{};
 	std::array<uint32_t, 4> geometryCounts{};
-	uint32_t hiddenNodes = 0;
-	uint32_t enabledSegments = 0;
-	uint32_t disabledSegments = 0;
-	enum class TraceRequest
-	{
-		None,
-		Start,
-		Stop
-	};
-	std::atomic<TraceRequest> traceRequest{ TraceRequest::None };
-	std::atomic_bool traceWriting{ false };
-	bool traceEnabled = false;
-	std::string tracePath;
-	std::string traceError;
-	std::vector<TraceFrame> traceFrames;
-	std::array<json, kMapCount> traceCasterSnapshots;
 	uint32_t lastUpdateFrame = 0;
 	uint32_t lastRefreshFrame = 0;
 	uint32_t lastFilterFrame = 0;
@@ -273,7 +220,7 @@ private:
 	winrt::com_ptr<ID3D11Texture2D> depthTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> depthSRV;
 	std::array<winrt::com_ptr<ID3D11DepthStencilView>, kMapCount * kDepthSlicesPerMap> depthViews;
-	std::array<winrt::com_ptr<ID3D11RasterizerState>, kMapCount> rasterizers;
+	winrt::com_ptr<ID3D11RasterizerState> rasterizer;
 	winrt::com_ptr<ID3D11DepthStencilState> depthState;
 	winrt::com_ptr<ID3D11SamplerState> alphaSampler;
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler;
@@ -289,5 +236,4 @@ private:
 	winrt::com_ptr<ID3DBlob> vertexBytecode;
 	winrt::com_ptr<ID3DBlob> treeBytecode;
 	std::array<std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>>, 2> layouts;
-	std::jthread traceWriter;
 };

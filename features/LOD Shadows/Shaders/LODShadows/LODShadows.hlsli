@@ -2,10 +2,12 @@
 #define LOD_SHADOWS_HLSLI
 
 #include "Common/LodLandscape.hlsli"
+#include "Common/ShadowCoverage.hlsli"
 
 namespace LODShadows
 {
 	static const uint MapCount = 3;
+	static const uint DepthSliceCount = MapCount * 3;
 	static const float BorderWidth = 0.05;
 	static const float MinReceiverPlaneCosine = 1e-4;
 	static const float MinReceiverPlaneDepth = 1e-20;
@@ -32,9 +34,9 @@ namespace LODShadows
 		row_major float4x4 historyWorldToClip;
 		float4 history;
 	};
-	Texture2DArray<float> DepthMaps : register(t125);
-	StructuredBuffer<MapData> Maps : register(t126);
-	Texture2D<float4> FilteredMask : register(t124);
+	Texture2DArray<float> DepthMaps : register(t117);
+	StructuredBuffer<MapData> Maps : register(t118);
+	Texture2D<float4> FilteredMask : register(t127);
 #if defined(PSHADER)
 	SamplerComparisonState ComparisonSampler : register(s14);
 #endif
@@ -42,6 +44,13 @@ namespace LODShadows
 	bool ReplacesTerrainShadows()
 	{
 		return Maps[1].parameters.w > 0.0;
+	}
+
+	float GetObjectShadowWeight(float3 position, uint eyeIndex)
+	{
+		float endDistance = Maps[2].parameters.w;
+		float depth = mul(FrameBuffer::CameraView[eyeIndex], float4(position, 1)).z;
+		return endDistance > 0.0 ? smoothstep(endDistance * ShadowCoverage::NativeFadeStartFraction, endDistance, depth) : 1.0;
 	}
 
 	float MaskDepthWeight(float depth, float sampleDepth)
@@ -107,7 +116,7 @@ namespace LODShadows
 	}
 
 	float FilterShadow(float3 worldPosition, float3 positionDx, float3 positionDy,
-		SamplerState linearSampler, out float coverage, bool volume = false)
+		SamplerState linearSampler, out float coverage, bool volume = false, float objectWeight = 1.0)
 	{
 		float shadow = 1.0;
 		float remaining = 1.0;
@@ -117,9 +126,24 @@ namespace LODShadows
 			{
 				float4 parameters = Maps[i].parameters;
 				[branch] if (parameters.y == 0) continue;
+				MapData map = Maps[i];
+				[branch] if (objectWeight == 0.0)
+				{
+					map.parameters.x += DepthSliceCount;
+					map.history.x += DepthSliceCount;
+				}
 				float mapCoverage;
-				float visibility = SampleMapHistory(worldPosition, positionDx, positionDy, Maps[i], linearSampler, mapCoverage,
+				float visibility = SampleMapHistory(worldPosition, positionDx, positionDy, map, linearSampler, mapCoverage,
 					volume && Maps[i].history.w > 0.0);
+				[branch] if (objectWeight > 0.0 && objectWeight < 1.0)
+				{
+					map.parameters.x += DepthSliceCount;
+					map.history.x += DepthSliceCount;
+					float distantCoverage;
+					float distantVisibility = SampleMapHistory(worldPosition, positionDx, positionDy, map, linearSampler, distantCoverage,
+						volume && map.history.w > 0.0);
+					visibility = lerp(distantVisibility, visibility, objectWeight);
+				}
 				float occlusion = (1.0 - visibility) * mapCoverage;
 				shadow -= occlusion * remaining;
 				remaining *= 1.0 - mapCoverage;
@@ -226,6 +250,7 @@ namespace LODShadows
 		coverage = 0.0;
 		float visibility = 1.0;
 		bool maskValid = false;
+		float objectWeight = 1.0;
 		float3 positionDx = 0.0;
 		float3 positionDy = 0.0;
 #if defined(PSHADER)
@@ -234,6 +259,7 @@ namespace LODShadows
 			positionDy = ddy(worldPosition);
 #	if defined(DEFERRED)
 			float3 relativePosition = worldPosition - FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
+			objectWeight = GetObjectShadowWeight(relativePosition, eyeIndex);
 			float4 positionCS = mul(FrameBuffer::CameraViewProj[eyeIndex], float4(relativePosition, 1));
 			float2 uv = positionCS.xy / positionCS.w * float2(0.5, -0.5) + 0.5;
 			bool matchingDepth = true;
@@ -272,7 +298,7 @@ namespace LODShadows
 		}
 #endif
 		[branch] if (!maskValid)
-			visibility = FilterShadow(worldPosition, positionDx, positionDy, linearSampler, coverage, !surface);
+			visibility = FilterShadow(worldPosition, positionDx, positionDy, linearSampler, coverage, !surface, objectWeight);
 		return visibility;
 	}
 }

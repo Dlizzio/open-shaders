@@ -12,7 +12,6 @@
 #include "Deferred.h"
 #include "Globals.h"
 #include "GpuPass.h"
-#include "IBL.h"
 #include "LODShadows.h"
 #include "ShaderCache.h"
 #include "SkySync.h"
@@ -1223,6 +1222,14 @@ void Effects11::DrawVolumetricScattering()
 		context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
 		context->PSSetShader(raymarchVolumetricRaysPS.get(), nullptr, 0);
 		context->PSSetSamplers(0, 1, &sampler);
+		winrt::com_ptr<ID3D11SamplerState> savedShadowSampler;
+		context->PSGetSamplers(LODShadows::kComparisonSamplerSlot, 1, savedShadowSampler.put());
+		const SKSE::stl::scope_exit restoreShadowSampler([&]() noexcept {
+			auto* previous = savedShadowSampler.get();
+			context->PSSetSamplers(LODShadows::kComparisonSamplerSlot, 1, &previous);
+		});
+		auto* shadowSampler = globals::features::lodShadows.GetComparisonSampler();
+		context->PSSetSamplers(LODShadows::kComparisonSamplerSlot, 1, &shadowSampler);
 		context->PSSetConstantBuffers(1, 1, &vlDataCB);
 
 		context->Draw(4, 0);

@@ -388,11 +388,7 @@ float3 GetDirLightColor(float3 positionWS, float2 screenPosition, uint eyeIndex,
 	float3 dirLightColor = Color::GamutTransform(SharedData::DirLightColor.xyz);
 	dirLightColor = Color::AdjustUtilityColor(dirLightColor, SharedData::csUtilitySettings.directionalLightColor);
 	if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)
-#	if defined(LIGHT_LIMIT_FIX) && !defined(VOLUMETRIC_SHADOWS)
-		dirLightColor *= ShadowSampling::GetTerrainCloudShadow(positionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
-#	else
 		dirLightColor *= ShadowSampling::GetWorldShadow(positionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
-#	endif
 
 	// HasDirectionalShadows() admits Interior Sun cells to the directional shadow
 	// sampling path (matching Lighting.hlsl).

@@ -697,8 +697,8 @@ float3 GetLightingColor(
 		sincos(Math::TAU * screenNoise, rotation.y, rotation.x);
 		float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 		float3 worldPositionWS = worldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
-		dirShadow = LightLimitFix::GetDirectionalShadow(worldPosition.xyz, worldPositionWS, rotationMatrix, eyeIndex, false);
-		dirShadow *= ShadowSampling::GetTerrainCloudShadow(worldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+		dirShadow = LightLimitFix::GetDirectionalShadow(worldPosition.xyz, worldPositionWS, rotationMatrix, eyeIndex);
+		dirShadow *= ShadowSampling::GetWorldShadow(worldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex, false, sampleDistantShadow);
 #		else
 		dirShadow = ShadowSampling::Get3DFilteredShadow(worldPosition.xyz, viewDirection, screenPosition, eyeIndex, unusedSurfaceShadow, sampleDistantShadow);
 #		endif
@@ -791,7 +791,7 @@ float GetViewRayShadow(float3 worldPosition, float depth, uint eyeIndex, float n
 		shadow = 0.0;
 #		if defined(LOD_SHADOWS)
 		LODShadows::RayProjection lodRay = LODShadows::PrepareRay(startPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz,
-			endPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, ShadowSampling::HasDistantShadows());
+			endPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, sampleDistantShadow && ShadowSampling::HasDistantShadows());
 #		endif
 		for (uint i = 0; i < sampleCount; i++) {
 			float t = (float(i) + noise) * rcpSampleCount;

@@ -7,7 +7,6 @@
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/DevBenchUx.h"
-#include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LODShadows::Settings, Enabled, UpdateBudgetMs, DepthBias)
@@ -25,10 +24,14 @@ namespace
 	constexpr float kMinimumDirectionLength = 1e-6f;
 	constexpr float kCellSize = 4096.0f;
 	constexpr int kRasterDepthBias = 1;
-	constexpr uint32_t kTraceFrames = 7200;
-	constexpr uint32_t kTerrainIdentityTraceFrames = 32;
 	constexpr uint64_t kHashSeed = 14695981039346656037ull;
 	constexpr uint64_t kHashPrime = 1099511628211ull;
+
+	bool IsMapView()
+	{
+		const auto* manager = RE::BGSTerrainManager::GetActiveManager();
+		return globals::state->isMapMenuOpen || (manager && manager->mapMode);
+	}
 
 	float ShadowClockRate()
 	{
@@ -118,13 +121,7 @@ void LODShadows::RegisterUxActions()
 	FEATURE_COMMAND("rebuild", "Invalidate the LOD depth cache and reset GPU update statistics.", [](Feature* a_self, const json&) {
 		static_cast<LODShadows*>(a_self)->resetRequested = true;
 	});
-	FEATURE_COMMAND("startTrace", "Record up to 7200 exterior render frames of light directions, cascade projections, cache versions, caster counts and CPU/GPU timings. Ignored while recording or writing. No settings are saved.", [](Feature* a_self, const json&) {
-		static_cast<LODShadows*>(a_self)->traceRequest = TraceRequest::Start;
-	});
-	FEATURE_COMMAND("stopTrace", "Stop recording and asynchronously save the collected frames to Captures/LODShadows_<process>_<frame>.json. Query diagnostics for trace state, path and errors.", [](Feature* a_self, const json&) {
-		static_cast<LODShadows*>(a_self)->traceRequest = TraceRequest::Stop;
-	});
-	FEATURE_QUERY("diagnostics", "Return map resolution, terrain replacement state, geometry and caster counts, cache direction errors, build and render frames, trace state and path, plus GPU timings with their submission frames. Timings exclude final mask sampling and forward shadow sampling in lighting passes.", [](const Feature* a_self, const json&) -> json {
+	FEATURE_QUERY("diagnostics", "Return map resolution, terrain replacement state, geometry and caster counts, cache direction errors, build and render frames, plus GPU timings with their submission frames. Timings exclude final mask sampling and forward shadow sampling in lighting passes.", [](const Feature* a_self, const json&) -> json {
 		const auto* self = static_cast<const LODShadows*>(a_self);
 		std::scoped_lock lock(self->diagnosticsMutex);
 		return self->diagnostics;
@@ -155,17 +152,12 @@ void LODShadows::CompileShaders()
 void LODShadows::SetupResources()
 {
 	ready = false;
-	traceEnabled = Util::PathHelpers::SafeExists(Util::PathHelpers::GetCommunityShaderPath() / "LODShadows.trace");
-	if (traceEnabled) {
-		traceFrames.reserve(kTraceFrames);
-		logger::info("LOD Shadows trace armed for {} exterior frames", kTraceFrames);
-	}
 	try {
 		auto device = globals::d3d::device;
 		D3D11_TEXTURE2D_DESC textureDesc{};
 		textureDesc.Width = textureDesc.Height = kResolution;
 		textureDesc.MipLevels = 1;
-		textureDesc.ArraySize = kMapCount * kDepthSlicesPerMap;
+		textureDesc.ArraySize = kDepthSliceCount * 2;
 		textureDesc.Format = DXGI_FORMAT_R16_TYPELESS;
 		textureDesc.SampleDesc.Count = 1;
 		textureDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
@@ -175,7 +167,7 @@ void LODShadows::SetupResources()
 		srvDesc.Format = DXGI_FORMAT_R16_UNORM;
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
 		srvDesc.Texture2DArray.MipLevels = 1;
-		srvDesc.Texture2DArray.ArraySize = kMapCount * kDepthSlicesPerMap;
+		srvDesc.Texture2DArray.ArraySize = textureDesc.ArraySize;
 		DX::ThrowIfFailed(device->CreateShaderResourceView(depthTexture.get(), &srvDesc, depthSRV.put()));
 		Util::SetResourceName(depthSRV.get(), "LODShadows::DepthMaps SRV");
 		for (uint32_t i = 0; i < depthViews.size(); ++i) {
@@ -198,10 +190,8 @@ void LODShadows::SetupResources()
 		rasterDesc.CullMode = D3D11_CULL_NONE;
 		rasterDesc.DepthClipEnable = true;
 		rasterDesc.DepthBias = kRasterDepthBias;
-		for (uint32_t i = 0; i < kMapCount; ++i) {
-			DX::ThrowIfFailed(device->CreateRasterizerState(&rasterDesc, rasterizers[i].put()));
-			Util::SetResourceName(rasterizers[i].get(), "LODShadows::Rasterizer %u", i);
-		}
+		DX::ThrowIfFailed(device->CreateRasterizerState(&rasterDesc, rasterizer.put()));
+		Util::SetResourceName(rasterizer.get(), "LODShadows::Rasterizer");
 		D3D11_SAMPLER_DESC samplerDesc{};
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 		samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -382,7 +372,7 @@ void LODShadows::DrawMask()
 void LODShadows::Prepass()
 {
 	maskReady = false;
-	if (ready && settings.Enabled && !maskFailed && globals::state->HasDirectionalShadows()) {
+	if (ready && settings.Enabled && !maskFailed && !IsMapView() && globals::state->HasDirectionalShadows()) {
 		try {
 			DrawMask();
 		} catch (const std::exception& error) {
@@ -395,17 +385,15 @@ void LODShadows::Prepass()
 	globals::d3d::context->PSSetShaderResources(kMaskSlot, 1, &view);
 }
 
-void LODShadows::Collect(RE::NiAVObject* a_object, bool a_root, bool a_loadedObject)
+void LODShadows::Collect(RE::NiAVObject* a_object, bool a_ignoreAppCulling, bool a_loadedObject)
 {
 	if (!a_object)
 		return;
-	if (!a_root && a_object->GetAppCulled()) {
-		++hiddenNodes;
+	if (!a_ignoreAppCulling && a_object->GetAppCulled())
 		return;
-	}
 	if (auto node = a_object->AsNode()) {
 		for (auto& child : node->GetChildren())
-			Collect(child.get(), false, a_loadedObject);
+			Collect(child.get(), a_ignoreAppCulling, a_loadedObject);
 	} else if (auto geometry = a_object->AsGeometry()) {
 		if (a_loadedObject) {
 			const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
@@ -425,10 +413,6 @@ void LODShadows::Collect(RE::NiAVObject* a_object, bool a_root, bool a_loadedObj
 			if (segments.segmentData) {
 				for (uint32_t i = 0; i < segments.numSegments; ++i) {
 					const auto& range = segments.segmentData[i];
-					if (range.unkTriCount) {
-						enabledSegments += range.unkFlags != 0;
-						disabledSegments += range.unkFlags == 0;
-					}
 					HashBytes(sceneHash, &range.index, sizeof(range.index));
 					HashBytes(sceneHash, &range.numTris, sizeof(range.numTris));
 					HashBytes(sceneHash, &range.flags, sizeof(range.flags));
@@ -473,35 +457,6 @@ void LODShadows::CollectTerrain()
 	terrainGeometryCount = uint32_t(visibleGeometry.size());
 	loadedTerrainGeometryCount = uint32_t(visibleGeometry.size() - lodTerrainCount);
 	HashBytes(sceneHash, &landBounds, sizeof(landBounds));
-	if (traceEnabled) {
-		terrainHashes.fill(kHashSeed);
-		for (const auto& geometry : visibleGeometry) {
-			const auto* pointer = geometry.get();
-			HashBytes(terrainHashes[0], &pointer, sizeof(pointer));
-			HashBytes(terrainHashes[1], &geometry->world, sizeof(geometry->world));
-			const auto mode = geometry->GetLODMode();
-			HashBytes(terrainHashes[2], &mode, sizeof(mode));
-			const auto& data = geometry->GetGeometryRuntimeData();
-			HashBytes(terrainHashes[3], &data.rendererData, sizeof(data.rendererData));
-			uint64_t geometryHash = kHashSeed;
-			uint64_t rendererHash = kHashSeed;
-			HashBytes(geometryHash, &pointer, sizeof(pointer));
-			HashBytes(rendererHash, &data.rendererData, sizeof(data.rendererData));
-			terrainHashes[6] += geometryHash;
-			terrainHashes[7] += rendererHash;
-			if (auto* segmented = geometry->AsSubIndexTriShape()) {
-				const auto& segments = segmented->GetSubIndexedTrishapeRuntimeData();
-				if (segments.segmentData)
-					for (uint32_t i = 0; i < segments.numSegments; ++i) {
-						const auto& range = segments.segmentData[i];
-						HashBytes(terrainHashes[4], &range.index, sizeof(range.index));
-						HashBytes(terrainHashes[4], &range.numTris, sizeof(range.numTris));
-						HashBytes(terrainHashes[4], &range.flags, sizeof(range.flags));
-					}
-			}
-		}
-		HashBytes(terrainHashes[5], &landBounds, sizeof(landBounds));
-	}
 }
 
 void LODShadows::CollectLoadedObjects()
@@ -542,7 +497,7 @@ void LODShadows::AddCaster(RE::BSGeometry* a_geometry)
 	caster.geometry.reset(a_geometry);
 	caster.vertices.copy_from(Util::AsReal(mesh->vertexBuffer));
 	caster.indices.copy_from(Util::AsReal(mesh->indexBuffer));
-	caster.vertexDescriptor = std::bit_cast<uint64_t>(mesh->vertexDesc);
+	caster.vertexDescriptor = std::bit_cast<uint64_t>(data.vertexDesc);
 	constexpr uint64_t kStrideMask = 0xf;
 	caster.stride = uint32_t(caster.vertexDescriptor & kStrideMask) * sizeof(float);
 	caster.indexCount = shape->GetTrishapeRuntimeData().triangleCount * kIndicesPerTriangle;
@@ -579,8 +534,8 @@ void LODShadows::AddCaster(RE::BSGeometry* a_geometry)
 	if (instanced)
 		caster.alphaThreshold = std::max(caster.alphaThreshold, 0.5f);
 	if (caster.alphaThreshold > 0) {
-		auto texture = property->GetBaseTexture();
-		if (!mesh->vertexDesc.HasFlag(RE::BSGraphics::Vertex::VF_UV) || !texture || !texture->rendererTexture || !texture->rendererTexture->resourceView) {
+		auto texture = instanced ? skyrim_cast<RE::NiSourceTexture*>(RE::BGSDistantTreeBlock::GetAtlasTexture().get()) : property->GetBaseTexture();
+		if (!data.vertexDesc.HasFlag(RE::BSGraphics::Vertex::VF_UV) || !texture || !texture->rendererTexture || !texture->rendererTexture->resourceView) {
 			++unsupportedCasters;
 			return;
 		}
@@ -594,7 +549,7 @@ void LODShadows::AddCaster(RE::BSGeometry* a_geometry)
 	}
 	if (instanced) {
 		auto& instances = static_cast<RE::BSMultiStreamInstanceTriShape*>(a_geometry)->GetMultiStreamTrishapeRuntimeData();
-		caster.instanceStride = instances.instanceSize * sizeof(uint16_t);
+		caster.instanceStride = uint32_t((caster.vertexDescriptor >> 4) & kStrideMask) * sizeof(float);
 		if (caster.instanceStride < sizeof(uint16_t) * 8) {
 			++unsupportedCasters;
 			return;
@@ -672,56 +627,26 @@ void LODShadows::BeginMap(uint32_t a_index, const RE::NiPoint3& a_center, const 
 	XMStoreFloat4x4(&pendingMap.data.worldToClip, rotation * translation * XMMatrixOrthographicLH(extent * 2, extent * 2, 0, kDepthExtent * 2));
 	casters.clear();
 	unsupportedCasters = 0;
-	uint32_t sourceIndex = 0;
-	uint32_t sourceEnd = geometryCounts[0];
-	const bool captureCasters = traceEnabled && traceCasterSnapshots[a_index].is_null();
-	json casterSnapshot = captureCasters ? json::array() : json();
+	const auto* scene = globals::game::smState->shadowSceneNode[0];
+	const auto* nativeLight = scene ? scene->GetRuntimeData().sunShadowDirLight : nullptr;
+	const float nativeDistance = nativeLight ? nativeLight->GetShadowDirectionalLightRuntimeData().endSplitDistances[1] : 0.0f;
 	for (uint32_t i = 0; i < visibleGeometry.size(); ++i) {
 		const auto unsupported = unsupportedCasters;
 		const auto firstCaster = casters.size();
 		AddCaster(visibleGeometry[i].get());
-		if (traceEnabled) {
-			while (i >= sourceEnd && sourceIndex + 1 < geometryCounts.size())
-				sourceEnd += geometryCounts[++sourceIndex];
-			for (size_t sourceCaster = firstCaster; sourceCaster < casters.size(); ++sourceCaster) {
-				const auto& caster = casters[sourceCaster];
-				pendingMap.sourceTriangles[sourceIndex] += uint64_t(caster.indexCount / kIndicesPerTriangle) * caster.instanceCount;
-				++pendingMap.sourceCasters[sourceIndex];
-				if (captureCasters) {
-					const auto& casterCenter = caster.bound.center;
-					casterSnapshot.push_back({ { "source", sourceIndex }, { "geometry", reinterpret_cast<uintptr_t>(caster.geometry.get()) },
-						{ "center", { casterCenter.x, casterCenter.y, casterCenter.z } }, { "radius", caster.bound.radius },
-						{ "triangles", uint64_t(caster.indexCount / kIndicesPerTriangle) * caster.instanceCount },
-						{ "firstIndex", caster.firstIndex }, { "indexCount", caster.indexCount }, { "alphaThreshold", caster.alphaThreshold } });
-				}
-			}
+		for (size_t caster = firstCaster; caster < casters.size(); ++caster) {
+			const auto& bound = casters[caster].bound;
+			casters[caster].nativeShadowCaster = i >= terrainGeometryCount && nativeDistance > 0.0f &&
+			                                     (bound.center - a_center).Length() - bound.radius < nativeDistance;
 		}
 		if (i < terrainGeometryCount && unsupportedCasters != unsupported)
 			pendingMap.terrainValid = false;
 	}
-	if (captureCasters) {
-		auto& snapshot = traceCasterSnapshots[a_index];
-		snapshot = { { "frame", pendingMap.frame }, { "casters", std::move(casterSnapshot) } };
-		if (const auto* camera = RE::Main::WorldRootCamera()) {
-			const auto& frustum = camera->GetRuntimeData2().viewFrustum;
-			const auto& position = camera->world.translate;
-			snapshot["camera"] = { { "position", { position.x, position.y, position.z } },
-				{ "rotation", json::array() }, { "frustum", { frustum.fLeft, frustum.fRight, frustum.fBottom, frustum.fTop, frustum.fNear, frustum.fFar } },
-				{ "orthographic", frustum.bOrtho } };
-			for (const auto& row : camera->world.rotate.entry)
-				for (float value : row)
-					snapshot["camera"]["rotation"].push_back(value);
-			const auto& projection = globals::game::isVR ? camera->GetVRRuntimeData().worldToCam : camera->GetRuntimeData().worldToCam;
-			snapshot["camera"]["worldToClip"] = json::array();
-			for (const auto& row : projection)
-				for (float value : row)
-					snapshot["camera"]["worldToClip"].push_back(value);
-		}
-	}
-	std::ranges::sort(casters, {}, [](const Caster& caster) { return caster.alphaThreshold > 0; });
+	std::ranges::sort(casters, {}, [](const Caster& caster) { return std::tuple{ caster.nativeShadowCaster, caster.alphaThreshold > 0 }; });
 	casterIndex = 0;
 	indexOffset = instanceOffset = 0;
 	clearPending = true;
+	distantDepthCaptured = false;
 }
 
 ID3D11InputLayout* LODShadows::GetLayout(const Caster& a_caster)
@@ -861,6 +786,19 @@ void LODShadows::UpdateMaps(const RE::NiPoint3& a_center, const RE::NiPoint3& a_
 	}
 }
 
+void LODShadows::CaptureDistantDepth()
+{
+	if (distantDepthCaptured || (casterIndex < casters.size() && !casters[casterIndex].nativeShadowCaster))
+		return;
+	auto* context = globals::d3d::context;
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	context->CopySubresourceRegion(depthTexture.get(), kDepthSliceCount + pendingMap.slice, 0, 0, 0,
+		depthTexture.get(), pendingMap.slice, nullptr);
+	auto* depth = depthViews[pendingMap.slice].get();
+	context->OMSetRenderTargets(0, nullptr, depth);
+	distantDepthCaptured = true;
+}
+
 void LODShadows::RenderBatch(bool a_refreshImmediately)
 {
 	auto context = globals::d3d::context;
@@ -883,7 +821,7 @@ void LODShadows::RenderBatch(bool a_refreshImmediately)
 		context->OMSetRenderTargets(0, nullptr, depth);
 		context->OMSetDepthStencilState(depthState.get(), 0);
 		context->OMSetBlendState(nullptr, nullptr, ~0u);
-		context->RSSetState(rasterizers[pendingIndex].get());
+		context->RSSetState(rasterizer.get());
 		const D3D11_VIEWPORT viewport{ 0, 0, float(kResolution), float(kResolution), 0, 1 };
 		context->RSSetViewports(1, &viewport);
 		context->GSSetShader(nullptr, nullptr, 0);
@@ -900,6 +838,7 @@ void LODShadows::RenderBatch(bool a_refreshImmediately)
 			clearPending = false;
 		}
 		while (casterIndex < casters.size() && (a_refreshImmediately || lastTriangles < batchTriangles)) {
+			CaptureDistantDepth();
 			const auto& caster = casters[casterIndex];
 			DrawData data;
 			DirectX::XMStoreFloat4x4(&data.worldToClip, WorldMatrix(caster.transform) * DirectX::XMLoadFloat4x4(&pendingMap.data.worldToClip));
@@ -940,6 +879,7 @@ void LODShadows::RenderBatch(bool a_refreshImmediately)
 				}
 			}
 		}
+		CaptureDistantDepth();
 	}
 	pendingMap.triangleCount += lastTriangles - firstTriangle;
 	if (casterIndex == casters.size()) {
@@ -986,10 +926,10 @@ bool LODShadows::NeedsUpdate(uint32_t a_index, const RE::NiPoint3& a_position, c
 
 bool LODShadows::ReplacesTerrainShadows() const
 {
-	if (!ready || !settings.Enabled || resetRequested || !globals::state->HasDirectionalShadows())
+	if (!ready || !settings.Enabled || resetRequested || IsMapView() || !globals::state->HasDirectionalShadows())
 		return false;
 	const auto* manager = RE::BGSTerrainManager::GetActiveManager();
-	return manager && manager->worldSpace && manager->worldSpace->GetFormID() == worldSpaceID && !manager->mapMode &&
+	return manager && manager->worldSpace && manager->worldSpace->GetFormID() == worldSpaceID &&
 	       !RE::BGSTerrainManager::LoadScreenUp() && std::ranges::all_of(maps, [](const Map& map) { return map.valid && map.terrainValid; });
 }
 
@@ -1000,9 +940,10 @@ void LODShadows::Publish()
 		return;
 	std::array<MapData, kMapCount> data{};
 	uint32_t validMaps = 0;
+	const bool active = ready && settings.Enabled && !IsMapView();
 	for (uint32_t i = 0; i < kMapCount; ++i) {
 		data[i] = maps[i].data;
-		const bool valid = ready && settings.Enabled && maps[i].valid;
+		const bool valid = active && maps[i].valid;
 		data[i].parameters = { float(maps[i].slice), valid ? 1.0f : 0.0f, settings.DepthBias / (kDepthExtent * 2), 0 };
 		data[i].filter = { 1.0f / kResolution, kHalfExtents[i] * 2 / kResolution, kDepthExtent * 2, 0 };
 		data[i].historyWorldToClip = previousMaps[i].data.worldToClip;
@@ -1011,6 +952,9 @@ void LODShadows::Publish()
 	}
 	data[0].parameters.w = float(validMaps);
 	data[1].parameters.w = ReplacesTerrainShadows() ? 1.0f : 0.0f;
+	const auto* shadowScene = globals::game::smState->shadowSceneNode[0];
+	const auto* nativeLight = shadowScene ? shadowScene->GetRuntimeData().sunShadowDirLight : nullptr;
+	data[2].parameters.w = nativeLight ? nativeLight->GetShadowDirectionalLightRuntimeData().endSplitDistances[1] : 0.0f;
 	data[0].filter.w = maskReady ? 1.0f : 0.0f;
 	data[1].filter.w = float(maskDimensions[0]);
 	data[2].filter.w = float(maskDimensions[1]);
@@ -1019,8 +963,6 @@ void LODShadows::Publish()
 	ID3D11ShaderResourceView* views[]{ depthSRV.get(), mapBuffer->srv.get() };
 	context->PSSetShaderResources(kDepthSlot, 2, views);
 	context->CSSetShaderResources(kDepthSlot, 2, views);
-	auto* sampler = comparisonSampler.get();
-	context->PSSetSamplers(kComparisonSamplerSlot, 1, &sampler);
 	std::scoped_lock lock(diagnosticsMutex);
 	diagnostics = { { "ready", ready }, { "enabled", settings.Enabled }, { "validMaps", validMaps }, { "completedMaps", completedMaps },
 		{ "geometryCount", visibleGeometry.size() }, { "pendingCasters", casters.size() - casterIndex * (pendingIndex >= 0) }, { "unsupportedCasters", unsupportedCasters },
@@ -1044,8 +986,6 @@ void LODShadows::Publish()
 	diagnostics["pendingIndex"] = pendingIndex;
 	diagnostics["pendingBuildFrame"] = pendingIndex >= 0 ? json(pendingMap.frame) : json(nullptr);
 	diagnostics["mapBuildFrames"] = { maps[0].frame, maps[1].frame, maps[2].frame };
-	diagnostics["trace"] = { { "recording", traceEnabled }, { "frames", traceFrames.size() },
-		{ "writing", traceWriting.load() }, { "path", tracePath }, { "error", traceError } };
 	const auto scene = globals::game::smState->shadowSceneNode[0];
 	if (const auto* shadowLight = scene ? scene->GetRuntimeData().sunShadowDirLight : nullptr) {
 		const auto& shadowData = shadowLight->GetShadowDirectionalLightRuntimeData();
@@ -1060,14 +1000,22 @@ void LODShadows::Publish()
 	}
 }
 
+void LODShadows::OnDraw()
+{
+	const auto* shader = globals::state->currentShader;
+	if (!ready || !settings.Enabled || !shader ||
+		(shader->shaderType.get() != RE::BSShader::Type::Effect && shader->shaderType.get() != RE::BSShader::Type::Particle))
+		return;
+	auto* sampler = comparisonSampler.get();
+	globals::d3d::context->PSSetSamplers(kComparisonSamplerSlot, 1, &sampler);
+	GET_INSTANCE_MEMBER(PSSamplerModifiedBits, globals::game::shadowState);
+	PSSamplerModifiedBits |= 1u << kComparisonSamplerSlot;
+}
+
 void LODShadows::ReflectionsPrepass()
 {
 	maskReady = false;
-	if (!mapBuffer)
-		return;
 	Publish();
-	ID3D11ShaderResourceView* views[]{ depthSRV.get(), mapBuffer->srv.get() };
-	globals::d3d::context->PSSetShaderResources(kDepthSlot, 2, views);
 }
 
 void LODShadows::EarlyPrepass()
@@ -1075,7 +1023,6 @@ void LODShadows::EarlyPrepass()
 	const double nowMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 	frameDurationMs = frameTimeMs > 0 ? nowMs - frameTimeMs : 0;
 	frameTimeMs = nowMs;
-	ProcessTraceRequest();
 	maskReady = false;
 	lastDraws = lastTriangles = 0;
 	ResolveTimings();
@@ -1084,6 +1031,10 @@ void LODShadows::EarlyPrepass()
 		lastUpdateMs = maxUpdateMs = 0;
 		lastRefreshMs = maxRefreshMs = 0;
 		timingSamples = completedMaps = 0;
+	}
+	if (IsMapView()) {
+		Publish();
+		return;
 	}
 	if (!ready || !settings.Enabled || !globals::state->HasDirectionalShadows()) {
 		if (wasEnabled)
@@ -1098,7 +1049,7 @@ void LODShadows::EarlyPrepass()
 		auto scene = globals::game::smState->shadowSceneNode[0];
 		auto sun = scene ? scene->GetRuntimeData().sunLight : nullptr;
 		auto light = sun ? skyrim_cast<RE::NiDirectionalLight*>(sun->light.get()) : nullptr;
-		if (!manager || !manager->worldSpace || manager->mapMode || RE::BGSTerrainManager::LoadScreenUp() || !light) {
+		if (!manager || !manager->worldSpace || RE::BGSTerrainManager::LoadScreenUp() || !light) {
 			Invalidate();
 			Publish();
 			return;
@@ -1120,8 +1071,6 @@ void LODShadows::EarlyPrepass()
 			Invalidate();
 		worldSpaceID = worldID;
 		transitionGeneration = generation;
-		const auto collectionStart = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-		hiddenNodes = enabledSegments = disabledSegments = 0;
 		sceneHash = kHashSeed;
 		visibleGeometry.clear();
 		{
@@ -1145,194 +1094,11 @@ void LODShadows::EarlyPrepass()
 		geometryCounts[3] = uint32_t(visibleGeometry.size() - lodGeometryCount);
 		sceneHash = kHashSeed;
 		HashBytes(sceneHash, sourceHashes.data(), sizeof(sourceHashes));
-		const double collectionMs = traceEnabled ? std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - collectionStart).count() : 0;
 		UpdateMaps(Util::GetCameraPosition(), direction, refreshImmediately);
-		RecordTrace(direction, refreshImmediately, collectionMs);
 	} catch (const std::exception& error) {
 		logger::error("LOD Shadows disabled after rendering failure: {}", error.what());
 		ready = false;
 		Invalidate();
 	}
 	Publish();
-}
-
-void LODShadows::ProcessTraceRequest()
-{
-	const auto request = traceRequest.exchange(TraceRequest::None);
-	if (request == TraceRequest::Start && !traceEnabled && !traceWriting) {
-		traceFrames.clear();
-		traceFrames.reserve(kTraceFrames);
-		traceCasterSnapshots = {};
-		{
-			std::scoped_lock lock(diagnosticsMutex);
-			tracePath.clear();
-			traceError.clear();
-		}
-		traceEnabled = true;
-	} else if (request == TraceRequest::Stop && traceEnabled) {
-		SaveTrace();
-	}
-}
-
-void LODShadows::RecordTrace(const RE::NiPoint3& a_direction, bool a_refreshImmediately, double a_collectionMs)
-{
-	if (!traceEnabled)
-		return;
-	TraceFrame record{};
-	record.frame = globals::game::graphicsState->GetFrameCount();
-	record.timeMs = frameTimeMs;
-	record.world = worldSpaceID;
-	record.hour = globals::game::calendar ? globals::game::calendar->GetHour() : 0;
-	record.camera = Util::GetCameraPosition();
-	if (const auto* camera = globals::game::playerCamera) {
-		if (camera->cameraRoot)
-			record.cameraRoot = camera->cameraRoot->world.translate;
-		record.cameraAnchor = camera->GetRuntimeData2().pos;
-		record.cameraAnchorValid = camera->GetRuntimeData2().isProcessed;
-	}
-	record.light = a_direction;
-	const auto* scene = globals::game::smState->shadowSceneNode[0];
-	const auto* sun = scene ? scene->GetRuntimeData().sunShadowDirLight : nullptr;
-	if (sun) {
-		record.cascadeLight = sun->GetShadowDirectionalLightRuntimeData().sunVector;
-		const auto copyProjections = [&](const auto& lightData) {
-			for (uint32_t i = 0; i < std::min(lightData.shadowmapDescriptors.size(), uint32_t(record.cascadeProjections.size())); ++i)
-				DirectX::XMStoreFloat4x4(&record.cascadeProjections[i], DirectX::XMLoadFloat4x4(Util::AsReal(&lightData.shadowmapDescriptors[i].lightTransform)));
-		};
-		if (globals::game::isVR)
-			copyProjections(sun->GetVRRuntimeData());
-		else
-			copyProjections(sun->GetRuntimeData());
-	}
-	record.sourceHashes = sourceHashes;
-	record.terrainHashes = terrainHashes;
-	if (traceFrames.size() < kTerrainIdentityTraceFrames) {
-		RE::BSSpinLockGuard lock(RE::BGSTerrainManager::GetCameraTerrainLock());
-		record.terrainGeometry = json::array();
-		for (uint32_t i = 0; i < terrainGeometryCount; ++i) {
-			const auto& geometry = visibleGeometry[i];
-			const auto& data = geometry->GetGeometryRuntimeData();
-			const auto* mesh = static_cast<RE::BSGraphics::TriShape*>(data.rendererData);
-			const auto* shape = geometry->AsTriShape();
-			record.terrainGeometry.push_back({ { "geometry", reinterpret_cast<uintptr_t>(geometry.get()) }, { "name", geometry->name.c_str() },
-				{ "renderer", reinterpret_cast<uintptr_t>(mesh) },
-				{ "vertices", mesh ? reinterpret_cast<uintptr_t>(mesh->vertexBuffer) : 0 },
-				{ "indices", mesh ? reinterpret_cast<uintptr_t>(mesh->indexBuffer) : 0 },
-				{ "triangles", shape ? shape->GetTrishapeRuntimeData().triangleCount : 0 },
-				{ "lodMode", geometry->GetLODMode() },
-				{ "position", { geometry->world.translate.x, geometry->world.translate.y, geometry->world.translate.z } },
-				{ "loadedTerrain", i >= terrainGeometryCount - loadedTerrainGeometryCount } });
-		}
-	}
-	record.geometryCounts = geometryCounts;
-	record.loadedTerrainGeometryCount = loadedTerrainGeometryCount;
-	record.landBounds = landBounds;
-	record.hiddenNodes = hiddenNodes;
-	record.enabledSegments = enabledSegments;
-	record.disabledSegments = disabledSegments;
-	record.maps = maps;
-	for (uint32_t i = 0; i < kMapCount; ++i) {
-		record.historyFrames[i] = previousMaps[i].valid ? previousMaps[i].frame : 0;
-		record.historyWeights[i] = GetHistoryBlend(i);
-	}
-	record.pending = pendingMap;
-	record.pendingIndex = pendingIndex;
-	record.remainingCasters = pendingIndex >= 0 ? casters.size() - casterIndex : 0;
-	record.completedMaps = completedMaps;
-	record.draws = lastDraws;
-	record.triangles = lastTriangles;
-	record.triangleBudget = triangleBudget;
-	record.unsupportedCasters = unsupportedCasters;
-	record.immediateRefresh = a_refreshImmediately;
-	record.collectionMs = a_collectionMs;
-	record.gpuMs = { lastUpdateMs, lastFilterMs, lastRefreshMs };
-	record.gpuFrames = { lastUpdateFrame, lastFilterFrame, lastRefreshFrame };
-	traceFrames.push_back(record);
-	if (traceFrames.size() == kTraceFrames)
-		SaveTrace();
-}
-
-void LODShadows::SaveTrace()
-{
-	traceEnabled = false;
-	if (traceFrames.empty())
-		return;
-	const auto path = Util::PathHelpers::GetCommunityShaderPath() / "Captures" /
-	                  std::format("LODShadows_{}_{}.json", GetCurrentProcessId(), traceFrames.front().frame);
-	const auto runtime = REL::Module::get().version().string();
-	{
-		std::scoped_lock lock(diagnosticsMutex);
-		tracePath = path.string();
-	}
-	traceWriting = true;
-	traceWriter = std::jthread([this, frames = std::move(traceFrames), casterSnapshots = std::move(traceCasterSnapshots), path, runtime]() {
-		const SKSE::stl::scope_exit finish([&]() noexcept { traceWriting = false; });
-		try {
-			const auto point = [](const RE::NiPoint3& value) { return json::array({ value.x, value.y, value.z }); };
-			const auto matrix = [](const DirectX::XMFLOAT4X4& value) {
-				json result = json::array();
-				for (const auto& row : value.m)
-					for (float element : row)
-						result.push_back(element);
-				return result;
-			};
-			const auto mapData = [&](const Map& map) {
-				return json{ { "buildFrame", map.frame }, { "scene", map.scene }, { "slice", map.slice },
-					{ "center", point(map.center) }, { "direction", point(map.direction) },
-					{ "matrix", matrix(map.data.worldToClip) }, { "terrainValid", map.terrainValid },
-					{ "buildDurationMs", map.buildDurationMs }, { "triangleCount", map.triangleCount },
-					{ "transitionGeneration", map.transitionGeneration }, { "sourceTriangles", map.sourceTriangles }, { "sourceCasters", map.sourceCasters } };
-			};
-			json result{ { "runtime", runtime }, { "resolution", kResolution }, { "halfExtents", kHalfExtents },
-				{ "depthExtent", kDepthExtent }, { "directionThreshold", kDirectionThreshold },
-				{ "maximumCacheFrames", kMaximumCacheFrames },
-				{ "sources", { "terrain", "lodObjects", "lodTrees", "loadedObjects" } },
-				{ "gpuTimers", { "cacheUpdate", "receiverMaskAndCrossBlur", "timeJumpRefresh" } },
-				{ "gpuScope", "GPU times identify their submission frame and exclude material/volume sampling; they are not total feature cost." },
-				{ "terrainHashFields", { "geometry", "transform", "lodMode", "rendererData", "segments", "landBounds", "geometrySet", "rendererSet" } },
-				{ "casterSnapshots", casterSnapshots },
-				{ "frames", json::array() }, { "mapVersions", json::array() } };
-			std::array<uint32_t, kMapCount> publishedFrames{};
-			for (const auto& record : frames) {
-				json versions = json::array();
-				for (uint32_t i = 0; i < kMapCount; ++i) {
-					const auto& map = record.maps[i];
-					versions.push_back(map.valid ? json(map.frame) : json(nullptr));
-					if (map.valid && publishedFrames[i] != map.frame) {
-						auto version = mapData(map);
-						version["index"] = i;
-						version["firstObservedFrame"] = record.frame;
-						result["mapVersions"].push_back(std::move(version));
-						publishedFrames[i] = map.frame;
-					}
-				}
-				result["frames"].push_back({ { "frame", record.frame }, { "timeMs", record.timeMs }, { "world", record.world }, { "hour", record.hour },
-					{ "camera", point(record.camera) }, { "light", point(record.light) }, { "cascadeLight", point(record.cascadeLight) },
-					{ "cameraRoot", point(record.cameraRoot) }, { "cameraAnchor", point(record.cameraAnchor) }, { "cameraAnchorValid", record.cameraAnchorValid },
-					{ "cascadeProjections", { matrix(record.cascadeProjections[0]), matrix(record.cascadeProjections[1]) } },
-					{ "sourceHashes", record.sourceHashes }, { "terrainHashes", record.terrainHashes }, { "geometryCounts", record.geometryCounts },
-					{ "terrainGeometry", record.terrainGeometry },
-					{ "loadedTerrainGeometryCount", record.loadedTerrainGeometryCount },
-					{ "landBounds", { record.landBounds.x, record.landBounds.y, record.landBounds.z, record.landBounds.w } },
-					{ "hiddenNodes", record.hiddenNodes }, { "enabledSegments", record.enabledSegments }, { "disabledSegments", record.disabledSegments },
-					{ "maps", std::move(versions) }, { "historyFrames", record.historyFrames }, { "historyWeights", record.historyWeights }, { "pendingIndex", record.pendingIndex },
-					{ "pendingBuildFrame", record.pendingIndex >= 0 ? json(record.pending.frame) : json(nullptr) },
-					{ "remainingCasters", record.remainingCasters }, { "completedMaps", record.completedMaps },
-					{ "draws", record.draws }, { "triangles", record.triangles }, { "triangleBudget", record.triangleBudget },
-					{ "unsupportedCasters", record.unsupportedCasters }, { "immediateRefresh", record.immediateRefresh },
-					{ "collectionCpuMs", record.collectionMs }, { "gpuMs", record.gpuMs }, { "gpuSubmissionFrames", record.gpuFrames } });
-			}
-			std::error_code error;
-			std::filesystem::create_directories(path.parent_path(), error);
-			if (error)
-				throw std::runtime_error(error.message());
-			if (!Util::FileHelpers::WriteJsonAtomically(path, result, -1, "LOD Shadows trace"))
-				throw std::runtime_error("Failed to write LOD shadow trace");
-			logger::info("LOD Shadows trace saved: {}", path.string());
-		} catch (const std::exception& error) {
-			logger::error("LOD Shadows trace failed: {}", error.what());
-			std::scoped_lock lock(diagnosticsMutex);
-			traceError = error.what();
-		}
-	});
 }

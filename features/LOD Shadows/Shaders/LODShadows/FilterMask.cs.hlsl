@@ -66,7 +66,7 @@ float3 GetPosition(uint2 pixel, uint eyeIndex)
 	float depth = log2(max(LODShadows::MinMaskDepth, mul(FrameBuffer::CameraView[eyeIndex], float4(position, 1)).z));
 	float coverage;
 	float visibility = LODShadows::FilterShadow(position + FrameBuffer::CameraPosAdjust[eyeIndex].xyz,
-		dx, dy, MaskSampler, coverage);
+		dx, dy, MaskSampler, coverage, false, LODShadows::GetObjectShadowWeight(position, eyeIndex));
 	OutputMask[id] = float4(visibility, coverage, depth, 1);
 #endif
 }
