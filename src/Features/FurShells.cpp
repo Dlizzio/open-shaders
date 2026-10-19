@@ -1,5 +1,6 @@
 #include "FurShells.h"
 
+#include "Features/Wind/Wind.h"
 #include "Globals.h"
 #include "GpuPass.h"
 #include "I18n/I18n.h"
@@ -26,7 +27,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	FadeStart,
 	FadeEnd,
 	HideCoveredFur,
-	OverlayFur)
+	OverlayFur,
+	MinFurPixels,
+	WindStrength)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	FurShells::ShellOverride,
@@ -59,6 +62,7 @@ namespace
 	constexpr size_t MaxMissingShells = 65536;
 	constexpr uint32_t MaxOverrideSize = 65536;
 	constexpr float PixelsPerShell = 1.0f;
+	constexpr float MaxWindSpeed = 1.5f;
 	constexpr uint32_t FirstPersonRenderMode = 0x16;
 	constexpr std::string_view EmptyOverlayPath = "textures\\actors\\character\\overlays\\default.dds";
 
@@ -104,14 +108,12 @@ namespace
 		return technique == Facegen || technique == FacegenRGBTint;
 	}
 
-	uint32_t GetResolvableShells(float a_length, float a_distance)
+	float GetFurPixels(float a_length, float a_distance)
 	{
 		const float projection = std::abs(Util::GetCameraData(0).projMat.m[1][1]);
 		const float height = Util::ConvertToDynamic({ 0.0f, static_cast<float>(globals::game::graphicsState->screenHeight) }).y;
 		const float pixels = a_length * 0.5f * height * projection / std::max(a_distance, 1.0f);
-		if (!std::isfinite(pixels))
-			return MaxShells;
-		return static_cast<uint32_t>(std::clamp(std::ceil(pixels / PixelsPerShell), 1.0f, static_cast<float>(MaxShells)));
+		return std::isfinite(pixels) ? pixels : static_cast<float>(MaxShells) * PixelsPerShell;
 	}
 
 	std::string NormalizeTexturePath(const char* a_path)
@@ -255,6 +257,14 @@ void FurShells::DrawSettings()
 	ImGui::Checkbox(T(TKEY("hide_covered_fur"), "Hide Fur Under Clothing"), &settings.HideCoveredFur);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", T(TKEY("hide_covered_fur_tooltip"), "Skips fur whose roots are covered by clothing, armor or anything else in front of them, so it stops poking through. Works in the world view, not in first person or menus."));
+
+	ImGui::SliderFloat(T(TKEY("min_fur_pixels"), "Minimum Fur Size"), &settings.MinFurPixels, 0.0f, 16.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextWrapped("%s", T(TKEY("min_fur_pixels_tooltip"), "Fur thins out as its on-screen height falls below this many pixels and is skipped at zero. 0 disables the cutoff."));
+
+	ImGui::SliderFloat(T(TKEY("wind_strength"), "Wind Strength"), &settings.WindStrength, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextWrapped("%s", T(TKEY("wind_strength_tooltip"), "How strongly the world wind bends the fur. Fur is only blown outdoors. 0 disables wind."));
 
 	ImGui::Checkbox(T(TKEY("overlay_fur"), "Show Overlays On Fur"), &settings.OverlayFur);
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -444,6 +454,12 @@ void FurShells::Reset()
 	passCount = 0;
 	lastStereoDraws = stereoDraws;
 	lastMonoDraws = monoDraws;
+	lastMaxShells = maxShells;
+	lastMinDensity = minDensity;
+	lastWindSpeed = windSpeed;
+	windSpeed = 0.0f;
+	maxShells = 0;
+	minDensity = 1.0f;
 	stereoDraws = 0;
 	monoDraws = 0;
 	lastDiffuse = nullptr;
@@ -633,8 +649,10 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 		return;
 
 	const float fade = std::clamp((values.FadeEnd - distance) / std::max(values.FadeEnd - values.FadeStart, 1.0f), 0.0f, 1.0f);
-	auto shells = static_cast<uint32_t>(std::lround(static_cast<float>(std::min(values.ShellCount, MaxShells)) * fade));
-	if (shells == 0)
+	const float pixels = GetFurPixels(values.Length, distance);
+	const float sizeFade = settings.MinFurPixels > 0.0f ? std::clamp(pixels / settings.MinFurPixels, 0.0f, 1.0f) : 1.0f;
+	const float density = fade * sizeFade;
+	if (density <= 0.0f)
 		return;
 
 	ID3D11ShaderResourceView* normalView = nullptr;
@@ -645,7 +663,11 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 			return;
 	}
 
-	shells = std::min(shells, GetResolvableShells(values.Length, distance));
+	const float layers = std::clamp(pixels / PixelsPerShell, 1.0f, static_cast<float>(std::min(values.ShellCount, MaxShells)));
+	const auto shells = static_cast<uint32_t>(std::ceil(layers));
+	const float tipWeight = layers - static_cast<float>(shells - 1);
+	maxShells = std::max(maxShells, shells);
+	minDensity = std::min(minDensity, density);
 
 	auto* shaderCache = globals::shaderCache;
 	auto* vertexShader = shaderCache->GetVertexShader(*a_shader, state->modifiedVertexDescriptor | FurFlag);
@@ -656,7 +678,10 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 
 	const bool defer = !replaying && !deferralClosed && settings.HideCoveredFur && state->inWorld && currentPass.pass == a_pass;
 
-	PerPass perPass{ values.Length, static_cast<float>(shells), values.Droop, values.RootThreshold, values.TipThreshold, values.RootDarkening, values.ShellColor, 0.0f };
+	const float3 wind = GetWind(geometry->worldBound.center);
+	windSpeed = std::max(windSpeed, wind.Length());
+	PerPass perPass{ values.Length, static_cast<float>(shells), values.Droop, values.RootThreshold, values.TipThreshold, values.RootDarkening, values.ShellColor, 0.0f, density, tipWeight };
+	perPass.Wind = float4(wind.x, wind.y, wind.z, 0.0f);
 	if (skinInstance && settings.OverlayFur)
 		RecordFrameBody(skinInstance, geometry, perPass, shellView, normalView, defer || replaying);
 
@@ -670,6 +695,21 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 	furPixelShader = reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader);
 	depthPixelShader = reinterpret_cast<ID3D11PixelShader*>(depthShader->shader);
 	BindPass(perPass, shellView, normalView);
+}
+
+float3 FurShells::GetWind(const RE::NiPoint3& a_position) const
+{
+	auto& windFeature = globals::features::wind;
+	if (!windFeature.loaded || settings.WindStrength <= 0.0f || Util::IsInterior())
+		return {};
+	const float3 position{ a_position.x, a_position.y, a_position.z };
+	Wind::PublishedWindSample sample;
+	if (!windFeature.SamplePublishedWind({ &position, 1 }, { &sample, 1 }))
+		return {};
+	float3 velocity = sample.windExcludingHavokImpulses * settings.WindStrength;
+	velocity.z = 0.0f;
+	const float speed = velocity.Length();
+	return speed > MaxWindSpeed ? velocity * (MaxWindSpeed / speed) : velocity;
 }
 
 void FurShells::BeginOverlayPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, const FrameBody& a_body)
@@ -1022,6 +1062,9 @@ json FurShells::GetDiagnostics()
 		{ "passesLastFrame", lastPassCount },
 		{ "stereoDrawsLastFrame", lastStereoDraws },
 		{ "monoDrawsLastFrame", lastMonoDraws },
+		{ "maxShellsLastFrame", lastMaxShells },
+		{ "minDensityLastFrame", lastMinDensity },
+		{ "windSpeedLastFrame", lastWindSpeed },
 		{ "deferredPasses", deferredPasses.size() },
 		{ "deferredOverlayPasses", deferredOverlayPasses.size() },
 		{ "frameBodies", frameBodies.size() },

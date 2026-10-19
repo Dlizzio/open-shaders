@@ -18,6 +18,9 @@ namespace FurShells
 		float RootDarkening;
 		float ShellColor;
 		float RootTest;
+		float Density;
+		float TipWeight;
+		float4 Wind;
 	};
 
 #if defined(PSHADER)
@@ -63,6 +66,24 @@ namespace FurShells
 #endif
 
 #if defined(VSHADER)
+	static const float WindMaxBend = 0.6;
+	static const float WindLeeShare = 0.25;
+
+	/**
+	 * @brief World-space push of a shell layer by the wind sampled for the whole mesh.
+	 * @details Bends quadratically with layer height, scales with wind speed squared, and is capped at WindMaxBend of the fur length so layers never separate.
+	 *          Surfaces facing away from the wind keep WindLeeShare of the push.
+	 */
+	float3 GetWindDisplacement(float3 a_worldNormal, float a_shell)
+	{
+		float3 velocity = Wind.xyz;
+		float speed = length(velocity);
+		float3 direction = velocity / max(speed, 1e-4);
+		float exposure = lerp(WindLeeShare, 1.0, saturate(-dot(a_worldNormal, direction)));
+		float bend = saturate(speed * speed) * exposure * WindMaxBend;
+		return direction * (bend * a_shell * a_shell * Length);
+	}
+
 	/** @brief Shell layer of an instance; VR packs both eyes into consecutive instances, so the layer is the pair index. */
 	uint GetShellIndex(uint instanceID)
 	{
@@ -78,6 +99,14 @@ namespace FurShells
 	{
 		return saturate((ShellCount - float(shellIndex)) / max(ShellCount, 1.0));
 	}
+
+#if defined(PSHADER)
+	/** @brief Strand survival weight: distance and size thinning for every layer, and the fractional share of the tip layer. */
+	float GetLayerWeight(float shell)
+	{
+		return Density * (shell >= 0.999 ? TipWeight : 1.0);
+	}
+#endif
 
 	float GetDarkening(float shell, float facing)
 	{
