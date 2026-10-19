@@ -557,6 +557,8 @@ namespace SIE
 		void CommitFeatureSetChange();
 		/** @brief Swaps the rollback cache back into use and matches boot toggles to it. Restart required. */
 		bool RestorePreviousDiskCache();
+		/** @brief Deletes the rollback cache so the current one is kept and the mismatch notice clears. Refused while a feature-set change awaits commit or a restore is pending. */
+		bool DiscardPreviousDiskCache();
 		/** @brief Writes cache metadata (version, feature list) to the disk cache directory. */
 		void WriteDiskCacheInfo();
 		/// One disk-cache/runtime state divergence found by ValidateDiskCache.
@@ -592,6 +594,8 @@ namespace SIE
 		/// disk, this session compiles memory-only, and the menu offers rebuild vs
 		/// fix-setup-and-restart (after a fix the cache revalidates untouched).
 		bool IsDiskCacheHeld() const { return diskCacheHeld; }
+		/// True when the cache was kept across a version change, so a blob without a recorded digest must recompile.
+		bool RequiresDigestForReuse() const { return requireDigestForReuse; }
 
 		/// Disk-cache IO gate: user setting AND not held. The hold must not flip
 		/// isDiskCache itself -- that value persists as "Enable Disk Cache" in user
@@ -930,7 +934,7 @@ namespace SIE
 			MTLandLODBlend = 19,
 		};
 
-		enum class LightingShaderFlags
+		enum class LightingShaderFlags : uint32_t
 		{
 			VC = 1 << 0,
 			Skinned = 1 << 1,
@@ -955,7 +959,10 @@ namespace SIE
 			DoAlphaTest = 1 << 20,
 			Snow = 1 << 21,
 			CharacterLight = 1 << 22,
-			AdditionalAlphaMask = 1 << 23
+			AdditionalAlphaMask = 1 << 23,
+			// Open Shaders fork-only flags: bits 30 and 31 sit above the technique bits (24-29) and away from the low bits upstream claims.
+			FurShells = 1u << 30,
+			FurShellsDepth = 1u << 31
 		};
 
 		enum class BloodSplatterShaderTechniques
@@ -1239,6 +1246,7 @@ namespace SIE
 		bool isEnabled = true;
 		bool isDiskCache = true;
 		bool diskCacheHeld = false;
+		bool requireDigestForReuse = false;
 		bool featureSetChanged = false;
 		bool featureSetRevertPending = false;
 		bool featureSetCacheBackedUp = false;

@@ -330,6 +330,9 @@ public:
 	/** @brief Called before a post-processing implementation consumes the scene target. */
 	virtual void OnBeforePostProcessing(RE::RENDER_TARGET /*a_renderTarget*/) {}
 
+	/** @brief Called in the main world pass just before the engine renders blended decals, after terrain blending's deferred passes. */
+	virtual void OnBeforeBlendedDecals() {}
+
 	/** @brief Replacement scene in engine color encoding, with borrowed resources valid during the post-processing pass. */
 	struct PostProcessingInput
 	{
@@ -382,11 +385,11 @@ public:
 	/** @brief Called after reflection prepasses; returned cleanup runs after cubemap rendering. */
 	virtual std::function<void()> OnReflectionsRenderBegin() { return nullptr; }
 
-	/** @brief Called after engine weather colors are computed, before preset color adjustments. */
-	virtual void OnWeatherColorsComputed(RE::Sky* /*a_sky*/) {}
-
 	/** @brief Called after engine weather colors and weather extensions have finished updating. */
 	virtual void OnWeatherColorsUpdated(RE::Sky* /*a_sky*/) {}
+
+	/** @brief Called after the sky's weather colors update and before Effects11 grades them; for features that rewrite colors the grading reads. */
+	virtual void OnBeforeWeatherColorGrading(RE::Sky* /*a_sky*/) {}
 
 	/** @brief Opts into point-light color processing before opacity and brightness scaling. */
 	virtual bool WantsPointLightColorOverride() const { return false; }

@@ -63,6 +63,7 @@ public:
 	uint32_t currentPixelDescriptor = 0;
 	spdlog::level::level_enum logLevel = spdlog::level::info;
 	bool enableDeveloperMode = false;  ///< Explicit developer mode toggle; also enabled when log level is debug/trace.
+	// Guarded by shaderDefinesMutex; read it through GetDefinesString().
 	std::string shaderDefinesString = "";
 	std::shared_ptr<const std::vector<std::pair<std::string, std::string>>> shaderDefines = std::make_shared<const std::vector<std::pair<std::string, std::string>>>();  // data structure to parse string into; needed to avoid dangling pointers
 	std::mutex shaderDefinesMutex;
@@ -237,6 +238,12 @@ public:
 	 * @param a_forceDeferred If true, forces the Deferred flag regardless of current pass.
 	 */
 	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred = false);
+
+	/**
+	 * @brief Pixel descriptor bits a shader type reads at runtime although they also take part in the lookup.
+	 * @param a_shader Shader whose descriptor is being uploaded.
+	 */
+	[[nodiscard]] static uint32_t GetRuntimePixelBits(const RE::BSShader& a_shader);
 
 	/** @brief Opens a named GPU performance event (D3D annotation + Tracy zone). */
 	void BeginPerfEvent(std::string_view title);

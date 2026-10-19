@@ -18,6 +18,10 @@
 
 #include "Common/TreeWind.hlsli"
 
+#if defined(FUR_SHELLS)
+#	include "FurShells/FurShells.hlsli"
+#endif
+
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
 #endif
@@ -38,33 +42,35 @@
 #	define LOD
 #endif
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
 	float2 TexCoord0: TEXCOORD0;
-#if !defined(MODELSPACENORMALS)
+#	if !defined(MODELSPACENORMALS)
 	float4 Normal: NORMAL0;
 	float4 Bitangent: BINORMAL0;
-#endif  // !MODELSPACENORMALS
+#	endif  // !MODELSPACENORMALS
 
-#if defined(VC)
+#	if defined(VC)
 	float4 Color: COLOR0;
-#	if defined(LANDSCAPE)
+#		if defined(LANDSCAPE)
 	float4 LandBlendWeights1: TEXCOORD2;
 	float4 LandBlendWeights2: TEXCOORD3;
-#	endif  // LANDSCAPE
-#endif      // VC
-#if defined(SKINNED)
+#		endif  // LANDSCAPE
+#	endif      // VC
+#	if defined(SKINNED)
 	float4 BoneWeights: BLENDWEIGHT0;
 	float4 BoneIndices: BLENDINDICES0;
-#endif  // SKINNED
-#if defined(EYE)
+#	endif  // SKINNED
+#	if defined(EYE)
 	float EyeParameter: TEXCOORD2;
-#endif  // EYE
-#if defined(VR)
+#	endif  // EYE
+#	if defined(VR) || defined(FUR_SHELLS)
 	uint InstanceID: SV_INSTANCEID;
-#endif  // VR
+#	endif  // VR || FUR_SHELLS
 };
+#endif
 
 struct VS_OUTPUT
 {
@@ -105,6 +111,10 @@ struct VS_OUTPUT
 #endif
 
 	float3 ModelPosition: TEXCOORD12;
+#if defined(FUR_SHELLS)
+	nointerpolation float FurShell: TEXCOORD13;
+	float4 FurRoot: TEXCOORD14;
+#endif
 };
 #ifdef VSHADER
 
@@ -263,6 +273,19 @@ VS_OUTPUT main(VS_INPUT input)
 
 	precise float4 previousInputPosition = inputPosition;
 
+#	if defined(FUR_SHELLS)
+	const float furShell = FurShells::GetShell(FurShells::GetShellIndex(input.InstanceID));
+	const float4 furRootPosition = inputPosition;
+#		if defined(MODELSPACENORMALS)
+	const float3 furNormal = FurShells::GetModelNormal(input.TexCoord0.xy * TexcoordOffset.zw + TexcoordOffset.xy);
+#		else
+	const float3 furNormal = input.Normal.xyz * 2.0 - 1.0;
+#		endif
+	const float3 furOffset = furNormal * (FurShells::Length * furShell);
+	inputPosition.xyz += furOffset;
+	previousInputPosition.xyz += furOffset;
+#	endif
+
 #	if defined(TREE_ANIM)
 	float2 leafAnimationStrength = TreeParams.z.xx;
 	if (treeBendEnabled) {
@@ -287,6 +310,23 @@ VS_OUTPUT main(VS_INPUT input)
 	precise float4 previousWorldPosition = float4(mul(PreviousWorld[eyeIndex], previousInputPosition), 1);
 	precise float4 worldPosition = float4(mul(World[eyeIndex], inputPosition), 1);
 #	endif  // SKINNED
+
+#	if defined(FUR_SHELLS)
+	const float furDroop = FurShells::Droop * furShell * furShell;
+#		if defined(SKINNED)
+	const float3 furWorldNormal = normalize(mul((float3x3)worldMatrix, furNormal));
+#		else
+	const float3 furWorldNormal = normalize(mul((float3x3)World[eyeIndex], furNormal));
+#		endif
+	const float3 furDisplacement = float3(0.0, 0.0, -furDroop) + FurShells::GetWindDisplacement(furWorldNormal, furShell);
+	worldPosition.xyz += furDisplacement;
+	previousWorldPosition.xyz += furDisplacement;
+#		if defined(SKINNED)
+	const float4 furRootViewPos = mul(ViewProj[eyeIndex], float4(mul(furRootPosition, transpose(worldMatrix)), 1));
+#		else
+	const float4 furRootViewPos = mul(ViewProj[eyeIndex], float4(mul(World[eyeIndex], furRootPosition), 1));
+#		endif
+#	endif
 
 	float3x3 treeBendNormalTransform = (float3x3)Math::IdentityMatrix;
 	if (treeBendEnabled) {
@@ -316,6 +356,9 @@ VS_OUTPUT main(VS_INPUT input)
 		precise float4x4 world4x4 = float4x4(World[eyeIndex][0], World[eyeIndex][1], World[eyeIndex][2], float4(0, 0, 0, 1));
 		precise float4x4 modelView = mul(ViewProj[eyeIndex], world4x4);
 		viewPos = mul(modelView, inputPosition);
+#		if defined(FUR_SHELLS)
+		viewPos += mul(ViewProj[eyeIndex], float4(furDisplacement, 0.0));
+#		endif
 	}
 #	endif
 
@@ -436,6 +479,11 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif  // VR
 
 	vsout.ModelPosition = input.Position.xyz;
+
+#	if defined(FUR_SHELLS)
+	vsout.FurShell = furShell;
+	vsout.FurRoot = furRootViewPos;
+#	endif
 
 	return vsout;
 }
@@ -1156,7 +1204,13 @@ bool UseSkylightingShadowVisibility()
 #		include "WetnessEffects/CharacterRainLighting.hlsli"
 #	endif
 
-PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+#	if defined(FUR_SHELLS) && !defined(FUR_SHELLS_DEPTH)
+#		define FUR_EARLY_DEPTH_STENCIL [earlydepthstencil]
+#	else
+#		define FUR_EARLY_DEPTH_STENCIL
+#	endif
+
+FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
 	uint eyeIndex = Stereo::GetEyeIndexPS(input.Position, VPOSOffset);
@@ -1181,7 +1235,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if !defined(TREE_ANIM) && !defined(LOD)
 	// Fix incorrect vertex normals on double-sided meshes
+#			if defined(FUR_SHELLS)
+	if (!frontFace && input.FurShell <= 0.0)
+#			else
 	if (!frontFace)
+#			endif
 		tbn = lerp(tbn, -tbn, nearFactor);
 #		endif
 
@@ -1228,6 +1286,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float2 uv = input.TexCoord0.xy;
 	float2 uvOriginal = uv;
+
+#	if defined(FUR_SHELLS)
+	float4 furSample = FurShells::TexShell.SampleBias(SampColorSampler, uv, SharedData::MipBias);
+	bool furRootCovered = FurShells::IsRootCovered(input.FurRoot, fwidth(input.FurRoot.w), eyeIndex);
+#		if defined(MODELSPACENORMALS)
+	float3 furFacingNormal = cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz));
+#		else
+	float3 furFacingNormal = tbnTr[2];
+#		endif
+	float furFacing = abs(dot(furFacingNormal, viewDirection)) * rsqrt(max(dot(furFacingNormal, furFacingNormal), 1e-12));
+	float furCoverage = FurShells::GetCoverage(furSample.w, lerp(FurShells::RootThreshold, FurShells::TipThreshold, input.FurShell), uv) * FurShells::GetLayerWeight(input.FurShell);
+	if (input.FurShell > 0.0 && (furRootCovered || furCoverage < screenNoise))
+		discard;
+#	endif
 
 #	if defined(TRUE_PBR)
 	const bool pbrTextures = true;
@@ -1691,6 +1763,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	baseColor = float4(Color::Diffuse(rawBaseColor.rgb), rawBaseColor.a);
 #		else
 	MESH_TV_SAMPLE_BIAS(rawBaseColor, TexColorSampler, SampColorSampler, diffuseUv, true);
+#			if defined(FUR_SHELLS)
+	if (input.FurShell > 0.0)
+		rawBaseColor.rgb = lerp(rawBaseColor.rgb, furSample.rgb, FurShells::ShellColor);
+#			endif
 	baseColor = float4(Color::Albedo(rawBaseColor.rgb), rawBaseColor.a);
 #		endif
 	float4 normalColor;
@@ -1827,6 +1903,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		baseColor.xyz = Color::GamutTransform(Color::SkyrimGammaToLinear(GetFacegenRGBTintBaseColor(Color::LinearToSkyrimGamma(linearSrgbBaseColor), uv)));
 	}
 #	endif  // FACEGEN
+
+#	if defined(FUR_SHELLS)
+	if (input.FurShell > 0.0)
+		baseColor.xyz *= FurShells::GetDarkening(input.FurShell, furFacing);
+#	endif
 
 #	if defined(CS_SKIN_SHADING)
 	if (skinEnabled) {
@@ -2056,6 +2137,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
+
+#	if defined(FUR_SHELLS)
+	if (input.FurShell > 0.0)
+		worldNormal = normalize(worldNormal - viewDirection * (min(dot(worldNormal, viewDirection), 0.0) - 1e-3));
+#	endif
 
 #	if defined(MODELSPACENORMALS)
 	float3 vertexNormal = worldNormal;
@@ -3793,6 +3879,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(SSS) && defined(SKIN)
 	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), masksZ, psout.Diffuse.w);
+#			if defined(FUR_SHELLS)
+	if (input.FurShell > 0.0)
+		psout.Masks.x = 0;
+#			endif
 #		else
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
 #		endif
@@ -3895,6 +3985,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(CAPTURE_REFLECTION_RADIANCE)
 	psout.ReflectionRadiance = captureRadiance ? float4(radianceColor, psout.Diffuse.w) : psout.Diffuse;
 #	endif
+
+#	if defined(FUR_SHELLS_DEPTH)
+	psout = (PS_OUTPUT)0;
+#	endif
+
 	return psout;
 }
 

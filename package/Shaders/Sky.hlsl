@@ -23,19 +23,21 @@ bool IsProceduralSunActive()
 }
 #endif
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
 
-#if defined(TEX) || defined(HORIZFADE)
+#	if defined(TEX) || defined(HORIZFADE)
 	float2 TexCoord: TEXCOORD0;
-#endif
+#	endif
 
 	float4 Color: COLOR0;
-#if defined(VR)
+#	if defined(VR)
 	uint InstanceID: SV_INSTANCEID;
-#endif  // VR
+#	endif  // VR
 };
+#endif
 
 struct VS_OUTPUT
 {
@@ -354,6 +356,9 @@ PS_OUTPUT main(PS_INPUT input)
 	PS_OUTPUT psout;
 	const bool gammaRenderTarget = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GammaRenderTarget) != 0;
 	float3 skyScale = PParams.yyy;
+#	if defined(EFFECTS11)
+	skyScale *= SharedData::enbSettings.SkyScaleMultiplier;
+#	endif
 	bool composeAuthoredSky = ENABLE_LL;
 #	if !defined(VR)
 	uint eyeIndex = 0;

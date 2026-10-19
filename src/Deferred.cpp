@@ -851,6 +851,9 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 		}
 	}
 
+	if (globals::shaderCache->IsEnabled() && globals::state->inWorld)
+		Feature::ForEachLoadedFeature("OnBeforeBlendedDecals", [](Feature* feature) { feature->OnBeforeBlendedDecals(); });
+
 	// Deferred blended decals
 
 	func(This, RenderFlags);
