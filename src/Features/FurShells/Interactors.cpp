@@ -2,405 +2,219 @@
 
 #include "Globals.h"
 #include "Utils/ActorUtils.h"
-#include "Utils/Game.h"
 #include "Utils/SkinnedMesh.h"
 
+#include <Tracy/Tracy.hpp>
+
 #include <algorithm>
-#include <format>
-#include <optional>
+#include <cfloat>
+#include <cmath>
+#include <string_view>
 
 namespace FurInteractors
 {
 	namespace
 	{
-		constexpr size_t MaxActors = 8;
-		constexpr size_t MaxCapsulesPerActor = 6;
-		constexpr float MinActorCapsuleRadius = 3.0f;
-		constexpr float MinRadiusPerDistance = 0.002f;
-		constexpr float MinFitRadius = 0.4f;
-		constexpr float MaxFitRadius = 3.0f;
-		constexpr float MaxPalmFitRadius = 2.0f;
-		constexpr float FitPercentile = 0.85f;
-		constexpr size_t MinFitVertices = 6;
-		constexpr float MinDominantWeight = 0.5f;
-		constexpr uint32_t FitCheckInterval = 120;
-		constexpr float FingertipLengthScale = 0.9f;
-		constexpr float TipPercentile = 0.97f;
-		constexpr float MaxTipExtent = 6.0f;
-		constexpr size_t IndexFinger = 1;
-		constexpr size_t PinkyFinger = 4;
-		constexpr float MaxMovePerFrame = 8.0f;
-		constexpr uint64_t AppendageKeyBase = 0x100000000ull;
-		constexpr size_t RightHandKeyOffset = 64;
-
-		uint64_t MakeKey(RE::FormID a_owner, size_t a_index)
-		{
-			return (static_cast<uint64_t>(a_owner) << 8) ^ static_cast<uint64_t>(a_index);
-		}
-
-		/** @brief Skeleton node name of a hand (index 0) or of one finger joint (index 1 to 15). */
-		std::string HandNodeName(bool a_left, size_t a_index)
-		{
-			const char side = a_left ? 'L' : 'R';
-			if (a_index == 0)
-				return std::format("NPC {} Hand [{}Hnd]", side, side);
-			const size_t finger = (a_index - 1) / 3;
-			const size_t joint = (a_index - 1) % 3;
-			return std::format("NPC {} Finger{}{} [{}F{}{}]", side, finger, joint, side, finger, joint);
-		}
+		constexpr float MaxDentRadius = 4.0f;
+		constexpr float MinDentPress = 0.15f;
+		constexpr float MinDentDepth = 0.04f;
+		constexpr float DentRecoverBase = 0.4f;
+		constexpr float DentRecoverPerDepth = 2.0f;
+		constexpr float MaxFrameSeconds = 0.1f;
+		constexpr size_t MaxPressSamples = 384;
+		constexpr uint32_t MemoryIdleFrames = 240;
 	}
 
-	bool Tracker::GetHandPositions(bool a_left, float3& a_hand, float3& a_fingerJoint) const
+	void Memory::Advance()
 	{
-		const auto& nodes = handNodes[a_left ? 0 : 1].nodes;
-		const auto& hand = nodes[0];
-		const auto& finger = nodes[1 + 2 * JointsPerFinger + 2];
-		if (!hand || !finger || !hand->parent || !finger->parent)
-			return false;
-		a_hand = Util::ToFloat3(hand->world.translate);
-		a_fingerJoint = Util::ToFloat3(finger->world.translate);
-		return true;
+		const float deltaTime = globals::game::deltaTime ? *globals::game::deltaTime : 0.0f;
+		frameSeconds = std::clamp(deltaTime, 0.0f, MaxFrameSeconds);
+		DecayDents();
+		++frame;
 	}
 
-	float Tracker::GetAverageFingerRadius() const
+	void Memory::Clear()
 	{
-		float sum = 0.0f;
-		for (const auto& hand : handRadii)
-			for (const float radius : hand.finger)
-				sum += radius;
-		return sum / static_cast<float>(handRadii.size() * handRadii[0].finger.size());
+		memory.clear();
 	}
 
-	float Tracker::GetAveragePalmRadius() const
+	size_t Memory::GetDentCount() const
 	{
-		return (handRadii[0].palm + handRadii[1].palm) * 0.5f;
+		size_t count = 0;
+		for (const auto& [geometry, mesh] : memory)
+			count += mesh.dents.size();
+		return count;
 	}
 
-	void Tracker::FitRadii(RE::Actor* a_player)
+	void Memory::DecayDents()
 	{
-		// Matched by name because armor can be skinned to a different copy of the skeleton.
-		std::unordered_map<std::string, size_t> slotOfName;
-		for (size_t side = 0; side < handNodes.size(); ++side) {
-			for (size_t index = 0; index < HandNodeCount; ++index)
-				slotOfName[HandNodeName(side == 0, index)] = side * HandNodeCount + index;
-		}
-
-		const auto segmentEnd = [&](size_t a_side, size_t a_index) -> std::optional<float3> {
-			const auto& nodes = handNodes[a_side].nodes;
-			const bool distal = a_index != 0 && (a_index - 1) % JointsPerFinger == JointsPerFinger - 1;
-			const RE::NiAVObject* source = nodes[a_index].get();
-			if (a_index == 0)
-				source = nodes[1 + IndexFinger * JointsPerFinger].get();  // the palm runs to the index knuckle
-			else if (!distal)
-				source = nodes[a_index + 1].get();
-			if (!source)
-				return std::nullopt;
-			const float3 translate = Util::ToFloat3(source->local.translate);
-			return distal ? translate * FingertipLengthScale : translate;
-		};
-
-		std::array<float, 2 * HandNodeCount> outermost{};
-		std::array<float, 2 * HandNodeCount> tipExtents{};
-		size_t meshes = 0;
-
-		std::vector<Util::SkinnedVertex> vertices;
-		Util::ForEachActorGeometry(a_player, [&](RE::BSGeometry* a_geometry) {
-			if (!Util::ReadSkinnedVertices(a_geometry, vertices))
-				return;
-			const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
-
-			std::vector<std::optional<size_t>> handSlotOfBone(skin->numMatrices);
-			for (uint32_t bone = 0; bone < skin->numMatrices; ++bone) {
-				const RE::NiAVObject* boneNode = skin->bones[bone];
-				if (!boneNode || !boneNode->name.c_str())
-					continue;
-				if (const auto found = slotOfName.find(boneNode->name.c_str()); found != slotOfName.end())
-					handSlotOfBone[bone] = found->second;
+		for (auto it = memory.begin(); it != memory.end();) {
+			auto& dents = it->second.dents;
+			for (Dent& dent : dents) {
+				if (dent.refreshedFrame != frame)
+					dent.depth *= std::exp(-frameSeconds / std::max(dent.recoverSeconds, 0.05f));
 			}
+			std::erase_if(dents, [](const Dent& a_dent) { return a_dent.depth < MinDentDepth; });
+			if (dents.empty() && frame - it->second.usedFrame > MemoryIdleFrames)
+				it = memory.erase(it);
+			else
+				++it;
+		}
+	}
 
-			std::array<std::vector<float>, 2 * HandNodeCount> distances;
-			std::array<std::vector<float>, 2 * HandNodeCount> alongAxis;
-			bool touched = false;
-			for (const Util::SkinnedVertex& vertex : vertices) {
-				size_t dominant = 0;
-				float dominantWeight = 0.0f;
-				for (size_t slot = 0; slot < vertex.weight.size(); ++slot) {
-					if (vertex.weight[slot] > dominantWeight) {
-						dominantWeight = vertex.weight[slot];
-						dominant = slot;
+	void Memory::BuildPressSamples(const RE::BSGeometry* a_geometry, MeshMemory& a_memory) const
+	{
+		a_memory.samples.clear();
+		a_memory.bones.clear();
+		std::vector<Util::SkinnedVertex> vertices;
+		if (!Util::ReadSkinnedVertices(const_cast<RE::BSGeometry*>(a_geometry), vertices))
+			return;
+
+		const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
+		std::vector<int> boneSides(skin->numMatrices, -1);
+		for (uint32_t bone = 0; bone < skin->numMatrices; ++bone) {
+			a_memory.bones.emplace_back(skin->bones[bone]);
+			const std::string_view name = skin->bones[bone] && skin->bones[bone]->name.c_str() ? skin->bones[bone]->name.c_str() : "";
+			boneSides[bone] = Util::BodyCapsules::HandBoneSide(name);
+		}
+
+		const size_t stride = std::max<size_t>(1, vertices.size() / MaxPressSamples);
+		for (size_t index = 0; index < vertices.size(); index += stride) {
+			const Util::SkinnedVertex& vertex = vertices[index];
+			const auto dominant = Util::DominantBone(vertex);
+			if (!dominant || !a_memory.bones[*dominant])
+				continue;
+			const uint16_t bone = *dominant;
+			a_memory.samples.push_back({ bone, boneSides[bone], skin->skinData->GetBoneDataSkinToBone(bone) * vertex.position });
+		}
+	}
+
+	Memory::MeshMemory& Memory::Prepare(const RE::BSGeometry* a_geometry, const void* a_skin)
+	{
+		MeshMemory& mesh = memory[a_geometry];
+		mesh.usedFrame = frame;
+		if (mesh.skin != a_skin) {
+			mesh.skin = a_skin;
+			mesh.dents.clear();
+			mesh.measuredFrame = UINT32_MAX;
+			BuildPressSamples(a_geometry, mesh);
+		}
+		return mesh;
+	}
+
+	size_t Memory::Nearest(const RE::BSGeometry* a_geometry, std::span<const Capsule> a_candidates, std::span<Capsule> a_out)
+	{
+		ZoneScopedN("FurShells::Nearest");
+		const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
+		if (!skin) {
+			const size_t keep = std::min(a_out.size(), a_candidates.size());
+			std::copy_n(a_candidates.begin(), keep, a_out.begin());
+			return keep;
+		}
+
+		MeshMemory& mesh = Prepare(a_geometry, skin);
+		const size_t keep = std::min(a_out.size(), a_candidates.size());
+		if (a_candidates.size() <= a_out.size() || mesh.samples.empty()) {
+			std::copy_n(a_candidates.begin(), keep, a_out.begin());
+			return keep;
+		}
+
+		std::vector<float3> positions;
+		positions.reserve(mesh.samples.size());
+		for (const PressSample& sample : mesh.samples)
+			positions.push_back(Util::ToFloat3(mesh.bones[sample.bone]->world * sample.local));
+
+		std::vector<std::pair<float, size_t>> gaps;
+		gaps.reserve(a_candidates.size());
+		for (size_t index = 0; index < a_candidates.size(); ++index) {
+			const Capsule& capsule = a_candidates[index];
+			float nearest = FLT_MAX;
+			for (size_t sample = 0; sample < positions.size(); ++sample) {
+				if (capsule.side >= 0 && mesh.samples[sample].side == capsule.side)
+					continue;
+				nearest = std::min(nearest, (positions[sample] - capsule.ClosestPointOnAxis(positions[sample])).LengthSquared());
+			}
+			gaps.emplace_back(std::sqrt(nearest) - capsule.radius, index);
+		}
+		std::ranges::partial_sort(gaps, gaps.begin() + static_cast<std::ptrdiff_t>(keep));
+		for (size_t index = 0; index < keep; ++index)
+			a_out[index] = a_candidates[gaps[index].second];
+		return keep;
+	}
+
+	size_t Memory::Remember(const RE::BSGeometry* a_geometry, float a_furLength, size_t a_count, std::array<Capsule, MaxCapsulesPerPass>& a_capsules)
+	{
+		ZoneScopedN("FurShells::Remember");
+		const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
+		if (!skin || a_furLength <= 0.0f)
+			return a_count;
+
+		MeshMemory& mesh = Prepare(a_geometry, skin);
+
+		if (mesh.measuredFrame != frame) {
+			mesh.measuredFrame = frame;
+			for (size_t index = 0; index < a_count && !mesh.samples.empty(); ++index) {
+				const Capsule& capsule = a_capsules[index];
+				if (!capsule.appendage || capsule.radius > MaxDentRadius)
+					continue;
+
+				float nearest = FLT_MAX;
+				const PressSample* nearestSample = nullptr;
+				float3 pressPoint;
+				for (const PressSample& sample : mesh.samples) {
+					if (capsule.side >= 0 && sample.side == capsule.side)
+						continue;
+					const float3 position = Util::ToFloat3(mesh.bones[sample.bone]->world * sample.local);
+					const float3 closest = capsule.ClosestPointOnAxis(position);
+					const float gap = (position - closest).Length() - capsule.radius;
+					if (gap < nearest) {
+						nearest = gap;
+						nearestSample = &sample;
+						pressPoint = closest;
 					}
 				}
-				const uint16_t skinBone = vertex.bone[dominant];
-				if (dominantWeight < MinDominantWeight || skinBone == Util::InvalidSkinBone || !handSlotOfBone[skinBone])
+
+				const float press = std::clamp((a_furLength - nearest) / a_furLength, 0.0f, 1.0f);
+				if (!nearestSample || press < MinDentPress)
 					continue;
 
-				const size_t handSlot = *handSlotOfBone[skinBone];
-				const auto end = segmentEnd(handSlot / HandNodeCount, handSlot % HandNodeCount);
-				if (!end)
-					continue;
-
-				const RE::NiTransform skinToBone = skin->skinData->GetBoneDataSkinToBone(skinBone);
-				const float3 point = Util::ToFloat3(skinToBone * vertex.position);
-				const bool distal = handSlot % HandNodeCount != 0 && (handSlot % HandNodeCount - 1) % JointsPerFinger == JointsPerFinger - 1;
-				const float along = point.Dot(*end) / std::max(end->LengthSquared(), 1e-4f);
-				const float t = distal ? std::max(along, 0.0f) : std::clamp(along, 0.0f, 1.0f);
-				distances[handSlot].push_back((point - *end * t).Length());
-				if (distal)
-					alongAxis[handSlot].push_back(along * end->Length());
-				touched = true;
-			}
-
-			if (!touched)
-				return;
-			++meshes;
-			for (size_t slot = 0; slot < distances.size(); ++slot) {
-				auto& list = distances[slot];
-				if (list.size() < MinFitVertices)
-					continue;
-				const size_t rank = std::min(list.size() - 1, static_cast<size_t>(FitPercentile * static_cast<float>(list.size())));
-				std::ranges::nth_element(list, list.begin() + static_cast<std::ptrdiff_t>(rank));
-				outermost[slot] = std::max(outermost[slot], list[rank]);
-			}
-			for (size_t slot = 0; slot < alongAxis.size(); ++slot) {
-				auto& list = alongAxis[slot];
-				if (list.size() < MinFitVertices)
-					continue;
-				const size_t rank = std::min(list.size() - 1, static_cast<size_t>(TipPercentile * static_cast<float>(list.size())));
-				std::ranges::nth_element(list, list.begin() + static_cast<std::ptrdiff_t>(rank));
-				tipExtents[slot] = std::max(tipExtents[slot], list[rank]);
-			}
-		});
-
-		fitMeshes = meshes;
-		for (size_t side = 0; side < handRadii.size(); ++side) {
-			HandRadii radii;
-			for (size_t finger = 0; finger < FingerCount; ++finger) {
-				for (size_t joint = 0; joint < JointsPerFinger; ++joint) {
-					const float fitted = outermost[side * HandNodeCount + 1 + finger * JointsPerFinger + joint];
-					if (fitted > 0.0f)
-						radii.finger[finger * JointsPerFinger + joint] = std::clamp(fitted, MinFitRadius, MaxFitRadius);
+				const RE::NiAVObject* bone = mesh.bones[nearestSample->bone].get();
+				const RE::NiPoint3 local = bone->world.Invert() * RE::NiPoint3{ pressPoint.x, pressPoint.y, pressPoint.z };
+				const float recover = DentRecoverBase + DentRecoverPerDepth * press;
+				Dent* dent = nullptr;
+				for (Dent& existing : mesh.dents) {
+					if (existing.bone.get() == bone && existing.local.GetDistance(local) < std::max(capsule.radius, 0.5f * existing.radius))
+						dent = &existing;
 				}
-				radii.tipExtent[finger] = std::min(tipExtents[side * HandNodeCount + 1 + finger * JointsPerFinger + JointsPerFinger - 1], MaxTipExtent);
-			}
-			if (const float palm = outermost[side * HandNodeCount]; palm > 0.0f)
-				radii.palm = std::clamp(palm, MinFitRadius, MaxPalmFitRadius);
-			handRadii[side] = radii;
-		}
-		logger::info("[Fur Shells] Fitted hand capsule radii from {} meshes: fingers {:.2f}, palm {:.2f}", meshes, GetAverageFingerRadius(), GetAveragePalmRadius());
-	}
-
-	void Tracker::Clear()
-	{
-		capsules.clear();
-		previousCenters.clear();
-		currentCenters.clear();
-	}
-
-	void Tracker::Push(Capsule a_capsule, size_t a_index)
-	{
-		const float3 center = (a_capsule.pointA + a_capsule.pointB) * 0.5f;
-		const uint64_t key = MakeKey(a_capsule.owner, a_index) + (a_capsule.appendage ? AppendageKeyBase : 0);
-		a_capsule.move = float3{};
-		if (const auto previous = previousCenters.find(key); previous != previousCenters.end()) {
-			float3 move = center - previous->second;
-			const float length = move.Length();
-			if (length > MaxMovePerFrame)
-				move *= MaxMovePerFrame / length;
-			a_capsule.move = move;
-		}
-		currentCenters[key] = center;
-		capsules.push_back(a_capsule);
-	}
-
-	void Tracker::AddActorCapsules(RE::Actor* a_actor, const RE::NiPoint3& a_camera)
-	{
-		auto* root = a_actor->Get3D(false);
-		if (!root)
-			return;
-
-		const float distance = a_camera.GetDistance(a_actor->GetPosition());
-		std::vector<Util::ShapeCollisionCapsule> shapes;
-		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
-			Util::ShapeCollisionCapsule capsule;
-			if (Util::GetShapeCollisionCapsule(a_object, capsule) && capsule.radius >= MinActorCapsuleRadius &&
-				capsule.radius >= distance * MinRadiusPerDistance)
-				shapes.push_back(capsule);
-			return RE::BSVisit::BSVisitControl::kContinue;
-		});
-
-		std::ranges::sort(shapes, [](const auto& a, const auto& b) { return a.radius > b.radius; });
-		if (shapes.size() > MaxCapsulesPerActor)
-			shapes.resize(MaxCapsulesPerActor);
-
-		for (size_t index = 0; index < shapes.size(); ++index) {
-			Capsule capsule;
-			capsule.pointA = Util::ToFloat3(shapes[index].pointA);
-			capsule.pointB = Util::ToFloat3(shapes[index].pointB);
-			capsule.radius = shapes[index].radius;
-			capsule.owner = a_actor->GetFormID();
-			Push(capsule, index);
-		}
-	}
-
-	void Tracker::RefreshHandNodes(RE::Actor* a_player)
-	{
-		// VRIK animates the third-person skeleton from the controllers; without it only the first-person arms follow them.
-		const bool vrik = GetModuleHandleA("vrik") != nullptr;
-		RE::NiAVObject* root = a_player->Get3D(!vrik);
-		if (root == handNodeRoot)
-			return;
-
-		handNodeRoot = root;
-		handNodesFound = 0;
-		RE::NiNode* rootNode = root ? root->AsNode() : nullptr;
-		for (size_t side = 0; side < handNodes.size(); ++side) {
-			for (size_t index = 0; index < HandNodeCount; ++index) {
-				const std::string name = HandNodeName(side == 0, index);
-				handNodes[side].nodes[index] = rootNode ? RE::NiPointer<RE::NiAVObject>(rootNode->GetObjectByName(RE::BSFixedString(name.c_str()))) : nullptr;
-				if (handNodes[side].nodes[index])
-					++handNodesFound;
-				else if (root)
-					logger::debug("[Fur Shells] Hand node not found: {}", name);
-			}
-		}
-		if (root)
-			logger::info("[Fur Shells] Found {} of {} hand and finger nodes in the {} skeleton", handNodesFound, handNodes.size() * HandNodeCount, vrik ? "third-person" : "first-person");
-	}
-
-	void Tracker::AddHandCapsules(RE::Actor* a_player, bool a_left)
-	{
-		const auto& nodes = handNodes[a_left ? 0 : 1].nodes;
-		const auto position = [&](size_t a_index, float3& a_out) {
-			const auto& node = nodes[a_index];
-			if (!node || !node->parent)
-				return false;
-			a_out = Util::ToFloat3(node->world.translate);
-			return true;
-		};
-
-		const RE::FormID owner = a_player->GetFormID();
-		size_t index = a_left ? 0 : RightHandKeyOffset;
-		const auto add = [&](const float3& a_a, const float3& a_b, float a_radius) {
-			Capsule capsule;
-			capsule.pointA = a_a;
-			capsule.pointB = a_b;
-			capsule.radius = a_radius;
-			capsule.owner = owner;
-			capsule.appendage = true;
-			Push(capsule, index++);
-		};
-
-		std::array<float3, FingerCount> knuckles{};
-		std::array<bool, FingerCount> hasKnuckle{};
-		for (size_t finger = 0; finger < FingerCount; ++finger) {
-			float3 joints[JointsPerFinger];
-			bool complete = true;
-			for (size_t joint = 0; joint < JointsPerFinger; ++joint)
-				complete = position(1 + finger * JointsPerFinger + joint, joints[joint]) && complete;
-			if (!complete)
-				continue;
-			const auto& radii = handRadii[a_left ? 0 : 1].finger;
-			add(joints[0], joints[1], radii[finger * JointsPerFinger]);
-			add(joints[1], joints[2], radii[finger * JointsPerFinger + 1]);
-			const float tipRadius = radii[finger * JointsPerFinger + 2];
-			const float3 distalAxis = joints[2] - joints[1];
-			const float tipExtent = handRadii[a_left ? 0 : 1].tipExtent[finger];
-			const float3 tip = tipExtent > 0.0f ? joints[2] + distalAxis * (std::max(tipExtent - tipRadius, 0.0f) / std::max(distalAxis.Length(), 1e-4f)) : joints[2] + distalAxis * FingertipLengthScale;
-			add(joints[2], tip, tipRadius);
-			knuckles[finger] = joints[0];
-			hasKnuckle[finger] = true;
-		}
-
-		float3 hand;
-		if (hasKnuckle[IndexFinger] && hasKnuckle[PinkyFinger]) {
-			add(knuckles[IndexFinger], knuckles[PinkyFinger], handRadii[a_left ? 0 : 1].finger[IndexFinger * JointsPerFinger]);
-			if (position(0, hand))
-				add(hand, (knuckles[IndexFinger] + knuckles[PinkyFinger]) * 0.5f, handRadii[a_left ? 0 : 1].palm);
-		}
-	}
-
-	void Tracker::Update(float a_maxDistance)
-	{
-		capsules.clear();
-		currentCenters.clear();
-
-		const RE::NiPoint3 camera = Util::GetEyePosition(0);
-		const float maxSquared = a_maxDistance * a_maxDistance;
-
-		struct Candidate
-		{
-			RE::Actor* actor;
-			float squaredDistance;
-		};
-		std::vector<Candidate> candidates;
-		Util::ForEachLoadedActor([&](RE::Actor* a_actor) {
-			if (!a_actor->Is3DLoaded())
-				return;
-			const float squaredDistance = camera.GetSquaredDistance(a_actor->GetPosition());
-			if (squaredDistance <= maxSquared)
-				candidates.push_back({ a_actor, squaredDistance });
-		});
-		std::ranges::sort(candidates, [](const auto& a, const auto& b) { return a.squaredDistance < b.squaredDistance; });
-		if (candidates.size() > MaxActors)
-			candidates.resize(MaxActors);
-
-		for (const auto& candidate : candidates)
-			AddActorCapsules(candidate.actor, camera);
-
-		if (auto* player = globals::game::player; globals::game::isVR && player && player->Is3DLoaded()) {
-			RefreshHandNodes(player);
-			if (handNodesFound > 0 && (fitSignature == 0 || ++updatesSinceFitCheck >= FitCheckInterval)) {
-				updatesSinceFitCheck = 0;
-				uint64_t signature = 1;
-				Util::ForEachActorGeometry(player, [&](RE::BSGeometry* a_geometry) {
-					if (const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get())
-						signature ^= reinterpret_cast<uint64_t>(skin) * 0x9E3779B97F4A7C15ull;
-				});
-				if (signature != fitSignature) {
-					fitSignature = signature;
-					FitRadii(player);
+				if (!dent && mesh.dents.size() < MaxDentsPerMesh)
+					dent = &mesh.dents.emplace_back();
+				if (!dent) {
+					dent = &*std::ranges::min_element(mesh.dents, [](const Dent& a, const Dent& b) { return a.depth < b.depth; });
+					if (dent->depth >= press)
+						continue;
+					*dent = {};
 				}
-			}
-			AddHandCapsules(player, true);
-			AddHandCapsules(player, false);
-		}
-
-		previousCenters.swap(currentCenters);
-	}
-
-	size_t Tracker::Select(const RE::NiPoint3& a_center, float a_radius, float a_reach, RE::FormID a_wearer,
-		std::array<Capsule, MaxCapsulesPerPass>& a_out, float& a_nearestGap) const
-	{
-		struct Scored
-		{
-			const Capsule* capsule = nullptr;
-			float distance = 0.0f;
-		};
-		std::array<Scored, MaxCapsulesPerPass> best{};
-		size_t count = 0;
-
-		const float3 center = Util::ToFloat3(a_center);
-		for (const Capsule& capsule : capsules) {
-			if (a_wearer != 0 && capsule.owner == a_wearer && !capsule.appendage)
-				continue;
-			const float3 axis = capsule.pointB - capsule.pointA;
-			const float t = std::clamp((center - capsule.pointA).Dot(axis) / std::max(axis.LengthSquared(), 1e-4f), 0.0f, 1.0f);
-			const float distance = (center - (capsule.pointA + axis * t)).Length() - capsule.radius;
-			a_nearestGap = std::min(a_nearestGap, distance - a_radius);
-			if (distance > a_radius + a_reach)
-				continue;
-
-			if (count < best.size()) {
-				best[count++] = { &capsule, distance };
-			} else {
-				auto farthest = std::ranges::max_element(best, [](const auto& a, const auto& b) { return a.distance < b.distance; });
-				if (distance < farthest->distance)
-					*farthest = { &capsule, distance };
+				dent->bone.reset(const_cast<RE::NiAVObject*>(bone));
+				dent->local = local;
+				dent->radius = capsule.radius;
+				dent->depth = press;
+				dent->recoverSeconds = std::max(dent->recoverSeconds, recover);
+				dent->refreshedFrame = frame;
 			}
 		}
 
-		for (size_t index = 0; index < count; ++index)
-			a_out[index] = *best[index].capsule;
+		size_t count = a_count;
+		for (const Dent& dent : mesh.dents) {
+			if (dent.refreshedFrame == frame || count >= MaxCapsulesPerPass)
+				continue;
+			const RE::NiPoint3 position = dent.bone->world * dent.local;
+			Capsule ghost;
+			ghost.pointA = ghost.pointB = Util::ToFloat3(position);
+			ghost.radius = dent.radius;
+			ghost.strength = std::clamp(dent.depth, 0.0f, 1.0f);
+			ghost.remembered = true;
+			a_capsules[count++] = ghost;
+		}
 		return count;
 	}
 }

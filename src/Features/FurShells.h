@@ -127,7 +127,7 @@ private:
 		float TouchB[FurInteractors::MaxCapsulesPerPass][4];
 		float TouchMove[FurInteractors::MaxCapsulesPerPass][4];
 	};
-	static_assert(sizeof(PerPass) == 512);
+	static_assert(sizeof(PerPass) == 704);
 
 	struct DeferredPass
 	{
@@ -229,8 +229,16 @@ private:
 	uint32_t lastMaxShells = 0;
 	float minDensity = 1.0f;
 	float lastMinDensity = 1.0f;
-	FurInteractors::Tracker interactors;
+	FurInteractors::Memory dentMemory;
 	uint32_t touchCapsules = 0;
+	/** @brief The capsules each fur mesh took last frame, for diagnostics. */
+	struct TouchSelection
+	{
+		std::string mesh;
+		std::vector<FurInteractors::Capsule> capsules;
+	};
+	std::vector<TouchSelection> touchSelections;
+	std::vector<TouchSelection> lastTouchSelections;
 	uint32_t lastTouchCapsules = 0;
 	uint32_t maxTouchPerPass = 0;
 	uint32_t lastMaxTouchPerPass = 0;

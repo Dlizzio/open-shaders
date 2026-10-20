@@ -12,6 +12,8 @@
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
+#include <Tracy/Tracy.hpp>
+
 #define I18N_KEY_PREFIX "feature.fur_shells."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -96,7 +98,7 @@ namespace
 				for (uint32_t bone = 0; bone < skin->numMatrices; ++bone) {
 					const char* boneName = skin->bones[bone] && skin->bones[bone]->name.c_str() ? skin->bones[bone]->name.c_str() : "";
 					const std::string_view view{ boneName };
-					if (view.find("Hand [") != std::string_view::npos || view.find("Finger") != std::string_view::npos) {
+					if (Util::BodyCapsules::IsHandBone(view)) {
 						++handBones;
 						inThirdPerson += skin->bones[bone] == findIn(thirdPersonRoot, boneName) ? 1u : 0u;
 						inFirstPerson += skin->bones[bone] == findIn(firstPersonRoot, boneName) ? 1u : 0u;
@@ -134,7 +136,7 @@ namespace
 	}
 
 	/** @brief World positions of each hand node and its middle fingertip joint, or null when not found. */
-	json HandPositionsJson(const FurInteractors::Tracker& a_tracker)
+	json HandPositionsJson(const Util::BodyCapsules::Tracker& a_tracker)
 	{
 		json result = json::object();
 		for (const bool left : { true, false }) {
@@ -143,6 +145,59 @@ namespace
 			result[left ? "left" : "right"] = a_tracker.GetHandPositions(left, hand, joint) ?
 			                                      json{ { "hand", { hand.x, hand.y, hand.z } }, { "middleFingerDistalJoint", { joint.x, joint.y, joint.z } } } :
 			                                      json(nullptr);
+		}
+		return result;
+	}
+
+	/** @brief Each hand's finger joint positions, fitted radii and fingertip extents, for checking which fingers are tracked. */
+	json HandFingersJson(const Util::BodyCapsules::Tracker& a_tracker)
+	{
+		json result = json::object();
+		for (const bool left : { true, false }) {
+			const auto report = a_tracker.GetHandReport(left);
+			json fingers = json::array();
+			for (size_t finger = 0; finger < report.Fingers; ++finger) {
+				json joints = json::array();
+				for (size_t joint = 0; joint < report.Joints; ++joint) {
+					const size_t index = finger * report.Joints + joint;
+					joints.push_back(report.found[index] ?
+										 json{ { "position", { report.position[index].x, report.position[index].y, report.position[index].z } }, { "radius", report.radius[index] } } :
+										 json(nullptr));
+				}
+				fingers.push_back({ { "joints", std::move(joints) }, { "tipExtent", report.tipExtent[finger] } });
+			}
+			result[left ? "left" : "right"] = { { "palmRadius", report.palmRadius }, { "fingers", std::move(fingers) } };
+		}
+		return result;
+	}
+
+	/** @brief What HIGGS returned for each hand's weapon, grabbed object and hand body, to see why a held item is missing. */
+	json HeldJson(const Util::BodyCapsules::Tracker& a_tracker)
+	{
+		json result = json::object();
+		for (const bool left : { true, false }) {
+			json slots = json::object();
+			size_t slot = 0;
+			for (const char* name : { "weapon", "grabbed", "hand" }) {
+				const auto report = a_tracker.GetHeldReport(left, slot++);
+				slots[name] = { { "interface", report.available }, { "body", report.body }, { "inWorld", report.inWorld }, { "shapeType", report.shapeType }, { "capsule", report.capsule }, { "children", report.children }, { "parts", report.parts }, { "drawn", report.drawn }, { "collisionDisabled", report.collisionDisabled } };
+			}
+			result[left ? "left" : "right"] = std::move(slots);
+		}
+		return result;
+	}
+
+	/** @brief The capsules each fur mesh took, with the strength that dents fade to. */
+	template <class T>
+	json SelectionsJson(const std::vector<T>& a_selections)
+	{
+		json result = json::array();
+		for (const auto& selection : a_selections) {
+			json capsules = json::array();
+			for (const auto& capsule : selection.capsules) {
+				capsules.push_back({ { "a", { capsule.pointA.x, capsule.pointA.y, capsule.pointA.z } }, { "b", { capsule.pointB.x, capsule.pointB.y, capsule.pointB.z } }, { "radius", capsule.radius }, { "side", capsule.side }, { "appendage", capsule.appendage }, { "strength", capsule.strength } });
+			}
+			result.push_back({ { "mesh", selection.mesh }, { "capsules", std::move(capsules) } });
 		}
 		return result;
 	}
@@ -564,15 +619,21 @@ void FurShells::Reset()
 	lastMinDensity = minDensity;
 	lastWindSpeed = windSpeed;
 	windSpeed = 0.0f;
-	lastTouchCapsules = static_cast<uint32_t>(interactors.GetCount());
+	auto& bodies = Util::BodyCapsules::GetTracker();
+	lastTouchCapsules = static_cast<uint32_t>(bodies.GetCount());
 	lastMaxTouchPerPass = maxTouchPerPass;
+	lastTouchSelections = std::move(touchSelections);
+	touchSelections.clear();
 	lastTouchNearestGap = touchNearestGap;
 	touchNearestGap = FLT_MAX;
 	maxTouchPerPass = 0;
-	if (IsTouchActive() && lastPassCount > 0)
-		interactors.Update(TouchActorRange);
-	else
-		interactors.Clear();
+	if (!IsTouchActive()) {
+		dentMemory.Clear();
+	} else {
+		if (lastPassCount > 0)
+			bodies.Update(TouchActorRange);
+		dentMemory.Advance();
+	}
 	maxShells = 0;
 	minDensity = 1.0f;
 	stereoDraws = 0;
@@ -816,10 +877,18 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 
 void FurShells::FillTouch(PerPass& a_perPass, const RE::BSGeometry* a_geometry)
 {
+	ZoneScopedN("FurShells::FillTouch");
 	std::array<FurInteractors::Capsule, FurInteractors::MaxCapsulesPerPass> touches;
-	const size_t count = IsTouchActive() ?
-	                         interactors.Select(a_geometry->worldBound.center, a_geometry->worldBound.radius, TouchReach, GetWearer(a_geometry), touches, touchNearestGap) :
-	                         0;
+	size_t count = 0;
+	if (IsTouchActive()) {
+		std::array<FurInteractors::Capsule, Util::BodyCapsules::MaxSelectedCapsules> candidates;
+		const size_t found = Util::BodyCapsules::GetTracker().Select(a_geometry->worldBound.center, a_geometry->worldBound.radius, TouchReach, GetWearer(a_geometry), candidates, touchNearestGap);
+		count = dentMemory.Nearest(a_geometry, std::span(candidates.data(), found), std::span(touches.data(), FurInteractors::MaxLiveCapsulesPerPass));
+	}
+	if (IsTouchActive())
+		count = dentMemory.Remember(a_geometry, a_perPass.Length, count, touches);
+	if (touchSelections.size() < 8)
+		touchSelections.push_back({ a_geometry->name.c_str() ? a_geometry->name.c_str() : "", { touches.begin(), touches.begin() + static_cast<std::ptrdiff_t>(count) } });
 	maxTouchPerPass = std::max(maxTouchPerPass, static_cast<uint32_t>(count));
 	a_perPass.TouchCount = static_cast<float>(count);
 	a_perPass.TouchStrength = settings.TouchStrength;
@@ -839,9 +908,11 @@ void FurShells::FillTouch(PerPass& a_perPass, const RE::BSGeometry* a_geometry)
 		a_perPass.TouchB[index][0] = touch.pointB.x;
 		a_perPass.TouchB[index][1] = touch.pointB.y;
 		a_perPass.TouchB[index][2] = touch.pointB.z;
+		a_perPass.TouchB[index][3] = touch.remembered ? 1.0f : 0.0f;
 		a_perPass.TouchMove[index][0] = touch.move.x;
 		a_perPass.TouchMove[index][1] = touch.move.y;
 		a_perPass.TouchMove[index][2] = touch.move.z;
+		a_perPass.TouchMove[index][3] = touch.strength;
 	}
 }
 
@@ -1215,11 +1286,15 @@ json FurShells::GetDiagnostics()
 		{ "windSpeedLastFrame", lastWindSpeed },
 		{ "touchCapsulesLastFrame", lastTouchCapsules },
 		{ "touchMaxPerPassLastFrame", lastMaxTouchPerPass },
-		{ "touchHandNodesFound", interactors.GetHandNodeCount() },
-		{ "touchFitMeshes", interactors.GetFitMeshCount() },
-		{ "touchHandPositions", HandPositionsJson(interactors) },
-		{ "touchFingerRadius", interactors.GetAverageFingerRadius() },
-		{ "touchPalmRadius", interactors.GetAveragePalmRadius() },
+		{ "touchDents", dentMemory.GetDentCount() },
+		{ "touchHandNodesFound", Util::BodyCapsules::GetTracker().GetHandNodeCount() },
+		{ "touchFitMeshes", Util::BodyCapsules::GetTracker().GetFitMeshCount() },
+		{ "touchHandPositions", HandPositionsJson(Util::BodyCapsules::GetTracker()) },
+		{ "touchHandFingers", HandFingersJson(Util::BodyCapsules::GetTracker()) },
+		{ "touchSelections", SelectionsJson(lastTouchSelections) },
+		{ "touchHeld", HeldJson(Util::BodyCapsules::GetTracker()) },
+		{ "touchFingerRadius", Util::BodyCapsules::GetTracker().GetAverageFingerRadius() },
+		{ "touchPalmRadius", Util::BodyCapsules::GetTracker().GetAveragePalmRadius() },
 		{ "playerSkinData", globals::game::player ? ProbeSkinData(globals::game::player) : json::object() },
 		{ "touchNearestGapLastFrame", lastTouchNearestGap == FLT_MAX ? -1.0f : lastTouchNearestGap },
 		{ "deferredPasses", deferredPasses.size() },
