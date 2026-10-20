@@ -1,8 +1,11 @@
 #pragma once
 
 #include "Buffer.h"
+#include "LODShadowUpdateBudget.h"
 #include "Utils/GpuTimestamps.h"
 #include "Utils/LazyShader.h"
+
+#include <bit>
 
 /** @brief Caches directional depth from terrain, distant objects and trees. */
 struct LODShadows : Feature
@@ -20,7 +23,7 @@ struct LODShadows : Feature
 	struct Settings
 	{
 		bool Enabled = true;
-		float UpdateBudgetMs = 0.25f;
+		float UpdateBudgetMs = 0.1f;
 		float DepthBias = 8.0f;
 	} settings;
 
@@ -43,7 +46,7 @@ struct LODShadows : Feature
 	/** @brief Binds the completed maps for reflection shading. */
 	void ReflectionsPrepass() override;
 	bool WantsDrawHook() const override { return true; }
-	/** @brief Binds comparison filtering after the engine applies effect and particle samplers. */
+	/** @brief Binds effect map data and restores comparison filtering after engine state setup. */
 	void OnDraw() override;
 	/** @brief Invalidates depth when a saved game loads. */
 	void GameLoaded() override;
@@ -71,10 +74,15 @@ private:
 	static constexpr uint32_t kMaskSlot = 127;
 	static constexpr uint32_t kMaskDownsample = 2;
 	static constexpr uint32_t kDataSlot = 118;
+	static constexpr uint32_t kRayBoundsSlot = 61;
+	static constexpr uint32_t kEffectMapBufferSlot = 7;
+	static constexpr uint32_t kRayBoundsTileSize = 16;
+	static constexpr uint32_t kRayBoundsResolution = kResolution / kRayBoundsTileSize;
+	static constexpr uint32_t kRayBoundsMipCount = std::bit_width(kRayBoundsResolution);
+	static constexpr uint32_t kHardwareComparison = 1;
+	static constexpr uint32_t kRayBounds = 2;
 	static constexpr uint32_t kQueryFrames = 4;
-	static constexpr uint32_t kInitialTriangleBudget = 8192;
-	static constexpr float kDepthExtent = 196608.0f;
-	static constexpr std::array<float, kMapCount> kHalfExtents{ 18432.0f, 55296.0f, 165888.0f };
+	static constexpr std::array<float, kMapCount> kMinimumHalfExtents{ 18432.0f, 55296.0f, 165888.0f };
 	static constexpr std::array<double, kMapCount> kHistoryIntervalsMs{ 600.0, 1500.0, 2500.0 };
 
 	struct alignas(16) MapData
@@ -121,6 +129,8 @@ private:
 		MapData data;
 		RE::NiPoint3 center{};
 		RE::NiPoint3 direction{};
+		float halfExtent = 0;
+		float depthRange = 0;
 		uint32_t slice = 0;
 		uint64_t scene = 0;
 		uint32_t frame = 0;
@@ -131,6 +141,7 @@ private:
 		uint64_t triangleCount = 0;
 		bool valid = false;
 		bool terrainValid = false;
+		bool rayBoundsValid = false;
 	};
 	struct Query
 	{
@@ -155,6 +166,7 @@ private:
 	void UpdateMaps(const RE::NiPoint3& a_center, const RE::NiPoint3& a_direction, bool a_refreshImmediately);
 	void RenderBatch(bool a_refreshImmediately);
 	void CaptureDistantDepth();
+	bool BuildRayBounds(uint32_t a_slice);
 	void ResolveTimings();
 	float GetHistoryBlend(uint32_t a_index) const;
 	void PublishCompletedMaps(bool a_refreshImmediately);
@@ -170,6 +182,7 @@ private:
 	bool refreshEveryFrame = false;
 	bool interpolateHistory = true;
 	bool hardwareComparison = true;
+	bool rayBounds = true;
 	double frameTimeMs = 0;
 	double frameDurationMs = 0;
 	bool maskReady = false;
@@ -200,7 +213,7 @@ private:
 	uint32_t indexOffset = 0;
 	uint32_t instanceOffset = 0;
 	uint32_t nextMap = 0;
-	uint32_t triangleBudget = kInitialTriangleBudget;
+	LODShadowUpdateBudget updateBudget;
 	uint32_t lastDraws = 0;
 	uint32_t lastTriangles = 0;
 	uint32_t completedMaps = 0;
@@ -219,17 +232,25 @@ private:
 	json diagnostics;
 	winrt::com_ptr<ID3D11Texture2D> depthTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> depthSRV;
+	winrt::com_ptr<ID3D11Texture2D> rayBoundsTexture;
+	winrt::com_ptr<ID3D11ShaderResourceView> rayBoundsSRV;
+	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kRayBoundsMipCount> rayBoundsMipSRVs;
+	std::array<std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, kRayBoundsMipCount>, kDepthSliceCount> rayBoundsUAVs;
 	std::array<winrt::com_ptr<ID3D11DepthStencilView>, kMapCount * kDepthSlicesPerMap> depthViews;
 	winrt::com_ptr<ID3D11RasterizerState> rasterizer;
+	winrt::com_ptr<ID3D11RasterizerState> terrainRasterizer;
 	winrt::com_ptr<ID3D11DepthStencilState> depthState;
 	winrt::com_ptr<ID3D11SamplerState> alphaSampler;
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler;
 	std::unique_ptr<ConstantBuffer> drawBuffer;
 	std::unique_ptr<Buffer> mapBuffer;
+	std::unique_ptr<ConstantBuffer> effectMapBuffer;
 	std::array<std::unique_ptr<Texture2D>, 2> maskTextures;
 	std::unique_ptr<ConstantBuffer> maskBuffer;
 	Util::LazyShader<ID3D11ComputeShader> maskShader;
 	Util::LazyShader<ID3D11ComputeShader> filterShader;
+	Util::LazyShader<ID3D11ComputeShader> rayBoundsShader;
+	Util::LazyShader<ID3D11ComputeShader> rayBoundsReduceShader;
 	winrt::com_ptr<ID3D11VertexShader> vertexShader;
 	winrt::com_ptr<ID3D11VertexShader> treeVertexShader;
 	winrt::com_ptr<ID3D11PixelShader> alphaShader;

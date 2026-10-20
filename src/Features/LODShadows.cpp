@@ -14,7 +14,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LODShadows::Settings, Enabled, U
 namespace
 {
 	constexpr uint32_t kIndicesPerTriangle = 3;
-	constexpr uint32_t kMaximumTriangles = 4194304;
 	constexpr float kMinimumUpdateBudgetMs = 0.01f;
 	constexpr float kMaximumUpdateBudgetMs = 0.4f;
 	constexpr uint32_t kMaximumCacheFrames = 600;
@@ -23,7 +22,9 @@ namespace
 	constexpr uint32_t kMaskGroupSize = 8;
 	constexpr float kMinimumDirectionLength = 1e-6f;
 	constexpr float kCellSize = 4096.0f;
+	constexpr float kMinimumDepthPadding = 1.0f;
 	constexpr int kRasterDepthBias = 1;
+	constexpr float kTerrainSlopeScaledDepthBias = 1.0f;
 	constexpr uint64_t kHashSeed = 14695981039346656037ull;
 	constexpr uint64_t kHashPrime = 1099511628211ull;
 
@@ -57,6 +58,23 @@ namespace
 		Util::StoreTransform3x4NoScale(transform, a_transform);
 		return DirectX::XMMatrixScaling(a_transform.scale, a_transform.scale, a_transform.scale) * DirectX::XMLoadFloat3x4(&transform);
 	}
+
+	template <class F>
+	void ForEachCasterBound(RE::BSGeometry* a_geometry, F&& a_callback)
+	{
+		if (a_geometry->GetType() == RE::BSGeometry::Type::kMultiStreamInstanceTriShape) {
+			const auto& instances = static_cast<RE::BSMultiStreamInstanceTriShape*>(a_geometry)->GetMultiStreamTrishapeRuntimeData();
+			for (auto* group : instances.instanceGroups) {
+				if (!group || !group->vertexBuffer || !group->vertexBuffer->buffer || !group->instanceCount)
+					continue;
+				RE::NiBound bound;
+				group->GetNiBound(&bound);
+				a_callback(bound);
+			}
+		} else {
+			a_callback(a_geometry->worldBound);
+		}
+	}
 }
 
 std::pair<std::string, std::vector<std::string>> LODShadows::GetFeatureSummary()
@@ -82,11 +100,15 @@ void LODShadows::SaveSettings(json& a_json) { a_json = settings; }
 
 json LODShadows::GetRuntimeFlags()
 {
-	return json{ { "RefreshEveryFrame", refreshEveryFrame }, { "HistoryInterpolation", interpolateHistory }, { "HardwareComparison", hardwareComparison } };
+	return json{ { "RefreshEveryFrame", refreshEveryFrame }, { "HistoryInterpolation", interpolateHistory }, { "HardwareComparison", hardwareComparison }, { "RayBounds", rayBounds } };
 }
 
 bool LODShadows::SetRuntimeFlag(std::string_view a_name, bool a_value)
 {
+	if (a_name == "RayBounds") {
+		rayBounds = a_value;
+		return true;
+	}
 	if (a_name == "HardwareComparison") {
 		hardwareComparison = a_value;
 		return true;
@@ -121,7 +143,7 @@ void LODShadows::RegisterUxActions()
 	FEATURE_COMMAND("rebuild", "Invalidate the LOD depth cache and reset GPU update statistics.", [](Feature* a_self, const json&) {
 		static_cast<LODShadows*>(a_self)->resetRequested = true;
 	});
-	FEATURE_QUERY("diagnostics", "Return map resolution, terrain replacement state, geometry and caster counts, cache direction errors, build and render frames, plus GPU timings with their submission frames. Timings exclude final mask sampling and forward shadow sampling in lighting passes.", [](const Feature* a_self, const json&) -> json {
+	FEATURE_QUERY("diagnostics", "Return map resolution and coverage, terrain replacement state, geometry and caster counts, cache direction errors, build and render frames, plus GPU timings with their submission frames. Timings exclude final mask sampling and forward shadow sampling in lighting passes.", [](const Feature* a_self, const json&) -> json {
 		const auto* self = static_cast<const LODShadows*>(a_self);
 		std::scoped_lock lock(self->diagnosticsMutex);
 		return self->diagnostics;
@@ -170,6 +192,38 @@ void LODShadows::SetupResources()
 		srvDesc.Texture2DArray.ArraySize = textureDesc.ArraySize;
 		DX::ThrowIfFailed(device->CreateShaderResourceView(depthTexture.get(), &srvDesc, depthSRV.put()));
 		Util::SetResourceName(depthSRV.get(), "LODShadows::DepthMaps SRV");
+		D3D11_TEXTURE2D_DESC boundsDesc{};
+		boundsDesc.Width = boundsDesc.Height = kRayBoundsResolution;
+		boundsDesc.MipLevels = kRayBoundsMipCount;
+		boundsDesc.ArraySize = kDepthSliceCount;
+		boundsDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+		boundsDesc.SampleDesc.Count = 1;
+		boundsDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		DX::ThrowIfFailed(device->CreateTexture2D(&boundsDesc, nullptr, rayBoundsTexture.put()));
+		Util::SetResourceName(rayBoundsTexture.get(), "LODShadows::RayBounds");
+		D3D11_SHADER_RESOURCE_VIEW_DESC boundsView{};
+		boundsView.Format = boundsDesc.Format;
+		boundsView.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+		boundsView.Texture2DArray.MipLevels = kRayBoundsMipCount;
+		boundsView.Texture2DArray.ArraySize = kDepthSliceCount;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(rayBoundsTexture.get(), &boundsView, rayBoundsSRV.put()));
+		Util::SetResourceName(rayBoundsSRV.get(), "LODShadows::RayBounds SRV");
+		for (uint32_t mip = 0; mip < kRayBoundsMipCount; ++mip) {
+			boundsView.Texture2DArray.MostDetailedMip = mip;
+			boundsView.Texture2DArray.MipLevels = 1;
+			DX::ThrowIfFailed(device->CreateShaderResourceView(rayBoundsTexture.get(), &boundsView, rayBoundsMipSRVs[mip].put()));
+			Util::SetResourceName(rayBoundsMipSRVs[mip].get(), "LODShadows::RayBounds Mip %u SRV", mip);
+			for (uint32_t slice = 0; slice < kDepthSliceCount; ++slice) {
+				D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
+				uav.Format = boundsDesc.Format;
+				uav.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+				uav.Texture2DArray.MipSlice = mip;
+				uav.Texture2DArray.FirstArraySlice = slice;
+				uav.Texture2DArray.ArraySize = 1;
+				DX::ThrowIfFailed(device->CreateUnorderedAccessView(rayBoundsTexture.get(), &uav, rayBoundsUAVs[slice][mip].put()));
+				Util::SetResourceName(rayBoundsUAVs[slice][mip].get(), "LODShadows::RayBounds Slice %u Mip %u UAV", slice, mip);
+			}
+		}
 		for (uint32_t i = 0; i < depthViews.size(); ++i) {
 			D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
 			desc.Format = DXGI_FORMAT_D16_UNORM;
@@ -192,6 +246,9 @@ void LODShadows::SetupResources()
 		rasterDesc.DepthBias = kRasterDepthBias;
 		DX::ThrowIfFailed(device->CreateRasterizerState(&rasterDesc, rasterizer.put()));
 		Util::SetResourceName(rasterizer.get(), "LODShadows::Rasterizer");
+		rasterDesc.SlopeScaledDepthBias = kTerrainSlopeScaledDepthBias;
+		DX::ThrowIfFailed(device->CreateRasterizerState(&rasterDesc, terrainRasterizer.put()));
+		Util::SetResourceName(terrainRasterizer.get(), "LODShadows::TerrainRasterizer");
 		D3D11_SAMPLER_DESC samplerDesc{};
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 		samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -209,6 +266,7 @@ void LODShadows::SetupResources()
 		mapView.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
 		mapView.Buffer.NumElements = kMapCount;
 		mapBuffer->CreateSRV(mapView);
+		effectMapBuffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc<std::array<MapData, kMapCount>>(), "LODShadows::EffectMapData");
 		maskBuffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc<std::array<uint32_t, 4>>(), "LODShadows::MaskData");
 		for (auto& query : queries) {
 			query.batch.Configure(1, "LODShadows::Update");
@@ -234,6 +292,8 @@ void LODShadows::ClearShaderCache()
 	ready = false;
 	maskShader.Reset();
 	filterShader.Reset();
+	rayBoundsShader.Reset();
+	rayBoundsReduceShader.Reset();
 	maskFailed = false;
 	Invalidate();
 	try {
@@ -397,7 +457,9 @@ void LODShadows::Collect(RE::NiAVObject* a_object, bool a_ignoreAppCulling, bool
 	} else if (auto geometry = a_object->AsGeometry()) {
 		if (a_loadedObject) {
 			const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
-			if (!property || !property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kCastShadows) ||
+			if (!property || !property->material || property->material->GetType() != RE::BSShaderMaterial::Type::kLighting ||
+				!property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kZBufferWrite) ||
+				property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kRefraction, RE::BSShaderProperty::EShaderPropertyFlag::kTempRefraction) ||
 				!collectedGeometry.insert(geometry).second)
 				return;
 		}
@@ -425,6 +487,8 @@ void LODShadows::Collect(RE::NiAVObject* a_object, bool a_ignoreAppCulling, bool
 				if (group && group->vertexBuffer) {
 					HashBytes(sceneHash, &group->vertexBuffer->buffer, sizeof(group->vertexBuffer->buffer));
 					HashBytes(sceneHash, &group->instanceCount, sizeof(group->instanceCount));
+					HashBytes(sceneHash, &group->center, sizeof(group->center));
+					HashBytes(sceneHash, &group->size, sizeof(group->size));
 				}
 			}
 		}
@@ -467,7 +531,9 @@ void LODShadows::CollectLoadedObjects()
 	if (auto* tes = globals::game::tes) {
 		tes->ForEachReference([&](RE::TESObjectREFR* reference) {
 			const auto* base = reference ? reference->GetBaseObject() : nullptr;
+			const auto* staticObject = base ? base->As<RE::TESObjectSTAT>() : nullptr;
 			if (base && base->Is(RE::FormType::Static, RE::FormType::StaticCollection, RE::FormType::Tree) &&
+				(!staticObject || !staticObject->IsSkyObject()) &&
 				!reference->IsDisabled() && !reference->IsDeleted())
 				Collect(reference->Get3D(), false, true);
 			return RE::BSContainer::ForEachResult::kContinue;
@@ -559,6 +625,7 @@ void LODShadows::AddCaster(RE::BSGeometry* a_geometry)
 				continue;
 			caster.instances.copy_from(Util::AsReal(group->vertexBuffer->buffer));
 			caster.instanceCount = uint32_t(std::min(size_t(group->instanceCount), group->vertexBuffer->byteWidth / caster.instanceStride));
+			group->GetNiBound(&caster.bound);
 			if (caster.instanceCount && Intersects(caster))
 				casters.push_back(caster);
 		}
@@ -591,8 +658,8 @@ bool LODShadows::Intersects(const Caster& a_caster) const
 	using namespace DirectX;
 	const auto& center = a_caster.bound.center;
 	const auto point = XMVector3TransformCoord(XMVectorSet(center.x, center.y, center.z, 1), XMLoadFloat4x4(&pendingMap.data.worldToClip));
-	const float radiusXY = a_caster.bound.radius / kHalfExtents[pendingIndex];
-	const float radiusZ = a_caster.bound.radius / (kDepthExtent * 2);
+	const float radiusXY = a_caster.bound.radius / pendingMap.halfExtent;
+	const float radiusZ = a_caster.bound.radius / pendingMap.depthRange;
 	return std::abs(XMVectorGetX(point)) <= 1 + radiusXY && std::abs(XMVectorGetY(point)) <= 1 + radiusXY && XMVectorGetZ(point) >= -radiusZ && XMVectorGetZ(point) <= 1 + radiusZ;
 }
 
@@ -621,22 +688,57 @@ void LODShadows::BeginMap(uint32_t a_index, const RE::NiPoint3& a_center, const 
 	const auto up = std::abs(a_direction.z) > 0.99f ? XMVectorSet(0, 1, 0, 0) : XMVectorSet(0, 0, 1, 0);
 	const auto rotation = XMMatrixLookToLH(XMVectorZero(), direction, up);
 	const auto center = XMVector3TransformCoord(XMVectorSet(a_center.x, a_center.y, a_center.z, 1), rotation);
-	const float extent = kHalfExtents[a_index];
+	float extent = kMinimumHalfExtents[a_index];
+	if (a_index == kMapCount - 1) {
+		for (const auto& geometry : visibleGeometry) {
+			ForEachCasterBound(geometry.get(), [&](const RE::NiBound& bound) {
+				const auto offset = bound.center - a_center;
+				const auto point = XMVector3TransformNormal(XMVectorSet(offset.x, offset.y, offset.z, 0), rotation);
+				const float requiredExtent = std::max(std::abs(XMVectorGetX(point)), std::abs(XMVectorGetY(point))) + bound.radius;
+				if (std::isfinite(requiredExtent))
+					extent = std::max(extent, std::ceil(requiredExtent / ((1.0f - kCenterMargin) * kCellSize)) * kCellSize);
+			});
+		}
+	}
 	const float texel = extent * 2 / kResolution;
-	const auto translation = XMMatrixTranslation(-std::round(XMVectorGetX(center) / texel) * texel, -std::round(XMVectorGetY(center) / texel) * texel, -XMVectorGetZ(center) + kDepthExtent);
-	XMStoreFloat4x4(&pendingMap.data.worldToClip, rotation * translation * XMMatrixOrthographicLH(extent * 2, extent * 2, 0, kDepthExtent * 2));
+	const float centerX = std::round(XMVectorGetX(center) / texel) * texel;
+	const float centerY = std::round(XMVectorGetY(center) / texel) * texel;
+	float depthNear = -kCellSize;
+	float depthFar = kCellSize;
+	for (const auto& geometry : visibleGeometry) {
+		ForEachCasterBound(geometry.get(), [&](const RE::NiBound& bound) {
+			const auto offset = bound.center - a_center;
+			const auto point = XMVector3TransformNormal(XMVectorSet(offset.x, offset.y, offset.z, 0), rotation);
+			const float x = XMVectorGetX(point) + XMVectorGetX(center) - centerX;
+			const float y = XMVectorGetY(point) + XMVectorGetY(center) - centerY;
+			const float z = XMVectorGetZ(point);
+			if (std::abs(x) <= extent + bound.radius && std::abs(y) <= extent + bound.radius &&
+				std::isfinite(z) && std::isfinite(bound.radius)) {
+				depthNear = std::min(depthNear, z - bound.radius);
+				depthFar = std::max(depthFar, z + bound.radius);
+			}
+		});
+	}
+	const float padding = std::max(kMinimumDepthPadding, settings.DepthBias);
+	depthNear -= padding;
+	depthFar += padding;
+	pendingMap.halfExtent = extent;
+	pendingMap.depthRange = depthFar - depthNear;
+	const auto translation = XMMatrixTranslation(-centerX, -centerY, -XMVectorGetZ(center) - depthNear);
+	XMStoreFloat4x4(&pendingMap.data.worldToClip, rotation * translation * XMMatrixOrthographicLH(extent * 2, extent * 2, 0, pendingMap.depthRange));
 	casters.clear();
 	unsupportedCasters = 0;
 	const auto* scene = globals::game::smState->shadowSceneNode[0];
 	const auto* nativeLight = scene ? scene->GetRuntimeData().sunShadowDirLight : nullptr;
 	const float nativeDistance = nativeLight ? nativeLight->GetShadowDirectionalLightRuntimeData().endSplitDistances[1] : 0.0f;
+	const auto loadedObjectStart = visibleGeometry.size() - geometryCounts[3];
 	for (uint32_t i = 0; i < visibleGeometry.size(); ++i) {
 		const auto unsupported = unsupportedCasters;
 		const auto firstCaster = casters.size();
 		AddCaster(visibleGeometry[i].get());
 		for (size_t caster = firstCaster; caster < casters.size(); ++caster) {
 			const auto& bound = casters[caster].bound;
-			casters[caster].nativeShadowCaster = i >= terrainGeometryCount && nativeDistance > 0.0f &&
+			casters[caster].nativeShadowCaster = i >= loadedObjectStart && nativeDistance > 0.0f &&
 			                                     (bound.center - a_center).Length() - bound.radius < nativeDistance;
 		}
 		if (i < terrainGeometryCount && unsupportedCasters != unsupported)
@@ -698,10 +800,8 @@ void LODShadows::ResolveTimings()
 			lastUpdateFrame = query.frame;
 			maxUpdateMs = std::max(maxUpdateMs, lastUpdateMs);
 			++timingSamples;
-			if (query.triangles && lastUpdateMs > 0 && (query.budgetLimited || lastUpdateMs > settings.UpdateBudgetMs)) {
-				const double estimate = query.triangles * settings.UpdateBudgetMs / lastUpdateMs;
-				triangleBudget = uint32_t(std::clamp(std::min(estimate, triangleBudget * 1.1), 256.0, double(kMaximumTriangles)));
-			}
+			if (query.budgetLimited || lastUpdateMs > settings.UpdateBudgetMs)
+				updateBudget.Record(query.triangles, lastUpdateMs, settings.UpdateBudgetMs);
 		});
 		if (status != Util::TimestampQueryBatch::Status::NotReady) {
 			query.pending = false;
@@ -741,7 +841,7 @@ void LODShadows::UpdateMaps(const RE::NiPoint3& a_center, const RE::NiPoint3& a_
 			return deadlines[left] < deadlines[right];
 		});
 		double buildTimeMs = 0;
-		const auto batchTriangles = BatchTriangleBudget(triangleBudget);
+		const auto batchTriangles = BatchTriangleBudget(updateBudget.Triangles());
 		for (uint32_t i = 0; i < candidateCount; ++i) {
 			const auto index = candidates[i];
 			const auto& map = maps[index];
@@ -799,13 +899,65 @@ void LODShadows::CaptureDistantDepth()
 	distantDepthCaptured = true;
 }
 
+bool LODShadows::BuildRayBounds(uint32_t a_slice)
+{
+	CS_GPU_PASS("LODShadows::BuildRayBounds");
+	auto* generate = rayBoundsShader.Get(L"Data\\Shaders\\LODShadows\\RayBounds.cs.hlsl", {}, "cs_5_0", "main", "LODShadows::RayBounds CS");
+	auto* reduce = rayBoundsReduceShader.Get(L"Data\\Shaders\\LODShadows\\RayBounds.cs.hlsl", { { "REDUCE", "1" } }, "cs_5_0", "main", "LODShadows::ReduceRayBounds CS");
+	if (!generate || !reduce)
+		return false;
+	auto* context = globals::d3d::context;
+	winrt::com_ptr<ID3D11ComputeShader> savedShader;
+	winrt::com_ptr<ID3D11Buffer> savedBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> savedUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> savedInput;
+	winrt::com_ptr<ID3D11ShaderResourceView> savedBounds;
+	context->CSGetShader(savedShader.put(), nullptr, nullptr);
+	context->CSGetConstantBuffers(0, 1, savedBuffer.put());
+	context->CSGetUnorderedAccessViews(0, 1, savedUAV.put());
+	context->CSGetShaderResources(0, 1, savedInput.put());
+	context->PSGetShaderResources(kRayBoundsSlot, 1, savedBounds.put());
+	const SKSE::stl::scope_exit restore([&]() noexcept {
+		ID3D11UnorderedAccessView* uav = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		auto* view = savedInput.get();
+		context->CSSetShaderResources(0, 1, &view);
+		view = savedBounds.get();
+		context->PSSetShaderResources(kRayBoundsSlot, 1, &view);
+		auto* buffer = savedBuffer.get();
+		context->CSSetConstantBuffers(0, 1, &buffer);
+		uav = savedUAV.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetShader(savedShader.get(), nullptr, 0);
+	});
+	ID3D11ShaderResourceView* nullView = nullptr;
+	context->PSSetShaderResources(kRayBoundsSlot, 1, &nullView);
+	auto* buffer = maskBuffer->CB();
+	context->CSSetConstantBuffers(0, 1, &buffer);
+	for (uint32_t mip = 0; mip < kRayBoundsMipCount; ++mip) {
+		const uint32_t dimension = kRayBoundsResolution >> mip;
+		maskBuffer->Update(std::array<uint32_t, 4>{ dimension, a_slice, kRayBoundsTileSize, 0 });
+		auto* input = mip ? rayBoundsMipSRVs[mip - 1].get() : depthSRV.get();
+		context->CSSetShaderResources(0, 1, &input);
+		auto* output = rayBoundsUAVs[a_slice][mip].get();
+		context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		context->CSSetShader(mip ? reduce : generate, nullptr, 0);
+		const uint32_t groups = mip ? (dimension + kMaskGroupSize - 1) / kMaskGroupSize : dimension;
+		context->Dispatch(groups, groups, 1);
+		output = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		context->CSSetShaderResources(0, 1, &nullView);
+	}
+	return true;
+}
+
 void LODShadows::RenderBatch(bool a_refreshImmediately)
 {
 	auto context = globals::d3d::context;
 	const auto firstTriangle = lastTriangles;
 	if (!a_refreshImmediately)
 		pendingMap.buildDurationMs += frameDurationMs;
-	const auto batchTriangles = BatchTriangleBudget(triangleBudget);
+	const auto batchTriangles = BatchTriangleBudget(updateBudget.Triangles());
 	{
 		Util::FullscreenPassScope scope(context, 1, 0, 1);
 		winrt::com_ptr<ID3D11Buffer> savedVSConstant;
@@ -821,7 +973,7 @@ void LODShadows::RenderBatch(bool a_refreshImmediately)
 		context->OMSetRenderTargets(0, nullptr, depth);
 		context->OMSetDepthStencilState(depthState.get(), 0);
 		context->OMSetBlendState(nullptr, nullptr, ~0u);
-		context->RSSetState(rasterizer.get());
+		ID3D11RasterizerState* activeRasterizer = nullptr;
 		const D3D11_VIEWPORT viewport{ 0, 0, float(kResolution), float(kResolution), 0, 1 };
 		context->RSSetViewports(1, &viewport);
 		context->GSSetShader(nullptr, nullptr, 0);
@@ -840,6 +992,11 @@ void LODShadows::RenderBatch(bool a_refreshImmediately)
 		while (casterIndex < casters.size() && (a_refreshImmediately || lastTriangles < batchTriangles)) {
 			CaptureDistantDepth();
 			const auto& caster = casters[casterIndex];
+			auto* casterRasterizer = caster.lodLandscape ? terrainRasterizer.get() : rasterizer.get();
+			if (activeRasterizer != casterRasterizer) {
+				context->RSSetState(casterRasterizer);
+				activeRasterizer = casterRasterizer;
+			}
 			DrawData data;
 			DirectX::XMStoreFloat4x4(&data.worldToClip, WorldMatrix(caster.transform) * DirectX::XMLoadFloat4x4(&pendingMap.data.worldToClip));
 			DirectX::XMStoreFloat4x4(&data.world, DirectX::XMMatrixTranspose(WorldMatrix(caster.transform)));
@@ -883,6 +1040,7 @@ void LODShadows::RenderBatch(bool a_refreshImmediately)
 	}
 	pendingMap.triangleCount += lastTriangles - firstTriangle;
 	if (casterIndex == casters.size()) {
+		pendingMap.rayBoundsValid = BuildRayBounds(pendingMap.slice);
 		pendingMap.valid = true;
 		completedDepthMaps[pendingIndex] = pendingMap;
 		nextMap = (pendingIndex + 1) % kMapCount;
@@ -920,7 +1078,7 @@ bool LODShadows::NeedsUpdate(uint32_t a_index, const RE::NiPoint3& a_position, c
 {
 	const auto& map = maps[a_index];
 	return !map.valid || map.scene != sceneHash || map.transitionGeneration != transitionGeneration ||
-	       (map.center - a_position).Length() > kHalfExtents[a_index] * kCenterMargin ||
+	       (map.center - a_position).Length() > map.halfExtent * kCenterMargin ||
 	       (map.direction - a_direction).Length() > kDirectionThreshold || globals::game::graphicsState->GetFrameCount() - map.frame > kMaximumCacheFrames;
 }
 
@@ -944,10 +1102,14 @@ void LODShadows::Publish()
 	for (uint32_t i = 0; i < kMapCount; ++i) {
 		data[i] = maps[i].data;
 		const bool valid = active && maps[i].valid;
-		data[i].parameters = { float(maps[i].slice), valid ? 1.0f : 0.0f, settings.DepthBias / (kDepthExtent * 2), 0 };
-		data[i].filter = { 1.0f / kResolution, kHalfExtents[i] * 2 / kResolution, kDepthExtent * 2, 0 };
+		const float bias = settings.DepthBias / std::max(kMinimumDepthPadding, maps[i].depthRange);
+		const float historyBias = settings.DepthBias / std::max(kMinimumDepthPadding, previousMaps[i].depthRange);
+		data[i].parameters = { float(maps[i].slice), valid ? 1.0f : 0.0f, bias, 0 };
+		data[i].filter = { 1.0f / kResolution, maps[i].halfExtent * 2 / kResolution, historyBias, 0 };
 		data[i].historyWorldToClip = previousMaps[i].data.worldToClip;
-		data[i].history = { float(previousMaps[i].slice), GetHistoryBlend(i), previousMaps[i].valid ? 1.0f : 0.0f, hardwareComparison ? 1.0f : 0.0f };
+		const bool boundsValid = maps[i].rayBoundsValid && (!previousMaps[i].valid || previousMaps[i].rayBoundsValid);
+		const uint32_t flags = (hardwareComparison ? kHardwareComparison : 0) | (rayBounds && boundsValid ? kRayBounds : 0);
+		data[i].history = { float(previousMaps[i].slice), GetHistoryBlend(i), previousMaps[i].valid ? 1.0f : 0.0f, float(flags) };
 		validMaps += valid;
 	}
 	data[0].parameters.w = float(validMaps);
@@ -960,13 +1122,17 @@ void LODShadows::Publish()
 	data[2].filter.w = float(maskDimensions[1]);
 	auto context = globals::d3d::context;
 	context->UpdateSubresource(mapBuffer->resource.get(), 0, nullptr, data.data(), 0, 0);
+	if (effectMapBuffer)
+		effectMapBuffer->Update(data);
 	ID3D11ShaderResourceView* views[]{ depthSRV.get(), mapBuffer->srv.get() };
 	context->PSSetShaderResources(kDepthSlot, 2, views);
 	context->CSSetShaderResources(kDepthSlot, 2, views);
+	auto* bounds = rayBoundsSRV.get();
+	context->PSSetShaderResources(kRayBoundsSlot, 1, &bounds);
 	std::scoped_lock lock(diagnosticsMutex);
 	diagnostics = { { "ready", ready }, { "enabled", settings.Enabled }, { "validMaps", validMaps }, { "completedMaps", completedMaps },
 		{ "geometryCount", visibleGeometry.size() }, { "pendingCasters", casters.size() - casterIndex * (pendingIndex >= 0) }, { "unsupportedCasters", unsupportedCasters },
-		{ "updateDraws", lastDraws }, { "updateTriangles", lastTriangles }, { "triangleBudget", triangleBudget },
+		{ "updateDraws", lastDraws }, { "updateTriangles", lastTriangles }, { "triangleBudget", updateBudget.Triangles() },
 		{ "lastUpdateGpuMs", lastUpdateMs }, { "maxUpdateGpuMs", maxUpdateMs }, { "timingSamples", timingSamples },
 		{ "lastFullRefreshGpuMs", lastRefreshMs }, { "maxFullRefreshGpuMs", maxRefreshMs }, { "refreshEveryFrame", refreshEveryFrame } };
 	diagnostics["mapResolution"] = kResolution;
@@ -986,6 +1152,8 @@ void LODShadows::Publish()
 	diagnostics["pendingIndex"] = pendingIndex;
 	diagnostics["pendingBuildFrame"] = pendingIndex >= 0 ? json(pendingMap.frame) : json(nullptr);
 	diagnostics["mapBuildFrames"] = { maps[0].frame, maps[1].frame, maps[2].frame };
+	diagnostics["mapHalfExtents"] = { maps[0].halfExtent, maps[1].halfExtent, maps[2].halfExtent };
+	diagnostics["mapDepthRanges"] = { maps[0].depthRange, maps[1].depthRange, maps[2].depthRange };
 	const auto scene = globals::game::smState->shadowSceneNode[0];
 	if (const auto* shadowLight = scene ? scene->GetRuntimeData().sunShadowDirLight : nullptr) {
 		const auto& shadowData = shadowLight->GetShadowDirectionalLightRuntimeData();
@@ -1003,7 +1171,13 @@ void LODShadows::Publish()
 void LODShadows::OnDraw()
 {
 	const auto* shader = globals::state->currentShader;
-	if (!ready || !settings.Enabled || !shader ||
+	if (!shader)
+		return;
+	if (shader->shaderType.get() == RE::BSShader::Type::Effect) {
+		auto* buffer = effectMapBuffer ? effectMapBuffer->CB() : nullptr;
+		globals::d3d::context->PSSetConstantBuffers(kEffectMapBufferSlot, 1, &buffer);
+	}
+	if (!ready || !settings.Enabled ||
 		(shader->shaderType.get() != RE::BSShader::Type::Effect && shader->shaderType.get() != RE::BSShader::Type::Particle))
 		return;
 	auto* sampler = comparisonSampler.get();

@@ -1,3 +1,5 @@
+#define DISTANT_TREE
+
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"

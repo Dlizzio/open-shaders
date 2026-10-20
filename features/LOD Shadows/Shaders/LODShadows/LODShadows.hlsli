@@ -16,14 +16,19 @@ namespace LODShadows
 	static const float MinMaskDepth = 1.0;
 	static const uint RayFallback = MapCount;
 	static const uint RayUnshadowed = MapCount + 1;
+	static const uint RayOccluded = MapCount + 2;
+	static const uint HardwareComparison = 1;
+	static const uint RayBounds = 2;
+	static const float BoundsDepthEpsilon = 1.0 / 65535.0;
 	struct RayProjection
 	{
 		float3 start;
 		float3 end;
-		float3 parameters;
+		float4 parameters;
 		float3 historyStart;
 		float3 historyEnd;
 		float3 historyParameters;
+		float2 visibility;
 		uint mode;
 	};
 	struct MapData
@@ -35,8 +40,54 @@ namespace LODShadows
 		float4 history;
 	};
 	Texture2DArray<float> DepthMaps : register(t117);
+#if defined(EFFECT) && defined(PSHADER)
+	cbuffer EffectMapData : register(b7)
+	{
+		MapData Maps[MapCount];
+	};
+#else
 	StructuredBuffer<MapData> Maps : register(t118);
+#endif
 	Texture2D<float4> FilteredMask : register(t127);
+#if defined(EFFECT) && defined(PSHADER)
+	Texture2DArray<float2> RayDepthBounds : register(t61);
+
+	float GetRayVisibility(float3 start, float3 end, float slice, float bias, float texelSize)
+	{
+		uint width, height, layers, levels;
+		RayDepthBounds.GetDimensions(0, width, height, layers, levels);
+		float2 lower = (min(start.xy, end.xy) - texelSize) * width;
+		float2 upper = (max(start.xy, end.xy) + texelSize) * width;
+		uint2 a = uint2(clamp(lower, 0.0, width - 1.0));
+		uint2 b = uint2(clamp(upper, 0.0, width - 1.0));
+		uint2 span = b - a;
+		uint mip = min(levels - 1, uint(firstbithigh(max(max(span.x, span.y), 1u))));
+		a >>= mip;
+		b >>= mip;
+		uint parent = any(b - a > 1);
+		a >>= parent;
+		b >>= parent;
+		mip += parent;
+		float2 p = RayDepthBounds.Load(int4(a, slice, mip));
+		float2 q = p;
+		[branch] if (b.x != a.x) q = RayDepthBounds.Load(int4(b.x, a.y, slice, mip));
+		float2 r = p;
+		float2 s = q;
+		[branch] if (b.y != a.y)
+		{
+			r = RayDepthBounds.Load(int4(a.x, b.y, slice, mip));
+			s = r;
+			[branch] if (b.x != a.x) s = RayDepthBounds.Load(int4(b, slice, mip));
+		}
+		float nearest = min(min(p.x, q.x), min(r.x, s.x));
+		float farthest = max(max(p.y, q.y), max(r.y, s.y));
+		if (max(start.z, end.z) - bias + BoundsDepthEpsilon <= nearest)
+			return 1.0;
+		if (min(start.z, end.z) - bias - BoundsDepthEpsilon > farthest)
+			return 0.0;
+		return -1.0;
+	}
+#endif
 #if defined(PSHADER)
 	SamplerComparisonState ComparisonSampler : register(s14);
 #endif
@@ -71,7 +122,7 @@ namespace LODShadows
 	}
 
 	float SampleMap(float3 worldPosition, float3 positionDx, float3 positionDy, float4x4 worldToClip,
-		float slice, float bias, float3 filter, SamplerState linearSampler, out float coverage, bool hardwareComparison)
+		float slice, float bias, float texelSize, SamplerState linearSampler, out float coverage, bool hardwareComparison)
 	{
 		float3 clipPosition = mul(float4(worldPosition, 1), worldToClip).xyz;
 		float2 uv = clipPosition.xy * float2(0.5, -0.5) + 0.5;
@@ -80,7 +131,6 @@ namespace LODShadows
 		float visibility = 1.0;
 		[branch] if (edge > 0 && clipPosition.z > 0 && clipPosition.z < 1)
 		{
-			float texelSize = filter.x;
 			float3 shadowDx = mul(float4(positionDx, 0), worldToClip).xyz * float3(0.5, -0.5, 1.0);
 			float3 shadowDy = mul(float4(positionDy, 0), worldToClip).xyz * float3(0.5, -0.5, 1.0);
 			float3 receiverPlane = cross(shadowDx, shadowDy);
@@ -102,12 +152,12 @@ namespace LODShadows
 		SamplerState linearSampler, out float coverage, bool hardwareComparison)
 	{
 		float visibility = SampleMap(worldPosition, positionDx, positionDy, map.worldToClip,
-			map.parameters.x, map.parameters.z, map.filter.xyz, linearSampler, coverage, hardwareComparison);
+			map.parameters.x, map.parameters.z, map.filter.x, linearSampler, coverage, hardwareComparison);
 		[branch] if (map.history.z > 0.0 && map.history.y < 1.0)
 		{
 			float previousCoverage;
 			float previousVisibility = SampleMap(worldPosition, positionDx, positionDy, map.historyWorldToClip,
-				map.history.x, map.parameters.z, map.filter.xyz, linearSampler, previousCoverage, hardwareComparison);
+				map.history.x, map.filter.z, map.filter.x, linearSampler, previousCoverage, hardwareComparison);
 			float occlusion = lerp((1.0 - previousVisibility) * previousCoverage, (1.0 - visibility) * coverage, map.history.y);
 			coverage = lerp(previousCoverage, coverage, map.history.y);
 			visibility = 1.0 - occlusion / max(coverage, MinMaskWeight);
@@ -134,14 +184,14 @@ namespace LODShadows
 				}
 				float mapCoverage;
 				float visibility = SampleMapHistory(worldPosition, positionDx, positionDy, map, linearSampler, mapCoverage,
-					volume && Maps[i].history.w > 0.0);
+					volume && (uint(Maps[i].history.w) & HardwareComparison) != 0);
 				[branch] if (objectWeight > 0.0 && objectWeight < 1.0)
 				{
 					map.parameters.x += DepthSliceCount;
 					map.history.x += DepthSliceCount;
 					float distantCoverage;
 					float distantVisibility = SampleMapHistory(worldPosition, positionDx, positionDy, map, linearSampler, distantCoverage,
-						volume && map.history.w > 0.0);
+						volume && (uint(map.history.w) & HardwareComparison) != 0);
 					visibility = lerp(distantVisibility, visibility, objectWeight);
 				}
 				float occlusion = (1.0 - visibility) * mapCoverage;
@@ -157,6 +207,7 @@ namespace LODShadows
 	{
 		RayProjection ray = (RayProjection)0;
 		ray.mode = RayUnshadowed;
+		ray.visibility = -1.0;
 		[branch] if (enabled)
 		{
 			[loop] for (uint i = 0; i < MapCount; ++i)
@@ -189,7 +240,7 @@ namespace LODShadows
 					ray.mode = i;
 					ray.start = start;
 					ray.end = end;
-					ray.parameters = float3(map.parameters.x, map.parameters.z, map.filter.x);
+					ray.parameters = float4(map.parameters.x, map.parameters.z, map.filter.x, map.filter.z);
 					ray.historyParameters = float3(map.history.x, 1.0, map.history.w);
 					[branch] if (map.history.z > 0.0 && map.history.y < 1.0)
 					{
@@ -208,6 +259,16 @@ namespace LODShadows
 				break;
 			}
 		}
+#if defined(EFFECT) && defined(PSHADER)
+		[branch] if (ray.mode < MapCount && (uint(ray.historyParameters.z) & RayBounds) != 0)
+		{
+			ray.visibility.x = GetRayVisibility(ray.start, ray.end, ray.parameters.x, ray.parameters.y, ray.parameters.z);
+			if (ray.historyParameters.y < 1.0)
+				ray.visibility.y = GetRayVisibility(ray.historyStart, ray.historyEnd, ray.historyParameters.x, ray.parameters.w, ray.parameters.z);
+			if (ray.visibility.x == 0.0 && (ray.historyParameters.y >= 1.0 || ray.visibility.y == 0.0))
+				ray.mode = RayOccluded;
+		}
+#endif
 		return ray;
 	}
 
@@ -226,14 +287,23 @@ namespace LODShadows
 	float SampleRay(RayProjection ray, float t, float3 worldPosition, SamplerState linearSampler)
 	{
 		float visibility = 1.0;
+		[branch] if (ray.mode == RayOccluded) return 0.0;
 		[branch] if (ray.mode < MapCount)
 		{
-			float3 position = lerp(ray.start, ray.end, t);
-			visibility = CompareRayDepth(position, ray.parameters.x, ray.parameters.y, ray.parameters.z, ray.historyParameters.z > 0.0, linearSampler);
+			visibility = ray.visibility.x;
+			[branch] if (visibility < 0.0)
+			{
+				float3 position = lerp(ray.start, ray.end, t);
+				visibility = CompareRayDepth(position, ray.parameters.x, ray.parameters.y, ray.parameters.z, (uint(ray.historyParameters.z) & HardwareComparison) != 0, linearSampler);
+			}
 			[branch] if (ray.historyParameters.y < 1.0)
 			{
-				float3 previousPosition = lerp(ray.historyStart, ray.historyEnd, t);
-				float previousVisibility = CompareRayDepth(previousPosition, ray.historyParameters.x, ray.parameters.y, ray.parameters.z, ray.historyParameters.z > 0.0, linearSampler);
+				float previousVisibility = ray.visibility.y;
+				[branch] if (previousVisibility < 0.0)
+				{
+					float3 previousPosition = lerp(ray.historyStart, ray.historyEnd, t);
+					previousVisibility = CompareRayDepth(previousPosition, ray.historyParameters.x, ray.parameters.w, ray.parameters.z, (uint(ray.historyParameters.z) & HardwareComparison) != 0, linearSampler);
+				}
 				visibility = lerp(previousVisibility, visibility, ray.historyParameters.y);
 			}
 		}
@@ -253,7 +323,7 @@ namespace LODShadows
 		float objectWeight = 1.0;
 		float3 positionDx = 0.0;
 		float3 positionDy = 0.0;
-#if defined(PSHADER)
+#if defined(PSHADER) && !defined(DISTANT_TREE)
 		if (surface) {
 			positionDx = ddx(worldPosition);
 			positionDy = ddy(worldPosition);
