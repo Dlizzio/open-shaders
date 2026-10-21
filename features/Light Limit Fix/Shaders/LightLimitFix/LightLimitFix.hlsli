@@ -355,9 +355,6 @@ namespace LightLimitFix
 			shadow = lerp(shadow, shadowBlend, cascadeSelect);
 		}
 
-		// Within cascade 1's far edge, fade LLF's PCF out before data ends.
-		shadow = lerp(shadow, 1.0, fadeFactor);
-
 		// Focus shadows: high-resolution actor shadows the engine renders to
 		// kSHADOWMAPS slices [kFocusShadowBaseSlotIndex .. +FocusShadowCount).
 		// Each focus matrix projects worldPositionWS into the actor's clip
@@ -400,7 +397,8 @@ namespace LightLimitFix
 			}
 		}
 
-		return shadow;
+		// Within cascade 1's far edge, fade LLF's PCF out before data ends.
+		return lerp(shadow, 1.0, fadeFactor);
 	}
 
 	float GetDirectionalShadow(float3 worldPosition, float3 worldPositionWS, float2x2 rotationMatrix, uint eyeIndex, out float llfCoverage)
