@@ -2808,6 +2808,9 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 	float3 worldPositionWS = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 #	endif
 
+	// Engine pre-renders the directional shadow into a screen-space mask at
+	// t14. Under LLF this mask can be stale or zeroed, so LLF treats pixels
+	// past its cascade data as lit instead of sampling this mask.
 #	if !defined(LIGHT_LIMIT_FIX)
 	float4 shadowColor = (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) ? TexShadowMaskSampler.Load(int3(input.Position.xy, 0)) : 1.0;
 #	endif

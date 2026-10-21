@@ -277,6 +277,8 @@ namespace LightLimitFix
 	Texture2D<float> ShadowAtlasTex : register(t104);
 	Texture2DArray<float> DirectionalShadowCascades : register(t99);
 
+	// LLF has directional data only for cascades 0/1. The engine mask can be
+	// stale or zeroed under LLF, so pixels past cascade 1 must fade to lit.
 	float GetDirectionalShadow(float3 worldPosition, float3 worldPositionWS, float2x2 rotationMatrix, uint eyeIndex, out float llfCoverage, out float nativeContactWeight)
 	{
 		llfCoverage = 0.0;
@@ -284,6 +286,18 @@ namespace LightLimitFix
 		DirectionalShadowLightData shadowLightData = DirectionalShadowLights[0];
 
 		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(worldPosition, eyeIndex));
+		// Blend from LLF PCF deep in cascade 1 toward lit as we approach
+		// cascade 1's far edge, avoiding a hard discontinuity.
+		//
+		// Previous formula used `dot(worldPosition, worldPosition) /
+		// EndSplitDistances.y` -- dimensionally wrong (length^2 / length)
+		// AND inverted (close pixels got engineMaskShadow, far got LLF).
+		// Because `worldPosition` is camera-relative in Skyrim's vertex
+		// output, that produced a visible ~sqrt(EndSplitDistances.y)-radius
+		// ring around the camera that moved with the player -- a clear
+		// HMD-tracked artifact in VR. Switching to linear `shadowMapDepth`
+		// and reversing the blend direction makes the handoff a smooth
+		// world-anchored transition at the cascade boundary.
 		float fadeFactor = smoothstep(shadowLightData.EndSplitDistances.y * ShadowCoverage::NativeFadeStartFraction,
 			shadowLightData.EndSplitDistances.y, shadowMapDepth);
 		if (ShadowSampling::HasDistantShadows())
@@ -341,6 +355,7 @@ namespace LightLimitFix
 			shadow = lerp(shadow, shadowBlend, cascadeSelect);
 		}
 
+		// Within cascade 1's far edge, fade LLF's PCF out before data ends.
 		shadow = lerp(shadow, 1.0, fadeFactor);
 
 		// Focus shadows: high-resolution actor shadows the engine renders to
@@ -394,6 +409,9 @@ namespace LightLimitFix
 		return GetDirectionalShadow(worldPosition, worldPositionWS, rotationMatrix, eyeIndex, llfCoverage, nativeContactWeight);
 	}
 
+	// Convenience overload: callers without TexShadowMaskSampler bound
+	// (e.g. Particle.hlsl) get the lit-fallback behaviour (1.0) past
+	// cascade 1, matching the pre-engine-mask behaviour for those paths.
 	float GetDirectionalShadow(float3 worldPosition, float3 worldPositionWS, float2x2 rotationMatrix, uint eyeIndex = 0)
 	{
 		float llfCoverage;
