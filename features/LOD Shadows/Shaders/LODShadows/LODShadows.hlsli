@@ -151,7 +151,7 @@ namespace LODShadows
 					visibility.y = DepthMaps.SampleCmpLevelZero(ComparisonSampler, float3(uv, slice + DepthSliceCount), clipPosition.z - bias);
 				else
 #endif
-				visibility.y = CompareBilinear(uv, 0.0, slice + DepthSliceCount, clipPosition.z - bias, depthGradient, texelSize, linearSampler);
+					visibility.y = CompareBilinear(uv, 0.0, slice + DepthSliceCount, clipPosition.z - bias, depthGradient, texelSize, linearSampler);
 			}
 		}
 		return visibility;
