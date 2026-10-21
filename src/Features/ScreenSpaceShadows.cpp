@@ -313,7 +313,7 @@ void ScreenSpaceShadows::DrawShadows()
 		const auto* scene = accumulator->GetRuntimeData().activeShadowSceneNode;
 		if (const auto* shadowLight = scene ? scene->GetRuntimeData().sunShadowDirLight : nullptr) {
 			const auto& shadowData = shadowLight->GetShadowDirectionalLightRuntimeData();
-			nativeEndSplitDistances = { shadowData.endSplitDistances[0], shadowData.endSplitDistances[1] };
+			nativeEndSplitDistances = float2{ shadowData.endSplitDistances[0], shadowData.endSplitDistances[1] };
 		}
 	}
 
