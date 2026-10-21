@@ -8,7 +8,7 @@
     },
     "common.active": "Actief",
     "common.inactive": "Inactief",
-    "common.restart_required": "Nul volgt de zon en manen zonder de hoogte te begrenzen. Hogere waarden verkorten schaduwen bij de horizon, maar wijken af van de positie van het hemellichaam.",
+    "common.restart_required": "",
     "common.settings_managed_by_enb": "",
     "cs_editor.actions": "Acties",
     "cs_editor.active": "Actief:",

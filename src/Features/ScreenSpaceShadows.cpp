@@ -333,6 +333,7 @@ void ScreenSpaceShadows::DrawShadows()
 
 	auto buffer = raymarchCB->CB();
 	context->CSSetConstantBuffers(1, 1, &buffer);
+	globals::state->BindSharedDataCS(context, false);
 
 	auto viewport = globals::game::graphicsState;
 

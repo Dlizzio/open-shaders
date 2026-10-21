@@ -1,7 +1,7 @@
 {
     "_meta": {
         "auto_generated": true,
-        "generator": "0では高度を制限せず太陽と月を追従します。値を上げると地平線付近の影が短くなりますが、光の方向が天体の位置からずれます。",
+        "generator": "",
         "language": "日本語",
         "locale": "ja",
         "note": ""

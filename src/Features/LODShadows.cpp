@@ -500,11 +500,11 @@ void LODShadows::CollectTerrain()
 	Collect(RE::BGSTerrainManager::GetLODLandRoot().get(), true);
 	terrainAvailable = !visibleGeometry.empty();
 	const auto lodTerrainCount = visibleGeometry.size();
-	landBounds = {};
+	landBounds = float4{};
 	const auto* tes = globals::game::tes;
 	const auto* grid = tes ? tes->gridCells : nullptr;
 	if (grid && grid->cells) {
-		landBounds = { (tes->currentGridX + 0.5f) * kCellSize, (tes->currentGridY + 0.5f) * kCellSize,
+		landBounds = float4{ (tes->currentGridX + 0.5f) * kCellSize, (tes->currentGridY + 0.5f) * kCellSize,
 			grid->length * kCellSize * 0.5f, grid->length * kCellSize * 0.5f };
 		for (uint32_t x = 0; x < grid->length; ++x) {
 			for (uint32_t y = 0; y < grid->length; ++y) {
@@ -591,7 +591,7 @@ void LODShadows::AddCaster(RE::BSGeometry* a_geometry)
 	if (!caster.indexCount)
 		return;
 	if (auto material = property->material) {
-		caster.uvTransform = { material->texCoordScale[0].x, material->texCoordScale[0].y, material->texCoordOffset[0].x, material->texCoordOffset[0].y };
+		caster.uvTransform = float4{ material->texCoordScale[0].x, material->texCoordScale[0].y, material->texCoordOffset[0].x, material->texCoordOffset[0].y };
 		if (material->GetType() == RE::BSShaderMaterial::Type::kLighting)
 			caster.materialAlpha = static_cast<RE::BSLightingShaderMaterialBase*>(material)->materialAlpha;
 	}
@@ -1001,7 +1001,7 @@ void LODShadows::RenderBatch(bool a_refreshImmediately)
 			DirectX::XMStoreFloat4x4(&data.worldToClip, WorldMatrix(caster.transform) * DirectX::XMLoadFloat4x4(&pendingMap.data.worldToClip));
 			DirectX::XMStoreFloat4x4(&data.world, DirectX::XMMatrixTranspose(WorldMatrix(caster.transform)));
 			data.uvTransform = caster.uvTransform;
-			data.alpha = { caster.alphaThreshold, caster.materialAlpha, caster.lodLandscape ? 1.0f : 0.0f, 0 };
+			data.alpha = float4{ caster.alphaThreshold, caster.materialAlpha, caster.lodLandscape ? 1.0f : 0.0f, 0 };
 			data.landBounds = pendingLandBounds;
 			drawBuffer->Update(data);
 			context->VSSetShader(caster.instances ? treeVertexShader.get() : vertexShader.get(), nullptr, 0);
@@ -1104,12 +1104,12 @@ void LODShadows::Publish()
 		const bool valid = active && maps[i].valid;
 		const float bias = settings.DepthBias / std::max(kMinimumDepthPadding, maps[i].depthRange);
 		const float historyBias = settings.DepthBias / std::max(kMinimumDepthPadding, previousMaps[i].depthRange);
-		data[i].parameters = { float(maps[i].slice), valid ? 1.0f : 0.0f, bias, 0 };
-		data[i].filter = { 1.0f / kResolution, maps[i].halfExtent * 2 / kResolution, historyBias, 0 };
+		data[i].parameters = float4{ float(maps[i].slice), valid ? 1.0f : 0.0f, bias, 0 };
+		data[i].filter = float4{ 1.0f / kResolution, maps[i].halfExtent * 2 / kResolution, historyBias, 0 };
 		data[i].historyWorldToClip = previousMaps[i].data.worldToClip;
 		const bool boundsValid = maps[i].rayBoundsValid && (!previousMaps[i].valid || previousMaps[i].rayBoundsValid);
 		const uint32_t flags = (hardwareComparison ? kHardwareComparison : 0) | (rayBounds && boundsValid ? kRayBounds : 0);
-		data[i].history = { float(previousMaps[i].slice), GetHistoryBlend(i), previousMaps[i].valid ? 1.0f : 0.0f, float(flags) };
+		data[i].history = float4{ float(previousMaps[i].slice), GetHistoryBlend(i), previousMaps[i].valid ? 1.0f : 0.0f, float(flags) };
 		validMaps += valid;
 	}
 	data[0].parameters.w = float(validMaps);

@@ -8,7 +8,7 @@
     },
     "common.active": "Aktiv",
     "common.inactive": "Inaktiv",
-    "common.restart_required": "Bei null folgen Licht und Schatten Sonne und Monden ohne Höhenbegrenzung. Höhere Werte verkürzen Schatten am Horizont, weichen aber von der Position des Himmelskörpers ab.",
+    "common.restart_required": "",
     "common.settings_managed_by_enb": "",
     "cs_editor.actions": "Aktionen",
     "cs_editor.active": "Aktiv:",
