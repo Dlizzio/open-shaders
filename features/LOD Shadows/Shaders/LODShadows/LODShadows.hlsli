@@ -121,14 +121,14 @@ namespace LODShadows
 		return lerp(lerp(lit.w, lit.z, fraction.x), lerp(lit.x, lit.y, fraction.x), fraction.y);
 	}
 
-	float SampleMap(float3 worldPosition, float3 positionDx, float3 positionDy, float4x4 worldToClip,
-		float slice, float bias, float texelSize, SamplerState linearSampler, out float coverage, bool hardwareComparison)
+	float2 SampleMap(float3 worldPosition, float3 positionDx, float3 positionDy, float4x4 worldToClip,
+		float slice, float bias, float texelSize, SamplerState linearSampler, out float coverage, bool hardwareComparison, bool sampleDistant)
 	{
 		float3 clipPosition = mul(float4(worldPosition, 1), worldToClip).xyz;
 		float2 uv = clipPosition.xy * float2(0.5, -0.5) + 0.5;
 		float edge = min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y));
 		coverage = 0.0;
-		float visibility = 1.0;
+		float2 visibility = 1.0;
 		[branch] if (edge > 0 && clipPosition.z > 0 && clipPosition.z < 1)
 		{
 			float3 shadowDx = mul(float4(positionDx, 0), worldToClip).xyz * float3(0.5, -0.5, 1.0);
@@ -144,21 +144,30 @@ namespace LODShadows
 			else
 #endif
 				visibility = CompareBilinear(uv, 0.0, slice, clipPosition.z - bias, depthGradient, texelSize, linearSampler);
+			[branch] if (sampleDistant)
+			{
+#if defined(PSHADER)
+				[branch] if (hardwareComparison)
+					visibility.y = DepthMaps.SampleCmpLevelZero(ComparisonSampler, float3(uv, slice + DepthSliceCount), clipPosition.z - bias);
+				else
+#endif
+				visibility.y = CompareBilinear(uv, 0.0, slice + DepthSliceCount, clipPosition.z - bias, depthGradient, texelSize, linearSampler);
+			}
 		}
 		return visibility;
 	}
 
-	float SampleMapHistory(float3 worldPosition, float3 positionDx, float3 positionDy, MapData map,
-		SamplerState linearSampler, out float coverage, bool hardwareComparison)
+	float2 SampleMapHistory(float3 worldPosition, float3 positionDx, float3 positionDy, MapData map,
+		SamplerState linearSampler, out float coverage, bool hardwareComparison, bool sampleDistant)
 	{
-		float visibility = SampleMap(worldPosition, positionDx, positionDy, map.worldToClip,
-			map.parameters.x, map.parameters.z, map.filter.x, linearSampler, coverage, hardwareComparison);
+		float2 visibility = SampleMap(worldPosition, positionDx, positionDy, map.worldToClip,
+			map.parameters.x, map.parameters.z, map.filter.x, linearSampler, coverage, hardwareComparison, sampleDistant);
 		[branch] if (map.history.z > 0.0 && map.history.y < 1.0)
 		{
 			float previousCoverage;
-			float previousVisibility = SampleMap(worldPosition, positionDx, positionDy, map.historyWorldToClip,
-				map.history.x, map.filter.z, map.filter.x, linearSampler, previousCoverage, hardwareComparison);
-			float occlusion = lerp((1.0 - previousVisibility) * previousCoverage, (1.0 - visibility) * coverage, map.history.y);
+			float2 previousVisibility = SampleMap(worldPosition, positionDx, positionDy, map.historyWorldToClip,
+				map.history.x, map.filter.z, map.filter.x, linearSampler, previousCoverage, hardwareComparison, sampleDistant);
+			float2 occlusion = lerp((1.0 - previousVisibility) * previousCoverage, (1.0 - visibility) * coverage, map.history.y);
 			coverage = lerp(previousCoverage, coverage, map.history.y);
 			visibility = 1.0 - occlusion / max(coverage, MinMaskWeight);
 		}
@@ -183,17 +192,10 @@ namespace LODShadows
 					map.history.x += DepthSliceCount;
 				}
 				float mapCoverage;
-				float visibility = SampleMapHistory(worldPosition, positionDx, positionDy, map, linearSampler, mapCoverage,
-					volume && (uint(Maps[i].history.w) & HardwareComparison) != 0);
-				[branch] if (objectWeight > 0.0 && objectWeight < 1.0)
-				{
-					map.parameters.x += DepthSliceCount;
-					map.history.x += DepthSliceCount;
-					float distantCoverage;
-					float distantVisibility = SampleMapHistory(worldPosition, positionDx, positionDy, map, linearSampler, distantCoverage,
-						volume && (uint(map.history.w) & HardwareComparison) != 0);
-					visibility = lerp(distantVisibility, visibility, objectWeight);
-				}
+				bool blendObjects = objectWeight > 0.0 && objectWeight < 1.0;
+				float2 visibilityPair = SampleMapHistory(worldPosition, positionDx, positionDy, map, linearSampler, mapCoverage,
+					volume && (uint(Maps[i].history.w) & HardwareComparison) != 0, blendObjects);
+				float visibility = blendObjects ? lerp(visibilityPair.y, visibilityPair.x, objectWeight) : visibilityPair.x;
 				float occlusion = (1.0 - visibility) * mapCoverage;
 				shadow -= occlusion * remaining;
 				remaining *= 1.0 - mapCoverage;
