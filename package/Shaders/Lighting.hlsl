@@ -1597,9 +1597,9 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
 		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0) {
 			MESH_TV_HEIGHT(sh0, TexParallaxSampler, SampParallaxSampler, uv, mipLevel, 0);
-#			if defined(SNOW_COVER)
+#				if defined(SNOW_COVER)
 			snowHeightSampled = true;
-#			endif
+#				endif
 		}
 	}
 #			endif  // !FACEGEN
@@ -2597,7 +2597,7 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 #			elif defined(EMAT)
 		float disp = snowHeightSampled ? (sh0 - 0.5) * displacementParams.HeightScale : 0;
 #			else
-		float disp = 0;
+	float disp = 0;
 #			endif
 #		elif defined(LANDSCAPE) && defined(EMAT)
 		float disp = sh0;  // GetTerrainHeight is already (raw - 0.5) * HeightScale
