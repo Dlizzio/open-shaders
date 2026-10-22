@@ -2585,7 +2585,7 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 #			elif defined(EMAT)
 		float disp = (sh0 - 0.5) * displacementParams.HeightScale;
 #			else
-		float disp = (sh0 - 0.5);
+	float disp = (sh0 - 0.5);
 #			endif
 #		elif defined(LANDSCAPE) && defined(EMAT)
 		float disp = sh0;  // GetTerrainHeight is already (raw - 0.5) * HeightScale

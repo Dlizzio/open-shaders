@@ -627,16 +627,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	dirDetailedShadow *= screenSpaceShadows.x;
 	dirSoftShadow *= dot(normal, SharedData::DirLightDirection.xyz) >= 0.0 ? screenSpaceShadows.x : screenSpaceShadows.y;
 
-#			if defined(SNOW_COVER)
+#				if defined(SNOW_COVER)
 	if (SnowCover::IsActive()) {
-#				if defined(SKYLIGHTING)
+#					if defined(SKYLIGHTING)
 		float snowSkyVisibility = SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1));
-#				else
+#					else
 		float snowSkyVisibility = 1.0;
-#				endif
+#					endif
 		SnowCover::ApplyGrassSnow(material.BaseColor, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler);
 	}
-#			endif
+#				endif
 
 	DirectLightingOutput totalLighting = (DirectLightingOutput)0;
 	DirectContext dirContext = CreateDirectLightingContext(normal, normal, vertexNormal, viewDirection, viewDirection,
@@ -925,16 +925,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif  // SKYLIGHTING
 
 	float3 albedo = baseColor.xyz * vertexColor;
-#			if defined(SNOW_COVER)
+#				if defined(SNOW_COVER)
 	if (SnowCover::IsActive()) {
-#				if defined(SKYLIGHTING)
+#					if defined(SKYLIGHTING)
 		float snowSkyVisibility = skylightingDiffuse;
-#				else
+#					else
 		float snowSkyVisibility = 1.0;
-#				endif
+#					endif
 		SnowCover::ApplyGrassSnow(albedo, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler);
 	}
-#			endif
+#				endif
 
 	float3 transmissionTint = GrassLighting::GetTransmissionTint(albedo);
 	float dirVdotL = dot(viewDirection, SharedData::DirLightDirection.xyz);
