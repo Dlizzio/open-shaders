@@ -1431,6 +1431,9 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 	float mipLevel = 0;
 #	endif  // LANDSCAPE
 	float sh0 = 0;
+#	if defined(SNOW_COVER) && defined(EMAT)
+	bool snowHeightSampled = false;
+#	endif
 	float pixelOffset = 0;
 
 #	if defined(EMAT)
@@ -1504,6 +1507,9 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
 		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0) {
 			MESH_TV_HEIGHT(sh0, TexParallaxSampler, SampParallaxSampler, uv, mipLevel, 0);
+#			if defined(SNOW_COVER)
+			snowHeightSampled = true;
+#			endif
 		}
 	}
 #		endif  // defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
@@ -1539,6 +1545,9 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, applyMeshTV, meshOffset, pixelOffset);
 				if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0) {
 					MESH_TV_HEIGHT(sh0, TexEnvMaskSampler, SampEnvMaskSampler, uv, mipLevel, 3);
+#			if defined(SNOW_COVER)
+					snowHeightSampled = true;
+#			endif
 				}
 				MESH_TV_SAMPLE(complexMaterialColor, TexEnvMaskSampler, SampEnvMaskSampler, uv);
 			} else {
@@ -1588,6 +1597,9 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
 		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0) {
 			MESH_TV_HEIGHT(sh0, TexParallaxSampler, SampParallaxSampler, uv, mipLevel, 0);
+#			if defined(SNOW_COVER)
+			snowHeightSampled = true;
+#			endif
 		}
 	}
 #			endif  // !FACEGEN
@@ -2583,14 +2595,14 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 #			elif defined(LANDSCAPE)
 		float disp = sh0;  // GetTerrainHeight is already (raw - 0.5) * HeightScale
 #			elif defined(EMAT)
-		float disp = (sh0 - 0.5) * displacementParams.HeightScale;
+		float disp = snowHeightSampled ? (sh0 - 0.5) * displacementParams.HeightScale : 0;
 #			else
-	float disp = (sh0 - 0.5);
+		float disp = 0;
 #			endif
 #		elif defined(LANDSCAPE) && defined(EMAT)
 		float disp = sh0;  // GetTerrainHeight is already (raw - 0.5) * HeightScale
 #		elif defined(EMAT) && !defined(TREE_ANIM)
-		float disp = (sh0 - 0.5);
+		float disp = snowHeightSampled ? (sh0 - 0.5) : 0;
 #		else
 		float disp = 0;
 #		endif

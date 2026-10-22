@@ -311,38 +311,38 @@ void SnowCover::SaveConfig()
 void SnowCover::LoadWorldConfig(const json& config)
 {
 	wsettings.EnableSnowCover = config.value("EnableSnowCover", true);
-	wsettings.AffectGrassTint = config["AffectGrassTint"];
-	wsettings.AffectTreeTint = config["AffectTreeTint"];
-	wsettings.FoliageHeightOffset = config["FoliageHeightOffset"];
-	wsettings.UVScale = config["UVScale"];
-	MaxSummerMonth = config["MaxSummerMonth"];
-	MaxWinterMonth = config["MaxWinterMonth"];
-	SummerHeightOffset = config["SummerHeightOffset"];
-	WinterHeightOffset = config["WinterHeightOffset"];
+	wsettings.AffectGrassTint = config.at("AffectGrassTint");
+	wsettings.AffectTreeTint = config.at("AffectTreeTint");
+	wsettings.FoliageHeightOffset = config.at("FoliageHeightOffset");
+	wsettings.UVScale = config.at("UVScale");
+	MaxSummerMonth = config.at("MaxSummerMonth");
+	MaxWinterMonth = config.at("MaxWinterMonth");
+	SummerHeightOffset = config.at("SummerHeightOffset");
+	WinterHeightOffset = config.at("WinterHeightOffset");
 	config.at("MapMin").get_to(mapMin);
 	config.at("MapMax").get_to(mapMax);
 	UpdateMapTransform();
-	wsettings.mapZscale = config["MapZscale"];
-	wsettings.BlendSmoothness = config["BlendSmoothness"];
+	wsettings.mapZscale = config.at("MapZscale");
+	wsettings.BlendSmoothness = config.at("BlendSmoothness");
 	wsettings.WeatherFadeStart = config.value("WeatherFadeStart", DEFAULT_WEATHER_FADE_START);
 	wsettings.WeatherFadeEnd = config.value("WeatherFadeEnd", DEFAULT_WEATHER_FADE_END);
 	wsettings.ObjectFadeStart = config.value("ObjectFadeStart", DEFAULT_OBJECT_FADE_START);
 	wsettings.ObjectFadeEnd = config.value("ObjectFadeEnd", DEFAULT_OBJECT_FADE_END);
 	wsettings.ObjectFadeAmount = config.value("ObjectFadeAmount", DEFAULT_OBJECT_FADE_AMOUNT);
-	wsettings.ScreenSpaceScale = config["ScreenSpaceScale"];
-	wsettings.LogMicrofacetDensity = config["LogMicrofacetDensity"];
-	wsettings.MicrofacetRoughness = config["MicrofacetRoughness"];
-	wsettings.DensityRandomization = config["DensityRandomization"];
+	wsettings.ScreenSpaceScale = config.at("ScreenSpaceScale");
+	wsettings.LogMicrofacetDensity = config.at("LogMicrofacetDensity");
+	wsettings.MicrofacetRoughness = config.at("MicrofacetRoughness");
+	wsettings.DensityRandomization = config.at("DensityRandomization");
 	config.at("MainTint").get_to(wsettings.MainTint);
 	config.at("AltTint").get_to(wsettings.AltTint);
-	snowingSpeed = config["SnowingSpeed"];
-	meltingSpeed = config["MeltingSpeed"];
-	wsettings.PeakMainAngle = config["PeakMainAngle"];
-	wsettings.PeakAltAngle = config["PeakAltAngle"];
-	wsettings.MinAngle = config["MinAngle"];
-	wsettings.MaxAngle = config["MaxAngle"];
-	wsettings.MainSpec = config["MainSpec"];
-	wsettings.AltSpec = config["AltSpec"];
+	snowingSpeed = config.at("SnowingSpeed");
+	meltingSpeed = config.at("MeltingSpeed");
+	wsettings.PeakMainAngle = config.at("PeakMainAngle");
+	wsettings.PeakAltAngle = config.at("PeakAltAngle");
+	wsettings.MinAngle = config.at("MinAngle");
+	wsettings.MaxAngle = config.at("MaxAngle");
+	wsettings.MainSpec = config.at("MainSpec");
+	wsettings.AltSpec = config.at("AltSpec");
 	mainTexture = config.value("MainTexture", std::string{});
 	alternateTexture = config.value("AltTexture", std::string{});
 	mapTexture = config.value("MapTexture", std::string{});
@@ -780,7 +780,7 @@ void SnowCover::UploadFireMelt()
 		                     std::clamp((slotCutoff - distance) / FIRE_MELT_SLOT_FADE, 0.0f, 1.0f);
 		const float radius = fire.radius * weight;
 		if (radius >= 1.0f)
-			fireMelt.Spheres[fireMelt.Count++] = { fire.center.x, fire.center.y, fire.center.z, radius };
+			fireMelt.Spheres[fireMelt.Count++] = float4{ fire.center.x, fire.center.y, fire.center.z, radius };
 	}
 }
 
