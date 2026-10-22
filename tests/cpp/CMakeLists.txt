@@ -71,6 +71,7 @@ add_executable(cpp_tests
     test_shadowcaster_math.cpp
     test_atlas_allocator.cpp
     test_mathutils.cpp
+    test_snowcover_math.cpp
     test_llf_sanitize.cpp
     test_litregion.cpp
     test_litcap.cpp

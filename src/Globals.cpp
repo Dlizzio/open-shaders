@@ -39,6 +39,7 @@
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/SnowCover.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -126,6 +127,7 @@ namespace globals
 		FeatureOverwrites featureOverwrites{};
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
+		SnowCover snowCover{};
 		Skin skin{};
 		ReverseZ reverseZ{};
 		PostProcessing postProcessing{};

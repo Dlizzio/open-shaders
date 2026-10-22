@@ -13,8 +13,26 @@ namespace SharedData
 
 static float emissiveMult = 1.0;
 
+#define COLOR_HSV
 #include "/Shaders/Common/Color.hlsli"
 #include "/Test/STF/ShaderTestFramework.hlsli"
+
+/// @tags color, hsv
+[numthreads(1, 1, 1)] void TestHSVConversion()
+{
+	const float3 samples[8] = {
+		float3(0, 0, 0), float3(1, 1, 1), float3(0.2, 0.2, 0.2),
+		float3(1, 0, 0), float3(0, 1, 0), float3(0, 0, 1),
+		float3(0.07, 0.6, 0.18), float3(2.0, 0.1, 0.7)
+	};
+	for (uint i = 0; i < 8; ++i) {
+		float3 hsv = Color::RGBtoHSV(samples[i]);
+		ASSERT(IsTrue, all(isfinite(hsv)));
+		ASSERT(IsTrue, all(abs(Color::HSVtoRGB(hsv) - samples[i]) < 0.000001));
+	}
+	ASSERT(IsTrue, abs(Color::RGBtoHSV(float3(0, 1, 0)).x - 1.0 / 3.0) < 0.000001);
+	ASSERT(IsTrue, abs(Color::RGBtoHSV(float3(0, 0, 1)).x - 2.0 / 3.0) < 0.000001);
+}
 
 /// @tags color, gamma, lighting
 [numthreads(1, 1, 1)] void TestAuthoredGammaOffsetContinuity() {

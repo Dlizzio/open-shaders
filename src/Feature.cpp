@@ -39,6 +39,7 @@
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/SnowCover.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -298,6 +299,7 @@ namespace
 			&globals::features::horizonFix,
 			&globals::features::exponentialHeightFog,
 			&globals::features::hdrDisplay,
+			&globals::features::snowCover,
 			&globals::features::skin,
 			&globals::features::reverseZ,
 			&globals::features::postProcessing
