@@ -5,6 +5,42 @@
 #include "Utils/StringUtils.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <sstream>
+
+TEST_CASE("Config names cannot navigate between directories", "[stringutils]")
+{
+	for (std::string_view name : { "Tamriel", "WindhelmWorld", "Interior.Name" })
+		REQUIRE(Util::IsSinglePathComponent(name));
+	for (std::string_view name : { "", ".", "..", "a/b", "a\\b", "C:Tamriel", "../Tamriel" })
+		REQUIRE_FALSE(Util::IsSinglePathComponent(name));
+}
+
+TEST_CASE("Relative asset paths reject roots and parent navigation", "[stringutils]")
+{
+	const std::filesystem::path base = "Data";
+	REQUIRE(Util::JoinRelativePath(base, "Shaders/SnowCover/main") == base / "Shaders/SnowCover/main");
+	REQUIRE(Util::JoinRelativePath(base, "") == base / "");
+	REQUIRE_THROWS_AS(Util::JoinRelativePath(base, "../outside"), std::invalid_argument);
+	REQUIRE_THROWS_AS(Util::JoinRelativePath(base, "Textures/../outside"), std::invalid_argument);
+	REQUIRE_THROWS_AS(Util::JoinRelativePath(base, "/outside"), std::invalid_argument);
+#ifdef _WIN32
+	REQUIRE_THROWS_AS(Util::JoinRelativePath(base, "C:outside"), std::invalid_argument);
+	REQUIRE_THROWS_AS(Util::JoinRelativePath(base, "C:\\outside"), std::invalid_argument);
+	REQUIRE_THROWS_AS(Util::JoinRelativePath(base, "Textures\\..\\outside"), std::invalid_argument);
+	REQUIRE_THROWS_AS(Util::JoinRelativePath(base, "\\\\server\\share\\outside"), std::invalid_argument);
+#endif
+}
+
+TEST_CASE("Config lists append owned lines while stripping comments and whitespace", "[stringutils]")
+{
+	std::istringstream input("# ignored\r\n  first name  # inline\r\n\t\r\n second\t\nthird");
+	std::vector<std::string> lines{ "existing" };
+	Util::ReadConfigLines(input, lines);
+	REQUIRE(lines == std::vector<std::string>{ "existing", "first name", "second", "third" });
+	std::istringstream empty;
+	Util::ReadConfigLines(empty, lines);
+	REQUIRE(lines.size() == 4);
+}
 
 TEST_CASE("ToLowerAscii folds only ASCII letters", "[stringutils]")
 {

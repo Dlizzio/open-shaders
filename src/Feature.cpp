@@ -43,6 +43,7 @@
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
+#include "Features/SnowCover.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -300,6 +301,7 @@ namespace
 			&globals::features::horizonFix,
 			&globals::features::exponentialHeightFog,
 			&globals::features::hdrDisplay,
+			&globals::features::snowCover,
 			&globals::features::skin,
 			&globals::features::reverseZ,
 			&globals::features::postProcessing

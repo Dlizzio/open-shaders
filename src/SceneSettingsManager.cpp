@@ -4869,16 +4869,15 @@ bool SceneSettingsManager::ReloadSceneSettings()
 
 void SceneSettingsManager::OnDataLoaded()
 {
-	gameDataReady = true;
-	if (dataLoaded)
-		TryEnsureLocationDataLoaded();
+	// Loading location JSON here races render-thread discovery.
+	gameDataReady.store(true, std::memory_order_release);
 }
 
 bool SceneSettingsManager::TryEnsureLocationDataLoaded()
 {
 	if (locationDataLoaded)
 		return true;
-	if (!gameDataReady || !RE::TESDataHandler::GetSingleton())
+	if (!gameDataReady.load(std::memory_order_acquire) || !RE::TESDataHandler::GetSingleton())
 		return false;
 	if (!userSettingsDocumentLoaded)
 		LoadAllUserSettings();

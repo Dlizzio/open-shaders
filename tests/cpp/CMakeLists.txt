@@ -72,6 +72,7 @@ add_executable(cpp_tests
     test_lodshadow_update_budget.cpp
     test_atlas_allocator.cpp
     test_mathutils.cpp
+    test_snowcover_math.cpp
     test_llf_sanitize.cpp
     test_litregion.cpp
     test_litcap.cpp
@@ -104,6 +105,7 @@ add_executable(cpp_tests
 	test_nr_context_profile.cpp
 	test_nr_roi.cpp
 	test_furshellassetscan.cpp
+	test_furinertiaspring.cpp
 	test_region.cpp
 	test_bound_points.cpp
 	test_region_overlay.cpp

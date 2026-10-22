@@ -87,6 +87,13 @@ namespace Permutation
 		static const uint IsHeldWeapon = (1u << 29);
 		static const uint GammaRenderTarget = (1u << 27);
 		static const uint CaptureReflectionRadiance = (1u << 26);
+#if defined(SNOW_COVER) && defined(PSHADER)
+		static const uint NoSnow = (1u << 25);
+		static const uint NoFoliageTint = (1u << 24);
+		static const uint SnowRooftop = (1u << 23);
+		static const uint SnowLODTree = (1u << 22);
+		static const uint SnowInactive = (1u << 21);
+#endif
 	}
 
 	namespace ExtraFeatureFlags

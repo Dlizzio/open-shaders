@@ -175,6 +175,15 @@ const static float DepthOffsets[16] = {
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(SNOW_COVER)
+#		undef SNOW
+#		undef PROJECTED_UV
+#		undef SPARKLE
+#		define BASIC_SNOW_COVER
+#		define SampColorSampler SampDiffuse
+#		include "SnowCover/SnowCover.hlsli"
+#	endif
+
 #	if defined(EXP_HEIGHT_FOG)
 #		define SampColorSampler SampDiffuse
 #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
@@ -249,6 +258,10 @@ PS_OUTPUT ShadeDistantTree(PS_INPUT input, bool sampleDistantShadow)
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = -normalize(cross(ddx, ddy));
 
+#			if defined(SNOW_COVER)
+	SnowCover::ApplyDistantTreeSnow(baseColor.xyz, normal, input.WorldPosition.xyz, input.TexCoord.xy, eyeIndex, TexDiffuse);
+#			endif
+
 	float3 directionalAmbientColor = max(0, Color::Ambient(SharedData::GetAmbient(normal)));
 #			if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
@@ -288,6 +301,10 @@ PS_OUTPUT ShadeDistantTree(PS_INPUT input, bool sampleDistantShadow)
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
+
+#			if defined(SNOW_COVER)
+	SnowCover::ApplyDistantTreeSnow(baseColor.xyz, normal, input.WorldPosition.xyz, input.TexCoord.xy, eyeIndex, TexDiffuse);
+#			endif
 
 	float3 directionalAmbientColor = Color::Ambient(SharedData::GetAmbient(normal));
 #			if defined(IBL)
