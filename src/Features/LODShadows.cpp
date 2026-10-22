@@ -8,6 +8,7 @@
 #include "Utils/D3D.h"
 #include "Utils/DevBenchUx.h"
 #include "Utils/Game.h"
+#include "Utils/PerfUtils.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LODShadows::Settings, Enabled, UpdateBudgetMs, DepthBias)
 
@@ -1194,7 +1195,7 @@ void LODShadows::ReflectionsPrepass()
 
 void LODShadows::EarlyPrepass()
 {
-	const double nowMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	const double nowMs = Util::GetNowSecs() * 1000.0;
 	frameDurationMs = frameTimeMs > 0 ? nowMs - frameTimeMs : 0;
 	frameTimeMs = nowMs;
 	maskReady = false;
