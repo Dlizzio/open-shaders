@@ -7,9 +7,9 @@
 #include <span>
 #include <vector>
 
-namespace SnowCoverMath
+namespace Util
 {
-	/** @brief CPU altitude map with conservative maximum queries for snow exclusion. */
+	/** @brief CPU R8 height map with bilinear sampling and conservative maximum queries. */
 	class HeightMap
 	{
 		struct Level

@@ -1,5 +1,5 @@
-#include "Features/SnowCoverMap.h"
 #include "Features/SnowCoverMath.h"
+#include "Utils/HeightMap.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -32,7 +32,7 @@ TEST_CASE("Snow map bounds contain every filtered sample", "[snow-cover]")
 			for (uint32_t y = 0; y < height; ++y)
 				for (uint32_t x = 0; x < width; ++x)
 					pixels[y * pitch + x] = static_cast<uint8_t>((x * 17 + y * 31) % 256);
-			SnowCoverMath::HeightMap map;
+			Util::HeightMap map;
 			REQUIRE(map.Load(width, height, pixels, pitch));
 			for (unsigned start = 1; start < 8; ++start) {
 				const float low = start / 16.0f;
@@ -49,7 +49,7 @@ TEST_CASE("Snow map bounds contain every filtered sample", "[snow-cover]")
 
 TEST_CASE("Snow maps reject invalid input and exclude no unknown regions", "[snow-cover]")
 {
-	SnowCoverMath::HeightMap map;
+	Util::HeightMap map;
 	REQUIRE_FALSE(map.IsLoaded());
 	const std::vector<uint8_t> pixels{ 0, 255, 255, 0 };
 	REQUIRE_FALSE(map.Load(0, 2, pixels, 2));

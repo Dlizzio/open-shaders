@@ -2,10 +2,11 @@
 
 #include "Buffer.h"
 #include "Feature.h"
-#include "SnowCoverMap.h"
 #include "State.h"
 #include "Utils/Game.h"
+#include "Utils/HeightMap.h"
 
+// C4324: the 16-byte-aligned PerFrame member requires padding in SnowCover.
 #pragma warning(push)
 #pragma warning(disable: 4324)
 
@@ -195,9 +196,6 @@ public:
 	void UpdateFireMelt();
 	bool ScanFireSources();
 	void UploadFireMelt();
-	static bool IsWorldFireSource(RE::TESBoundObject* a_base);
-	static bool IsFireGeometry(RE::BSGeometry* a_geometry);
-	static void CollectFireGeometry(RE::NiAVObject* a_object, bool a_hidden, bool& a_hasFire, std::vector<RE::NiBound>& a_samples);
 
 	PerFrame GetCommonBufferData(bool inWorld);
 
@@ -273,12 +271,11 @@ private:
 	void ValidateSettings();
 	void DrawWorldSettings();
 	void DrawMaterialSettings();
-	static bool IsHarvestableFlora(RE::TESObjectREFR* ref);
 	bool IsBuilding(RE::TESObjectREFR* ref);
 	bool IsSnowFree(const RE::BSRenderPass* pass, uint32_t flags) const;
 	void UpdateSurvival();
 	void ReleaseTextures();
-	SnowCoverMath::HeightMap snowMap;
+	Util::HeightMap snowMap;
 	std::unordered_map<RE::FormID, bool> buildingBaseCache;
 	bool survivalEnabled = true;
 	std::atomic<bool> survivalSnowy{ false };

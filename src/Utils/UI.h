@@ -530,10 +530,12 @@ namespace Util
 		ImVec2& out_size,
 		bool alphaMask = false);
 
+	/** @brief Loads a DDS resource, optionally naming its texture and SRV for rendering diagnostics. */
 	bool LoadDDSTextureFromFile(ID3D11Device* device,
 		const char* filename,
 		ID3D11ShaderResourceView** out_srv,
-		ImVec2& out_size);
+		ImVec2& out_size,
+		const char* resourceName = nullptr);
 
 	bool InitializeMenuIcons(Menu* menu);
 

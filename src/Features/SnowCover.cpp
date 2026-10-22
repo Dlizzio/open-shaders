@@ -8,8 +8,8 @@
 #include "Utils/FileSystem.h"
 #include "Utils/MathUtils.h"
 #include "Utils/Serialize.h"
+#include "Utils/StringUtils.h"
 #include "Utils/UI.h"
-#include <DirectXTex.h>
 
 #define I18N_KEY_PREFIX "feature.snow_cover."
 
@@ -26,7 +26,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
-	constexpr float HoursPerDay = 24.0f;
 	constexpr float MaxFrameSeconds = 0.1f;
 	constexpr float MinAngleRange = 0.001f;
 	constexpr float MaxHeightOffset = 20000.0f;
@@ -38,52 +37,11 @@ namespace
 	constexpr float SurvivalSnowOff = 0.4f;
 	constexpr RE::FormID SurvivalRegionSpell = 0x87F;
 
-	bool IsObjectLODTree(const char* name, const RE::BSShaderProperty* property)
-	{
-		if (!name)
-			return false;
-		if (_strnicmp(name, "treepassthru", 12) == 0)
-			return true;
-		if (!property || !property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided))
-			return false;
-		std::string_view geometryName(name);
-		constexpr std::string_view largeRef = "-LargeRef";
-		if (geometryName.size() > largeRef.size() && _strnicmp(geometryName.data() + geometryName.size() - largeRef.size(), largeRef.data(), largeRef.size()) == 0)
-			geometryName.remove_suffix(largeRef.size());
-		for (const std::string_view category : { "obj"sv, "objHD"sv, "objpassthru"sv })
-			if (geometryName.size() == category.size() && _strnicmp(geometryName.data(), category.data(), category.size()) == 0)
-				return true;
-		return false;
-	}
-
-	std::string_view GetWorldspace()
-	{
-		auto* tes = globals::game::tes;
-		if (!tes)
-			return {};
-		const char* name = nullptr;
-		if (tes->interiorCell)
-			name = tes->interiorCell->GetFormEditorID();
-		else if (auto* worldspace = tes->GetRuntimeData2().worldSpace)
-			name = worldspace->GetFormEditorID();
-		return name ? name : "";
-	}
-
 	std::filesystem::path GetConfigPath(std::string_view name)
 	{
-		if (name.empty() || name.find_first_of("/\\:") != std::string_view::npos || name == "." || name == "..")
+		if (!Util::IsSinglePathComponent(name))
 			throw std::invalid_argument("Invalid worldspace editor ID");
 		return (Util::PathHelpers::GetShadersPath() / "SnowCover") / (std::string(name) + ".json");
-	}
-
-	std::filesystem::path GetTexturePath(const std::filesystem::path& path)
-	{
-		if (path.is_absolute() || path.has_root_path())
-			throw std::invalid_argument("Snow textures must be relative to Data");
-		for (const auto& part : path)
-			if (part == "..")
-				throw std::invalid_argument("Snow texture path escapes Data");
-		return Util::PathHelpers::GetDataPath() / path;
 	}
 }
 
@@ -111,12 +69,7 @@ void SnowCover::UpdateFrame()
 			if (auto* weather = sky->currentWeather) {
 				snowing = weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kSnow);
 				raining = !snowing && weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy);
-				if (auto* precipitation = weather->precipitationData) {
-					using DataID = RE::BGSShaderParticleGeometryData::DataID;
-					snowingDensity = precipitation->GetSettingValue(DataID::kParticleDensity).f * precipitation->GetSettingValue(DataID::kGravityVelocity).f;
-					if (!std::isfinite(snowingDensity))
-						snowingDensity = 0.0f;
-				}
+				snowingDensity = Util::GetPrecipitationIntensity(weather);
 			}
 		}
 	}
@@ -125,8 +78,7 @@ void SnowCover::UpdateFrame()
 		const float elapsed = lastGameHours >= 0.0f ? std::max(0.0f, hours - lastGameHours) : 0.0f;
 		lastGameHours = hours;
 		timeSnowing = SnowCoverMath::Accumulate(timeSnowing, elapsed, snowing, raining, snowingSpeed, meltingSpeed);
-		const auto month = std::min(calendar->GetMonth(), 11u);
-		perFrame.Month = static_cast<float>(month) + (calendar->GetDay() - 1.0f + calendar->GetHour() / HoursPerDay) / RE::Calendar::DAYS_IN_MONTH[month];
+		perFrame.Month = Util::GetFractionalGameMonth(*calendar);
 	}
 	perFrame.SeasonalAltitude = SnowCoverMath::SeasonalAltitude(perFrame.Month, MaxSummerMonth, MaxWinterMonth, SummerHeightOffset, WinterHeightOffset);
 	perFrame.TimeSnowing = timeSnowing;
@@ -157,7 +109,7 @@ void SnowCover::Reset()
 	ResetRuntimeState();
 	if (requested) {
 		LoadGeometryLists();
-		if (!lastWorldspace.empty() && GetWorldspace() == lastWorldspace)
+		if (!lastWorldspace.empty() && Util::GetCurrentWorldspaceOrCellEditorID() == lastWorldspace)
 			TryLoadTextures();
 	}
 }
@@ -193,13 +145,7 @@ void SnowCover::LoadGeometryLists()
 	geometryNames.clear();
 	auto load = [&](std::string_view name) {
 		std::ifstream file((Util::PathHelpers::GetShadersPath() / "SnowCover") / name);
-		std::string line;
-		while (std::getline(file, line)) {
-			line = line.substr(0, line.find('#'));
-			const auto begin = line.find_first_not_of(" \t\r\n");
-			if (begin != std::string::npos)
-				geometryNames.push_back(line.substr(begin, line.find_last_not_of(" \t\r\n") - begin + 1));
-		}
+		Util::ReadConfigLines(file, geometryNames);
 	};
 	load("whitelist.txt");
 	const size_t whiteCount = geometryNames.size();
@@ -354,73 +300,40 @@ void SnowCover::LoadWorldConfig(const json& config)
 
 bool SnowCover::LoadTextures()
 {
-	const auto basePath = (Util::PathHelpers::GetShadersPath() / "SnowCover");
+	const auto basePath = Util::PathHelpers::GetShadersPath() / "SnowCover";
+	const auto dataPath = Util::PathHelpers::GetDataPath();
 	auto load = [&](const std::filesystem::path& path, std::string_view name) {
 		winrt::com_ptr<ID3D11ShaderResourceView> view;
 		ImVec2 size;
-		const auto resourcePath = path.lexically_relative(Util::PathHelpers::GetDataPath()).make_preferred().string();
-		if (!Util::LoadDDSTextureFromFile(globals::d3d::device, resourcePath.c_str(), view.put(), size)) {
+		const auto resourcePath = path.lexically_relative(dataPath).make_preferred().string();
+		const auto resourceName = std::format("SnowCover::{}", name);
+		if (!Util::LoadDDSTextureFromFile(globals::d3d::device, resourcePath.c_str(), view.put(), size, resourceName.c_str())) {
 			logger::warn("Snow Cover: could not load {}", path.generic_string());
 			return view;
 		}
-		winrt::com_ptr<ID3D11Resource> texture;
-		view->GetResource(texture.put());
-		Util::SetResourceName(texture.get(), std::format("SnowCover::{}", name).c_str());
-		Util::SetResourceName(view.get(), std::format("SnowCover::{} SRV", name).c_str());
 		return view;
 	};
 	constexpr std::array suffixes{ ".dds", "_n.dds", "_rmaos.dds" };
 	constexpr std::array names{ "SnowAlbedo", "SnowNormal", "SnowRmaos", "IceAlbedo", "IceNormal", "IceRmaos" };
 	for (size_t i = 0; i < suffixes.size(); ++i) {
 		if (!mainTexture.empty())
-			views[i] = load(GetTexturePath(mainTexture).concat(suffixes[i]), names[i]);
+			views[i] = load(Util::JoinRelativePath(dataPath, mainTexture).concat(suffixes[i]), names[i]);
 		if (!views[i])
 			views[i] = load(basePath / "default" / (std::string("main") + suffixes[i]), names[i]);
 		if (!alternateTexture.empty())
-			views[i + suffixes.size()] = load(GetTexturePath(alternateTexture).concat(suffixes[i]), names[i + suffixes.size()]);
+			views[i + suffixes.size()] = load(Util::JoinRelativePath(dataPath, alternateTexture).concat(suffixes[i]), names[i + suffixes.size()]);
 		if (!views[i + suffixes.size()])
 			views[i + suffixes.size()] = views[i];
 	}
 	if (!mapTexture.empty()) {
-		views.back() = load(GetTexturePath(mapTexture).concat(".dds"), "SnowMap");
-		const auto path = GetTexturePath(mapTexture).concat(".dds");
-		DirectX::ScratchImage image;
-		HRESULT result = DirectX::LoadFromDDSFile(path.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image);
-		if (FAILED(result)) {
-			RE::BSResourceNiBinaryStream stream(path.lexically_relative(Util::PathHelpers::GetDataPath()).make_preferred().string());
-			if (stream.good() && stream.stream->totalSize) {
-				std::vector<uint8_t> bytes(stream.stream->totalSize);
-				if (stream.read(bytes.data(), stream.stream->totalSize))
-					result = DirectX::LoadFromDDSMemory(bytes.data(), bytes.size(), DirectX::DDS_FLAGS_NONE, nullptr, image);
-			}
-		}
-		if (SUCCEEDED(result) && views.back()) {
-			const auto* source = image.GetImage(0, 0, 0);
-			DirectX::ScratchImage decoded;
-			if (source && source->format == DXGI_FORMAT_BC4_UNORM) {
-				if (SUCCEEDED(DirectX::Decompress(*source, DXGI_FORMAT_R8_UNORM, decoded)))
-					source = decoded.GetImage(0, 0, 0);
-			}
-			if (source && source->format == DXGI_FORMAT_R8_UNORM)
-				snowMap.Load(static_cast<uint32_t>(source->width), static_cast<uint32_t>(source->height), { source->pixels, source->slicePitch }, source->rowPitch);
-			else
-				logger::warn("Snow Cover: CPU snow bounds require an R8_UNORM or BC4_UNORM altitude map: {}", path.generic_string());
-		}
+		const auto path = Util::JoinRelativePath(dataPath, mapTexture).concat(".dds");
+		views.back() = load(path, "SnowMap");
+		if (views.back())
+			Util::LoadR8HeightMapFromDDS(path, snowMap);
 	}
 	if (!views.back()) {
 		constexpr float neutralHeight = 0.5f;
-		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = desc.Height = desc.MipLevels = desc.ArraySize = 1;
-		desc.Format = DXGI_FORMAT_R32_FLOAT;
-		desc.SampleDesc.Count = 1;
-		desc.Usage = D3D11_USAGE_IMMUTABLE;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		const D3D11_SUBRESOURCE_DATA data{ &neutralHeight, sizeof(neutralHeight), 0 };
-		winrt::com_ptr<ID3D11Texture2D> texture;
-		DX::ThrowIfFailed(globals::d3d::device->CreateTexture2D(&desc, &data, texture.put()));
-		Util::SetResourceName(texture.get(), "SnowCover::SnowMap");
-		DX::ThrowIfFailed(globals::d3d::device->CreateShaderResourceView(texture.get(), nullptr, views.back().put()));
-		Util::SetResourceName(views.back().get(), "SnowCover::SnowMap SRV");
+		views.back() = Util::CreateConstantFloatTexture(globals::d3d::device, neutralHeight, "SnowCover::SnowMap");
 	}
 	return std::ranges::all_of(views, [](const auto& view) { return view != nullptr; });
 }
@@ -452,7 +365,7 @@ bool SnowCover::TryLoadTextures()
 
 void SnowCover::Reload()
 {
-	const auto current = GetWorldspace();
+	const auto current = Util::GetCurrentWorldspaceOrCellEditorID();
 	if (current == lastWorldspace)
 		return;
 	lastWorldspace = current;
@@ -571,66 +484,6 @@ void SnowCover::RestoreDefaultSettings()
 		active.store(false, std::memory_order_relaxed);
 }
 
-bool SnowCover::IsWorldFireSource(RE::TESBoundObject* a_base)
-{
-	if (!a_base)
-		return false;
-	switch (a_base->GetFormType()) {
-	case RE::FormType::Static:
-	case RE::FormType::MovableStatic:
-	case RE::FormType::Light:
-	case RE::FormType::Activator:
-	case RE::FormType::TalkingActivator:
-	case RE::FormType::Furniture:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool SnowCover::IsFireGeometry(RE::BSGeometry* a_geometry)
-{
-	auto& data = a_geometry->GetGeometryRuntimeData();
-	auto* property = data.shaderProperty.get();
-	auto* alpha = data.alphaProperty.get();
-	if (!property || !alpha || property->GetRTTI() != globals::rtti::BSEffectShaderPropertyRTTI.get())
-		return false;
-	if (alpha->GetDestBlendMode() != RE::NiAlphaProperty::AlphaFunction::kOne)
-		return false;
-	auto* material = static_cast<RE::BSEffectShaderMaterial*>(property->material);
-	if (!material)
-		return false;
-
-	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-	if (property->flags.any(Flag::kSoftEffect))
-		return !material->greyscaleTexturePath.empty() && property->flags.all(Flag::kGrayscaleToPaletteColor, Flag::kGrayscaleToPaletteAlpha);
-
-	auto* particles = a_geometry->AsParticlesGeom();
-	if (!particles || netimmerse_cast<RE::BSStripParticleSystem*>(a_geometry) || material->sourceTexturePath.empty())
-		return false;
-	auto* particleData = particles->GetParticlesRuntimeData().particleData.get();
-	return particleData && particleData->GetParticlesRuntimeData().subTextureOffsetsCount != 0;
-}
-
-void SnowCover::CollectFireGeometry(RE::NiAVObject* a_object, bool a_hidden, bool& a_hasFire, std::vector<RE::NiBound>& a_samples)
-{
-	if (!a_object)
-		return;
-	const bool hidden = a_hidden || a_object->GetAppCulled();
-	if (auto* geometry = a_object->AsGeometry()) {
-		if (!IsFireGeometry(geometry))
-			return;
-		a_hasFire = true;
-		if (!hidden && geometry->worldBound.radius > 0.0f)
-			a_samples.push_back(geometry->worldBound);
-		return;
-	}
-	if (auto* node = a_object->AsNode()) {
-		for (auto& child : node->GetChildren())
-			CollectFireGeometry(child.get(), hidden, a_hasFire, a_samples);
-	}
-}
-
 bool SnowCover::ScanFireSources()
 {
 	ZoneScopedN("SnowCover::ScanFireSources");
@@ -643,19 +496,6 @@ bool SnowCover::ScanFireSources()
 	if (!tes || !player)
 		return false;
 
-	auto merge = [](const RE::NiBound& a_lhs, const RE::NiBound& a_rhs) {
-		const RE::NiPoint3 delta = a_rhs.center - a_lhs.center;
-		const float distance = delta.Length();
-		if (distance + a_rhs.radius <= a_lhs.radius)
-			return a_lhs;
-		if (distance + a_lhs.radius <= a_rhs.radius)
-			return a_rhs;
-		RE::NiBound combined;
-		combined.radius = 0.5f * (distance + a_lhs.radius + a_rhs.radius);
-		combined.center = a_lhs.center + delta * ((combined.radius - a_lhs.radius) / distance);
-		return combined;
-	};
-
 	const auto eye = player->GetPosition();
 	uint32_t classified = 0;
 	fireClusters.clear();
@@ -664,7 +504,7 @@ bool SnowCover::ScanFireSources()
 		if (!a_ref || a_ref->IsDisabled() || a_ref->IsDeleted())
 			return RE::BSContainer::ForEachResult::kContinue;
 		auto* base = a_ref->GetBaseObject();
-		if (!IsWorldFireSource(base))
+		if (!Util::IsPlacedFireCandidate(base))
 			return RE::BSContainer::ForEachResult::kContinue;
 		const auto cached = fireBaseCache.find(base->GetFormID());
 		const bool known = cached != fireBaseCache.end();
@@ -676,7 +516,7 @@ bool SnowCover::ScanFireSources()
 
 		bool hasFire = false;
 		fireSamples.clear();
-		CollectFireGeometry(root, false, hasFire, fireSamples);
+		Util::CollectFireGeometry(root, false, hasFire, fireSamples);
 		if (!known) {
 			fireBaseCache.emplace(base->GetFormID(), hasFire);
 			++classified;
@@ -691,7 +531,7 @@ bool SnowCover::ScanFireSources()
 				return a_cluster.bound.center.GetSquaredDistance(sample.center) <= FIRE_MELT_CLUSTER_DISTANCE * FIRE_MELT_CLUSTER_DISTANCE;
 			});
 			if (cluster != fireClusters.end())
-				cluster->bound = merge(cluster->bound, sample);
+				cluster->bound = Util::MergeBounds(cluster->bound, sample);
 			else
 				fireClusters.push_back({ a_ref->GetFormID(), static_cast<uint32_t>(fireClusters.size() - first), sample, 0.0f });
 		}
@@ -802,11 +642,11 @@ std::function<void()> SnowCover::OnRenderPassBegin(const RE::BSRenderPass* pass)
 	const bool animated = pass->geometry->HasAnimation() || (reference && reference->GetBaseObject() && reference->GetBaseObject()->IsBoundAnimObject());
 	if (actor || blacklist.contains(geometryName) || ((animated || movable) && !whitelist.contains(geometryName) && !(settings.AffectHavok && movable)))
 		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSnow);
-	if (!settings.AffectFloraTint && IsHarvestableFlora(reference))
+	if (!settings.AffectFloraTint && Util::IsHarvestableFlora(reference))
 		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::NoFoliageTint);
 	if (settings.RooftopSnow > 0.0f && IsBuilding(reference))
 		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowRooftop);
-	if (!reference && IsObjectLODTree(name, pass->shaderProperty))
+	if (!reference && Util::IsObjectLODTree(name, pass->shaderProperty))
 		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowLODTree);
 	if (IsSnowFree(pass, flags))
 		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowInactive);
@@ -818,23 +658,6 @@ std::function<void()> SnowCover::OnRenderPassBegin(const RE::BSRenderPass* pass)
 	};
 }
 
-bool SnowCover::IsHarvestableFlora(RE::TESObjectREFR* a_ref)
-{
-	if (!a_ref)
-		return false;
-	auto base = a_ref->GetObjectReference();
-	if (!base)
-		return false;
-	switch (base->GetFormType()) {
-	case RE::FormType::Flora:
-		return true;
-	case RE::FormType::Tree:
-		return static_cast<RE::TESObjectTREE*>(base)->produceItem != nullptr;
-	default:
-		return false;
-	}
-}
-
 bool SnowCover::IsBuilding(RE::TESObjectREFR* reference)
 {
 	auto* base = reference ? reference->GetBaseObject() : nullptr;
@@ -842,12 +665,7 @@ bool SnowCover::IsBuilding(RE::TESObjectREFR* reference)
 		return false;
 	if (const auto found = buildingBaseCache.find(base->GetFormID()); found != buildingBaseCache.end())
 		return found->second;
-	bool building = false;
-	if (const auto* model = base->As<RE::TESModel>(); model && model->GetModel()) {
-		std::string path = model->GetModel();
-		std::ranges::transform(path, path.begin(), [](unsigned char c) { return c == '/' ? '\\' : static_cast<char>(std::tolower(c)); });
-		building = path.find("architecture\\") != std::string::npos || path.find("dungeons\\") != std::string::npos;
-	}
+	const bool building = Util::IsArchitecturalModel(base->As<RE::TESModel>());
 	buildingBaseCache.emplace(base->GetFormID(), building);
 	return building;
 }

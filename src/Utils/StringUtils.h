@@ -8,12 +8,44 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <istream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Util
 {
+	/** @brief Checks for one nonempty path component without separators, a drive prefix, or dot navigation. */
+	inline bool IsSinglePathComponent(std::string_view name)
+	{
+		return !name.empty() && name.find_first_of("/\\:") == std::string_view::npos && name != "." && name != "..";
+	}
+
+	/** @brief Joins a relative path to a base, rejecting roots and parent navigation. */
+	inline std::filesystem::path JoinRelativePath(const std::filesystem::path& base, const std::filesystem::path& path)
+	{
+		if (path.is_absolute() || path.has_root_path())
+			throw std::invalid_argument("Path must be relative");
+		for (const auto& part : path)
+			if (part == "..")
+				throw std::invalid_argument("Parent path components are not allowed");
+		return base / path;
+	}
+
+	/** @brief Appends trimmed, nonempty lines after removing hash comments. */
+	inline void ReadConfigLines(std::istream& stream, std::vector<std::string>& lines)
+	{
+		std::string line;
+		while (std::getline(stream, line)) {
+			line = line.substr(0, line.find('#'));
+			const auto begin = line.find_first_not_of(" \t\r\n");
+			if (begin != std::string::npos)
+				lines.push_back(line.substr(begin, line.find_last_not_of(" \t\r\n") - begin + 1));
+		}
+	}
+
 	/** Encodes a filesystem path as UTF-8 without narrowing Unicode filenames. */
 	inline std::string PathToUtf8(const std::filesystem::path& path)
 	{
