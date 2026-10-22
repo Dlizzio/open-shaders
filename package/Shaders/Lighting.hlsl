@@ -3000,7 +3000,11 @@ FUR_EARLY_DEPTH_STENCIL PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFro
 #		if defined(VOLUMETRIC_SHADOWS)
 		float vsmDetailedShadow = 1.0;
 		dirSoftShadow = VolumetricShadows::GetVSMShadow2D(input.WorldPosition.xyz, worldPositionWS, eyeIndex, vsmDetailedShadow);
+#			if defined(LIGHT_LIMIT_FIX) && defined(DEFERRED)
+		dirSoftShadow = lerp(dirSoftShadow, max(dirSoftShadow, dirDetailedShadow), llfDirectionalCoverage);
+#			else
 		dirSoftShadow = max(dirSoftShadow, dirDetailedShadow);
+#			endif
 
 #			if !defined(LIGHT_LIMIT_FIX)
 		if (!(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir))

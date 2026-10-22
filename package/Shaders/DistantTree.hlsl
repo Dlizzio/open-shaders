@@ -132,6 +132,12 @@ SamplerState SampDiffuse : register(s0);
 
 Texture2D<float4> TexDiffuse : register(t0);
 
+#	if defined(SCREEN_SPACE_SHADOWS) && defined(DEFERRED)
+#		include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
+
+static const float ScreenSpaceShadowStrength = 0.8;
+#	endif
+
 #	if !defined(VR)
 cbuffer AlphaTestRefCB : register(b11)
 {
@@ -244,6 +250,11 @@ PS_OUTPUT ShadeDistantTree(PS_INPUT input, bool sampleDistantShadow)
 
 #		if defined(DEFERRED)
 	float dirShadow = ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex, true, sampleDistantShadow);
+
+#			if defined(SCREEN_SPACE_SHADOWS)
+	[branch] if (!ShadowSampling::HasDistantShadows())
+		dirShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, 0.0.xx, 0.0, eyeIndex), ScreenSpaceShadowStrength);
+#			endif
 
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * 0.5 * llDirLightMult * Color::VanillaNormalization();
