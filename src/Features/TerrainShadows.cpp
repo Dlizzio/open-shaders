@@ -14,6 +14,7 @@
 #include "SkySync.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/StringUtils.h"
 
 #define I18N_KEY_PREFIX "feature.terrain_shadows."
 
@@ -71,9 +72,7 @@ namespace
 
 				const auto tokenEnd = a_command.find_first_of(" \t\r\n");
 				const auto token = a_command.substr(0, tokenEnd);
-				if (!std::ranges::equal(token, a_token, [](char a_lhs, char a_rhs) {
-						return std::tolower(static_cast<unsigned char>(a_lhs)) == std::tolower(static_cast<unsigned char>(a_rhs));
-					})) {
+				if (!Util::IEquals(token, a_token)) {
 					return false;
 				}
 
