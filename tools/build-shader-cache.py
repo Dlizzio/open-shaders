@@ -824,13 +824,8 @@ def compile_extra_shaders(cache: Path, shaders: Path, runtime: str, fxc: str, jo
         result = subprocess.run(command + [str(shaders / request["source"])], capture_output=True, text=True)
         diagnostics = result.stdout + result.stderr
         warnings = re.findall(r"^.*warning (X\d+):.*$", diagnostics, re.MULTILINE)
-        allowed_warnings = {"X1519"}
-        if request["source"] == "LightLimitFix/ClusterCullingCS.hlsl":
-            allowed_warnings.add("X4714")
-        if result.returncode or any(code not in allowed_warnings for code in warnings):
+        if result.returncode or any(code != "X1519" for code in warnings):
             return f"Supplementary shader failed release validation: {relative}\n{diagnostics}"
-        if "X4714" in warnings:
-            print(diagnostics.strip())
         return None
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         failures = [failure for failure in pool.map(compile_one, requests.items()) if failure]
