@@ -986,6 +986,8 @@
     "feature.foliage_lighting.key_feature_1": "",
     "feature.foliage_lighting.key_feature_2": "",
     "feature.foliage_lighting.key_feature_3": "",
+    "feature.foliage_lighting.master_enabled": "启用植被光照",
+    "feature.foliage_lighting.master_enabled_tip": "启用树木和草地的光散射以及树木环境光控制。禁用时将忽略所有其他设置。",
     "feature.foliage_lighting.name": "",
     "feature.grass_collision.description": "启用动态草地交互——当角色走过草地时，草会弯曲和摆动，营造更沉浸的环境反应。",
     "feature.grass_collision.enable": "启用草地碰撞",

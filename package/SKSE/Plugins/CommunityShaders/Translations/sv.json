@@ -445,6 +445,8 @@
     "feature.feature_overwrites.name": "Funktionsöverskrivningar",
     "feature.feature_overwrites.select_all": "Markera alla",
     "feature.feature_overwrites.select_none": "Avmarkera alla",
+    "feature.foliage_lighting.master_enabled": "Aktivera lövverksbelysning",
+    "feature.foliage_lighting.master_enabled_tip": "Aktiverar ljusspridning i träd och gräs samt trädens inställningar för omgivningsljus. Alla andra inställningar ignoreras när detta är avstängt.",
     "feature.hair_specular.description": "Ger bättre hårskuggning med realistiska spegelreflektioner och tangentbaserad ljusinteraktion för ett mer verklighetstroget hår.",
     "feature.hair_specular.diffuse_multiplier": "Multiplikator för diffus belysning",
     "feature.hair_specular.enable_self_shadow": "Aktivera egenskugga i skärmrymden",
