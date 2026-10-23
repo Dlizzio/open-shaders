@@ -1,6 +1,9 @@
 #include "Common/FrameBuffer.hlsli"
 #include "LightLimitFix/Common.hlsli"
 
+static const uint CULLING_THREADS_Y = 4;
+static const uint CULLING_THREADS_Z = 1;
+
 cbuffer PerFrame : register(b0)
 {
 	uint LightCount;
@@ -26,7 +29,7 @@ bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cl
 	return dot(dist, dist) <= radiusSquared;
 }
 
-[numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(
+[numthreads(NUMTHREAD_X, CULLING_THREADS_Y, CULLING_THREADS_Z)] void main(
 	uint3 groupId : SV_GroupID, uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
 	if (any(dispatchThreadId >= uint3(ClusterSize.x, ClusterSize.y, ClusterSize.z)))
 		return;
