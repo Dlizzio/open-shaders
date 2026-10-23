@@ -301,6 +301,29 @@ class ShaderCacheManifestTests(unittest.TestCase):
             builder.compile_extra_shaders(self.cache, self.shaders, "SE", "fxc.exe", 1)
         self.assertIn("/DEMPTY= ", compile_shader.call_args.args[0])
 
+    def test_supplementary_compiler_scopes_light_culling_warning_exception(self):
+        for source, warning, returncode, accepted in (
+                ("LightLimitFix/ClusterCullingCS.hlsl", "X4714", 0, True),
+                ("Other/ClusterCullingCS.hlsl", "X4714", 0, False),
+                ("LightLimitFix/ClusterCullingCS.hlsl", "X3206", 0, False),
+                ("Main.hlsl", "X1519", 0, True),
+                ("LightLimitFix/ClusterCullingCS.hlsl", "X4714", 1, False)):
+            with self.subTest(source=source, warning=warning, returncode=returncode):
+                self.write_extra_capture([{"kind": "standalone", "runtime": "SE", "source": source,
+                                           "entryPoint": "main", "profile": "cs_5_0", "flags": 34818,
+                                           "defines": []}])
+                diagnostics = f"warning {warning}: compiler diagnostic\n"
+                with patch.object(builder, "REPO", self.root), patch.object(builder.subprocess, "run",
+                        return_value=Mock(returncode=returncode, stdout="", stderr=diagnostics)), \
+                        patch("builtins.print") as output:
+                    if accepted:
+                        builder.compile_extra_shaders(self.cache, self.shaders, "SE", "fxc.exe", 1)
+                        if warning == "X4714":
+                            output.assert_any_call(diagnostics.strip())
+                    else:
+                        with self.assertRaisesRegex(ValueError, warning):
+                            builder.compile_extra_shaders(self.cache, self.shaders, "SE", "fxc.exe", 1)
+
     def test_finalize_requires_the_original_compile_config(self):
         with self.assertRaisesRegex(ValueError, "missing CompileConfig.yaml"):
             builder.finalize_existing(self.cache, self.shaders, "2-13-0-0", "SE", "aio")
