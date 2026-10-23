@@ -13,17 +13,24 @@ namespace Util::StandaloneShaderCacheKey
 	using Defines = std::vector<std::pair<std::string, std::optional<std::string>>>;
 
 	/** @brief Returns the normalized source path relative to the Shaders directory. */
-	inline std::string SourceName(const std::filesystem::path& a_path)
+	inline std::filesystem::path SourcePath(const std::filesystem::path& a_path)
 	{
+		const auto normalized = a_path.lexically_normal();
 		std::filesystem::path relative;
 		bool inShaders = false;
-		for (const auto& part : a_path.lexically_normal()) {
+		for (const auto& part : normalized) {
 			if (inShaders)
 				relative /= part;
 			else if (part == L"Shaders")
 				inShaders = true;
 		}
-		return (inShaders ? relative : a_path.lexically_normal()).generic_string();
+		return inShaders ? relative : normalized;
+	}
+
+	/** @brief Returns the shader-relative source name with portable separators. */
+	inline std::string SourceName(const std::filesystem::path& a_path)
+	{
+		return SourcePath(a_path).generic_string();
 	}
 
 	/** @brief Sorts macros and retains the final definition of each name. */

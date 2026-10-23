@@ -112,6 +112,11 @@ TEST_CASE("Standalone shader keys survive install paths and macro ordering", "[C
 	CHECK(first == "Effects11/QuadVS.hlsl");
 	CHECK(SourceName(L"D:\\Games\\Skyrim\\Data\\Shaders\\Effects11\\QuadVS.hlsl") == first);
 	CHECK(SourceName(L"Data/Shaders/Utility.hlsl") == "Utility.hlsl");
+	CHECK(SourcePath(L"Data/Shaders/Effects11/QuadVS.hlsl") == fs::path(L"Effects11/QuadVS.hlsl"));
+	CHECK(SourcePath(L"D:/Games/Skyrim/Data/Shaders/Effects11/../Utility.hlsl") == fs::path(L"Utility.hlsl"));
+	CHECK(SourcePath(L"Effects11/QuadVS.hlsl") == fs::path(L"Effects11/QuadVS.hlsl"));
+	CHECK(SourcePath(L"Data/Shaders/Utility.hlsl").parent_path().empty());
+	CHECK(SourceName(L"Data/Shaders/Effects11/../Utility.hlsl") == "Utility.hlsl");
 	const auto defines = CanonicalDefines({ { "VR", "" }, { "REVERSE_Z", "" }, { "VR", "" } });
 	CHECK(defines == CanonicalDefines({ { "REVERSE_Z", "" }, { "VR", "" } }));
 	const auto key = MakeKey(first, "main", "vs_5_0", 34818, defines);

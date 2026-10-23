@@ -3285,20 +3285,7 @@ namespace SIE
 		// Keep standalone stages together so feature cache invalidation removes all of them.
 		std::wstring GetStandaloneCacheDir(const std::filesystem::path& sourcePath)
 		{
-			std::wstring rel;
-			bool pastShaders = false;
-			for (const auto& part : sourcePath.parent_path()) {
-				if (!pastShaders) {
-					if (part == L"Shaders")
-						pastShaders = true;
-					continue;
-				}
-				if (!rel.empty())
-					rel += L"/";
-				rel += part.wstring();
-			}
-			if (!pastShaders)
-				rel = sourcePath.parent_path().wstring();
+			const auto rel = Util::StandaloneShaderCacheKey::SourcePath(sourcePath).parent_path().generic_wstring();
 			return rel.empty() ? L"Data/ShaderCache" : std::format(L"Data/ShaderCache/{}", rel);
 		}
 
