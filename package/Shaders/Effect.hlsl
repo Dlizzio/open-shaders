@@ -792,10 +792,9 @@ float GetViewRayShadow(float3 worldPosition, float depth, uint eyeIndex, float n
 #		if defined(LOD_SHADOWS)
 		LODShadows::RayProjection lodRay = LODShadows::PrepareRay(startPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz,
 			endPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, sampleDistantShadow && ShadowSampling::HasDistantShadows());
-		[branch] if (lodRay.mode != LODShadows::RayOccluded)
+		[branch] if (lodRay.mode == LODShadows::RayOccluded) return 0.0;
 #		endif
-			for (uint i = 0; i < sampleCount; i++)
-		{
+		for (uint i = 0; i < sampleCount; i++) {
 			float t = (float(i) + noise) * rcpSampleCount;
 			float3 samplePositionWS = lerp(startPosition, endPosition, t);
 #		if defined(LOD_SHADOWS)

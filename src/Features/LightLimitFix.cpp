@@ -31,7 +31,6 @@
 
 namespace
 {
-	constexpr uint kClusterCullingThreadsY = 4;
 	constexpr float kParticleLightsSaturationMin = 1.0f;
 	constexpr float kParticleLightsSaturationMax = 2.0f;
 	constexpr float kParticleBrightnessMin = 0.0f;
@@ -1545,7 +1544,7 @@ void LightLimitFix::UpdateStructure()
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(clusterCulling, nullptr, 0);
-		context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + kClusterCullingThreadsY - 1) / kClusterCullingThreadsY, clusterSize[2]);
+		context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);
 	}
 
 	context->CSSetShader(nullptr, nullptr, 0);
