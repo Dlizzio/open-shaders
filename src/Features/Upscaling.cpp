@@ -2341,7 +2341,8 @@ void Upscaling::OnDraw()
 	const auto method = GetUpscaleMethod();
 	if (method == UpscaleMethod::kDLSS || method == UpscaleMethod::kFSR)
 		rainLayer.CaptureDraw(perfMode.IsPresentingTestTexture() ?
-			perfMode.GetTestTextureUAV() : Util::AsReal(globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kMAIN].UAV));
+								  perfMode.GetTestTextureUAV() :
+								  Util::AsReal(globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kMAIN].UAV));
 }
 
 bool Upscaling::CopySharedD3D12Resources()
@@ -3430,7 +3431,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	upscaling.neuralRendering.RecordStage(false);
 	upscaling.rainLayer.Composite(upscaling.perfMode.IsPresentingTestTexture() ?
-		upscaling.perfMode.GetTestTextureUAV() : Util::AsReal(globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kMAIN].UAV));
+									  upscaling.perfMode.GetTestTextureUAV() :
+									  Util::AsReal(globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kMAIN].UAV));
 	Util::SetTemporal(upscaleMethod == UpscaleMethod::kTAA);
 
 	// Redirect kFRAMEBUFFER to float texture before ISHDR runs so HDR values >1.0 survive
