@@ -499,6 +499,15 @@ std::vector<std::string> Feature::GetLoadedFeatureNames()
 	return names;
 }
 
+void Feature::DisableForConflict(std::string_view a_conflict)
+{
+	loaded = false;
+	const std::string conflict(a_conflict);
+	conflictMessage = std::vformat(T("menu.features.disabled_by_conflict", "This feature is disabled because {} was detected. They cannot be used together."), std::make_format_args(conflict));
+	FeatureIssues::AddFeatureIssue(GetShortName(), version, conflictMessage, FeatureIssues::FeatureIssueInfo::IssueType::CONFLICT);
+	logger::warn("[{}] {}", GetDisplayName(), conflictMessage);
+}
+
 bool Feature::ToggleAtBootSetting()
 {
 	if (IsAlwaysEnabled())
