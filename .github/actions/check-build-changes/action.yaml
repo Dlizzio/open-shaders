@@ -80,6 +80,7 @@ runs:
                     - 'tests/shaders/**'
                   cpp_tests:
                     - 'tests/cpp/**'
+                    - 'extern/AntiLag2-SDK'
               base_sha: ${{ inputs.base-sha }}
               sha: ${{ inputs.head-sha }}
 
