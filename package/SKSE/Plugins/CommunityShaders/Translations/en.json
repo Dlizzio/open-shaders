@@ -4752,6 +4752,8 @@
     "menu.advanced.test_conditions": "Test Conditions",
     "menu.advanced.threading_header": "Threading",
     "menu.advanced.top_slowest_shaders": "Top %zu Slowest Shaders (last build)",
+    "menu.advanced.tracy_per_draw_zones": "Tracy Per-Draw Zones",
+    "menu.advanced.tracy_per_draw_zones_tooltip": "Emit the high-volume per-draw Tracy zones (State::Draw, its nested draw zones, per-feature render-pass hooks). Off by default because they stream 100+ MB/s; call counts stay visible as zonecalls.* plots either way.",
     "menu.advanced.vertex": "Vertex",
     "menu.advanced.vertex_tooltip": "Replace Vertex Shaders. When false, will disable the custom Vertex Shaders for the types above. For developers to test whether custom shaders match vanilla behavior. ",
     "menu.advanced.work_label": "Work (W)",
