@@ -4,6 +4,7 @@
 #include "ShaderTools/LegacyGraphicsCompatibility.h"
 #include "Utils/ExternalEmittance.h"
 
+#include "Deferred.h"
 #include "EngineFix.h"
 #include "Feature.h"
 #include "Globals.h"
@@ -241,6 +242,7 @@ namespace LightingExtensions
 		{
 			globals::state->UpdateLightingShaderPermutation(pass);
 			func(shader, pass, renderFlags);
+			globals::deferred->BindForwardHairMasks();
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
