@@ -2427,9 +2427,8 @@ bool Upscaling::CopySharedD3D12Resources()
 
 void UpdateCameraData()
 {
-	using func_t = decltype(&UpdateCameraData);
-	static REL::Relocation<func_t> func{ RELOCATION_ID(75472, 77258) };
-	func();
+	constexpr std::uint32_t kEngineRenderCameraFlags = 0;
+	globals::game::renderer->UpdateCameraData(kEngineRenderCameraFlags);
 }
 
 void Upscaling::PostDisplay()
