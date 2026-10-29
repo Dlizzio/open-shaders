@@ -445,7 +445,7 @@ void OverlayRenderer::HandleABTesting()
 		allRows.insert(allRows.end(), summaryRows.begin(), summaryRows.end());
 
 		// Update the A/B test aggregator with current frame data
-		abTestingManager->GetAggregator().OnFrame(allRows);
+		abTestingManager->RecordFrame(allRows);
 	}
 
 	// Draw A/B testing overlay

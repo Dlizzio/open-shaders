@@ -9,6 +9,7 @@
 #include <cstring>
 #include <span>
 #include <string_view>
+#include <vector>
 #ifdef TRACY_ENABLE
 #	include <Tracy/Tracy.hpp>
 #	include <Tracy/TracyD3D11.hpp>
