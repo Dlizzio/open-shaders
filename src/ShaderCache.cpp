@@ -775,7 +775,9 @@ namespace SIE
 			const bool linearACEScg = pixel && (descriptor & ShaderCache::kLightingLinearACEScg);
 			if (linearACEScg)
 				descriptor &= ~ShaderCache::kLightingLinearACEScg;
-			RE::GetLightingShaderDefines(descriptor, reinterpret_cast<REX::W32::D3D_SHADER_MACRO*>(defines.data()));
+			const bool deferredPixel = pixel && (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred));
+			const auto deferredSpecializations = deferredPixel ? (descriptor & (ShaderCache::kLightingNoLegacySubsurface)) : 0u;
+			RE::GetLightingShaderDefines(descriptor & ~deferredSpecializations, reinterpret_cast<REX::W32::D3D_SHADER_MACRO*>(defines.data()));
 
 			size_t lastIndex = std::ranges::find_if(defines, [](const D3D_SHADER_MACRO& macro) { return macro.Name == nullptr; }) - defines.begin();
 
@@ -791,6 +793,8 @@ namespace SIE
 				defines[lastIndex++] = { "LINEAR_ACESCG", nullptr };
 			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
 				defines[lastIndex++] = { "DEFERRED", nullptr };
+				if (deferredSpecializations & ShaderCache::kLightingNoLegacySubsurface)
+					defines[lastIndex++] = { "NO_LEGACY_SUBSURFACE", nullptr };
 				if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::IBLLuminanceRatio))
 					defines[lastIndex++] = { "IBL_LUMINANCE_RATIO", nullptr };
 			}
@@ -2965,8 +2969,9 @@ namespace SIE
 			compilationSet.Add({ ShaderClass::Pixel, shader, descriptor, a_precompile });
 			constexpr uint32_t specialization = kLightingDryWeather | kLightingSnowCoverInactive | kLightingNoMeshVariation |
 			                                    kLightingLinearACEScg | static_cast<uint32_t>(LightingShaderFlags::IBLLuminanceRatio);
-			if (shader.shaderType == RE::BSShader::Type::Lighting && (descriptor & specialization))
-				return GetPixelShader(shader, descriptor & ~specialization, a_precompile);
+			const auto deferredSpecializations = (descriptor & static_cast<uint32_t>(LightingShaderFlags::Deferred)) ? (kLightingNoLegacySubsurface) : 0u;
+			if (shader.shaderType == RE::BSShader::Type::Lighting && (descriptor & (specialization | deferredSpecializations)))
+				return GetPixelShader(shader, descriptor & ~(specialization | deferredSpecializations), a_precompile);
 			if (shader.shaderType == RE::BSShader::Type::Effect && (descriptor & kEffectLinearACEScg))
 				return GetPixelShader(shader, descriptor & ~kEffectLinearACEScg, a_precompile);
 		} else {

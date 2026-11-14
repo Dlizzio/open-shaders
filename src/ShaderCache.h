@@ -1063,6 +1063,8 @@ namespace SIE
 		static constexpr uint32_t kVertexNoTreeBend = 1u << 6;
 		static constexpr uint32_t kLightingLinearACEScg = 1u << 7;
 
+		static constexpr uint32_t kLightingNoLegacySubsurface = 1u << 17;
+
 		enum class LightingShaderFlags : uint32_t
 		{
 			VC = 1 << 0,
