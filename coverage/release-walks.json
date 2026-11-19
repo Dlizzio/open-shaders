@@ -1,0 +1,516 @@
+{
+  "walks": [
+    {
+      "run": 1,
+      "sha256": "5301d54ae65dea77bf96995e819903e989423794518e7794bb87f6aacf012832",
+      "dll": "CommunityShaders.dll",
+      "route": "Dragonsreach-No-Torch.json",
+      "steps": 7045,
+      "inputs": 81,
+      "aborted": false,
+      "durationMs": 58696,
+      "inputReleased": true,
+      "focusLoss": [],
+      "cacheReady": [
+        3329,
+        3329,
+        0
+      ],
+      "shadowSlots": 16,
+      "shadowBudgetMs": 7.0,
+      "slotFrames": 3607,
+      "nativeFrameSpan": 3738,
+      "presentedFrames": 8050,
+      "transientOrigins": 152,
+      "supportedSurfaceTriplets": 18,
+      "largestVisibleMedianPulse": 0.0,
+      "matchedViews": [
+        {
+          "reference": 16060,
+          "physicalMatchUnits": 1.46,
+          "previousExit": 16060,
+          "frame": 8616,
+          "originDisplacement": 2537.1,
+          "distanceFromFailureView": 15.33,
+          "slots": [
+            [
+              8613,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              8614,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              8615,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              8616,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              8617,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              8618,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              8619,
+              [
+                3,
+                true
+              ]
+            ]
+          ],
+          "score": 1.46875,
+          "demand": 7986,
+          "lit": 251291,
+          "light": "0x222db7ceb00"
+        },
+        {
+          "reference": 15742,
+          "physicalMatchUnits": 0.95,
+          "previousExit": 15742,
+          "frame": 8082,
+          "originDisplacement": 4159.3,
+          "distanceFromFailureView": 46.23,
+          "slots": [
+            [
+              8079,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              8080,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              8081,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              8082,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              8083,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              8084,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              8085,
+              [
+                2,
+                true
+              ]
+            ]
+          ],
+          "score": 0.586320236325264,
+          "demand": 0,
+          "lit": 0,
+          "light": "0x222db399600"
+        }
+      ],
+      "sourceFiles": "deployed01"
+    },
+    {
+      "run": 2,
+      "sha256": "5301d54ae65dea77bf96995e819903e989423794518e7794bb87f6aacf012832",
+      "dll": "CommunityShaders.dll",
+      "route": "Dragonsreach-No-Torch.json",
+      "steps": 7045,
+      "inputs": 81,
+      "aborted": false,
+      "durationMs": 58681,
+      "inputReleased": true,
+      "focusLoss": [],
+      "cacheReady": [
+        3329,
+        3329,
+        0
+      ],
+      "shadowSlots": 16,
+      "shadowBudgetMs": 7.0,
+      "slotFrames": 3694,
+      "nativeFrameSpan": 3705,
+      "presentedFrames": 8040,
+      "transientOrigins": 121,
+      "supportedSurfaceTriplets": 17,
+      "largestVisibleMedianPulse": 0.0,
+      "matchedViews": [
+        {
+          "reference": 16060,
+          "physicalMatchUnits": 3.77,
+          "previousExit": 16060,
+          "frame": 13102,
+          "originDisplacement": 2540.5,
+          "distanceFromFailureView": 20.93,
+          "slots": [
+            [
+              13099,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              13100,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              13101,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              13102,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              13103,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              13104,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              13105,
+              [
+                3,
+                true
+              ]
+            ]
+          ],
+          "score": 1.46875,
+          "demand": 8635,
+          "lit": 292570,
+          "light": "0x222db7ceb00"
+        },
+        {
+          "reference": 15742,
+          "physicalMatchUnits": 3.56,
+          "previousExit": 15742,
+          "frame": 12780,
+          "originDisplacement": 4180.1,
+          "distanceFromFailureView": 33.08,
+          "slots": [
+            [
+              12777,
+              [
+                1,
+                true
+              ]
+            ],
+            [
+              12778,
+              [
+                1,
+                true
+              ]
+            ],
+            [
+              12779,
+              [
+                1,
+                true
+              ]
+            ],
+            [
+              12780,
+              [
+                1,
+                true
+              ]
+            ],
+            [
+              12781,
+              [
+                1,
+                true
+              ]
+            ],
+            [
+              12782,
+              [
+                1,
+                true
+              ]
+            ],
+            [
+              12783,
+              [
+                1,
+                true
+              ]
+            ]
+          ],
+          "score": 1.46875,
+          "demand": 5200,
+          "lit": 0,
+          "light": "0x222db399600"
+        }
+      ],
+      "sourceFiles": "deployed02"
+    },
+    {
+      "run": 3,
+      "sha256": "5301d54ae65dea77bf96995e819903e989423794518e7794bb87f6aacf012832",
+      "dll": "CommunityShaders.dll",
+      "route": "Dragonsreach-No-Torch.json",
+      "steps": 7045,
+      "inputs": 81,
+      "aborted": false,
+      "durationMs": 58692,
+      "inputReleased": true,
+      "focusLoss": [],
+      "cacheReady": [
+        3329,
+        3329,
+        0
+      ],
+      "shadowSlots": 16,
+      "shadowBudgetMs": 7.0,
+      "slotFrames": 3508,
+      "nativeFrameSpan": 3723,
+      "presentedFrames": 8042,
+      "transientOrigins": 119,
+      "supportedSurfaceTriplets": 19,
+      "largestVisibleMedianPulse": 0.0,
+      "matchedViews": [
+        {
+          "reference": 16060,
+          "physicalMatchUnits": 1.14,
+          "previousExit": 16060,
+          "frame": 17456,
+          "originDisplacement": 2573.8,
+          "distanceFromFailureView": 102.09,
+          "slots": [
+            [
+              17453,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              17454,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              17455,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              17456,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              17457,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              17458,
+              [
+                3,
+                true
+              ]
+            ],
+            [
+              17459,
+              [
+                3,
+                true
+              ]
+            ]
+          ],
+          "score": 1.1232466157525778,
+          "demand": 3767,
+          "lit": 6541,
+          "light": "0x222db7ceb00"
+        },
+        {
+          "reference": 15742,
+          "physicalMatchUnits": 1.44,
+          "previousExit": 15742,
+          "frame": 17163,
+          "originDisplacement": 4108.6,
+          "distanceFromFailureView": 44.08,
+          "slots": [
+            [
+              17160,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              17161,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              17162,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              17163,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              17164,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              17165,
+              [
+                2,
+                true
+              ]
+            ],
+            [
+              17166,
+              [
+                2,
+                true
+              ]
+            ]
+          ],
+          "score": 1.46875,
+          "demand": 5857,
+          "lit": 0,
+          "light": "0x222db399600"
+        }
+      ],
+      "sourceFiles": "deployed03"
+    }
+  ],
+  "displayComparison": {
+    "originalFrames": [
+      64,
+      66,
+      68
+    ],
+    "tag": "deployed02",
+    "releaseFrames": [
+      64,
+      66,
+      68
+    ],
+    "cameraDeltaUnitsAndDegrees": [
+      [
+        1.9956766674286797,
+        0.15083005782137687
+      ],
+      [
+        2.58698888234922,
+        0.3133775596181781
+      ],
+      [
+        2.3419686052388626,
+        0.4572595064252725
+      ]
+    ],
+    "registeredSurface": {
+      "i": 66,
+      "n": 90,
+      "pulse": 0.0,
+      "d": 3.6
+    }
+  },
+  "analysis": "Whole-frame video scan, all-slot native ownership and validity traces, detailed scheduler snapshots, and depth-checked registered displayed luminance at the previously confirmed defect.",
+  "handoff": {
+    "sha256": "5301d54ae65dea77bf96995e819903e989423794518e7794bb87f6aacf012832",
+    "scene": "WhiterunDragonsreach",
+    "readyCache": [
+      3329,
+      3329
+    ],
+    "timescale": [
+      "Value = 20.0000"
+    ],
+    "otherFixShaderHashes": {
+      "LightLimitFix.hlsli": "6923ba022d713c9f808a9ea560c336abda620e456ffb838bf5c960565764a620",
+      "ShadowDemandCS.hlsl": "a8d5283f6b2d7453bae060d0eddad0de26d9be87473483d660d1db3088bffd96",
+      "LocalShadowBias.hlsli": "16640de1ea8507a8cc94500d373f5be8d4b9dfb1cc3adae431da02d23e4798a8"
+    }
+  }
+}

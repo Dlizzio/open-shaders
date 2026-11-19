@@ -1,0 +1,120 @@
+{
+  "lumina-slot-original": {
+    "stages": {
+      "native": {
+        "count": 100,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "aim": {
+        "count": 100,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "update": {
+        "count": 100,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "enable-in": {
+        "count": 100,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "after-enable": {
+        "count": 100,
+        "mismatched": 100,
+        "maxElementError": 1.9964
+      },
+      "after-slot": {
+        "count": 100,
+        "mismatched": 100,
+        "maxElementError": 1.9964
+      },
+      "accum-in": {
+        "count": 100,
+        "mismatched": 100,
+        "maxElementError": 1.9964
+      },
+      "accum-out": {
+        "count": 100,
+        "mismatched": 100,
+        "maxElementError": 1.9964
+      },
+      "render-in": {
+        "count": 100,
+        "mismatched": 100,
+        "maxElementError": 1.9964
+      },
+      "render-out": {
+        "count": 100,
+        "mismatched": 100,
+        "maxElementError": 1.9964
+      }
+    },
+    "pose": 0.00018034442788807868,
+    "inputEvents": 81,
+    "start": 3664,
+    "end": 7385,
+    "cache": 3333
+  },
+  "lumina-slot-aimed": {
+    "stages": {
+      "native": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "aim": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "update": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "enable-in": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "after-enable": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "after-slot": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "accum-in": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "accum-out": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "render-in": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      },
+      "render-out": {
+        "count": 101,
+        "mismatched": 0,
+        "maxElementError": 0.0
+      }
+    },
+    "pose": 0.00018034442788807868,
+    "inputEvents": 81,
+    "start": 7462,
+    "end": 11194,
+    "cache": 3333
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "lumina-before-matched": [
+    {
+      "turn": 0,
+      "form": "0xdcbef",
+      "usableAfter": 17,
+      "fullAfter": 31,
+      "firstMs": 313,
+      "fullMs": 565
+    },
+    {
+      "turn": 0,
+      "form": "0xe2822",
+      "usableAfter": 14,
+      "fullAfter": 28,
+      "firstMs": 270,
+      "fullMs": 511
+    },
+    {
+      "turn": 1,
+      "form": "0xdcbef",
+      "usableAfter": 15,
+      "fullAfter": 29,
+      "firstMs": 266,
+      "fullMs": 533
+    },
+    {
+      "turn": 1,
+      "form": "0xe2822",
+      "usableAfter": 12,
+      "fullAfter": 26,
+      "firstMs": 210,
+      "fullMs": 467
+    },
+    {
+      "turn": 2,
+      "form": "0xdcbef",
+      "usableAfter": 16,
+      "fullAfter": 30,
+      "firstMs": 291,
+      "fullMs": 529
+    },
+    {
+      "turn": 2,
+      "form": "0xe2822",
+      "usableAfter": 13,
+      "fullAfter": 27,
+      "firstMs": 229,
+      "fullMs": 490
+    },
+    {
+      "turn": 3,
+      "form": "0xdcbef",
+      "usableAfter": 17,
+      "fullAfter": 31,
+      "firstMs": 306,
+      "fullMs": 566
+    },
+    {
+      "turn": 3,
+      "form": "0xe2822",
+      "usableAfter": 13,
+      "fullAfter": 27,
+      "firstMs": 250,
+      "fullMs": 499
+    }
+  ],
+  "lumina-light-owned-matched": [
+    {
+      "turn": 0,
+      "form": "0xdcbef",
+      "usableAfter": -28,
+      "fullAfter": -28,
+      "firstMs": -452,
+      "fullMs": -452
+    },
+    {
+      "turn": 0,
+      "form": "0xe2822",
+      "usableAfter": -21,
+      "fullAfter": -21,
+      "firstMs": -322,
+      "fullMs": -322
+    },
+    {
+      "turn": 1,
+      "form": "0xdcbef",
+      "usableAfter": -26,
+      "fullAfter": -26,
+      "firstMs": -440,
+      "fullMs": -440
+    },
+    {
+      "turn": 1,
+      "form": "0xe2822",
+      "usableAfter": -19,
+      "fullAfter": -19,
+      "firstMs": -337,
+      "fullMs": -337
+    },
+    {
+      "turn": 2,
+      "form": "0xdcbef",
+      "usableAfter": -24,
+      "fullAfter": -24,
+      "firstMs": -407,
+      "fullMs": -407
+    },
+    {
+      "turn": 2,
+      "form": "0xe2822",
+      "usableAfter": -18,
+      "fullAfter": -18,
+      "firstMs": -304,
+      "fullMs": -304
+    },
+    {
+      "turn": 3,
+      "form": "0xdcbef",
+      "usableAfter": -20,
+      "fullAfter": -20,
+      "firstMs": -358,
+      "fullMs": -358
+    },
+    {
+      "turn": 3,
+      "form": "0xe2822",
+      "usableAfter": -18,
+      "fullAfter": -18,
+      "firstMs": -327,
+      "fullMs": -327
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "draw": 34078,
+  "vs": "ResourceId::25825",
+  "ps": "ResourceId::25689",
+  "shadowInputs": [
+    [
+      "ResourceId::6612",
+      "SSS::ShadowTexture"
+    ],
+    [
+      "ResourceId::41669",
+      "TerrainShadows::ShadowHeight"
+    ],
+    [
+      "ResourceId::7815",
+      "Deferred::DirectionalShadowLights"
+    ],
+    [
+      "ResourceId::41665",
+      "LLF::ShadowLights"
+    ],
+    [
+      "ResourceId::41643",
+      "SCM::ShadowAtlas"
+    ],
+    [
+      "ResourceId::6986",
+      "LODShadows::DepthMaps"
+    ],
+    [
+      "ResourceId::7084",
+      "LODShadows::MapData"
+    ]
+  ],
+  "bound": true,
+  "slot": 3,
+  "shadowParameters": [
+    2.0,
+    1145.0694580078125,
+    0.002500000176951289,
+    0.25
+  ],
+  "atlasRect": [
+    0.125,
+    0.125,
+    0.25,
+    0.0
+  ],
+  "fade": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "depthTarget": "ResourceId::418",
+  "presentEvent": 56001,
+  "imageResult": "<Result: 'Success'>"
+}

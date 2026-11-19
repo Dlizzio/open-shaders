@@ -1,0 +1,276 @@
+{
+  "renderer": "Open Shaders on AE 1.6.1170, Default Lumina profile",
+  "settings": {
+    "before": {
+      "qualityMode": 1,
+      "upscaleMethod": 3,
+      "frameGenerationMode": 1,
+      "presetDLSS": 0,
+      "shadowLimitFix": true,
+      "atlas": "[2026-11-18 17:10:14.604] [info] [29664] [ShadowAtlas.cpp:333] [SCM] Shadow atlas ready: 8192x8192, base tile 4096, cell 256"
+    },
+    "after": {
+      "qualityMode": 1,
+      "upscaleMethod": 3,
+      "frameGenerationMode": 1,
+      "presetDLSS": 0,
+      "shadowLimitFix": true,
+      "atlas": "[2026-11-18 17:21:08.483] [info] [39540] [ShadowAtlas.cpp:333] [SCM] Shadow atlas ready: 8192x8192, base tile 4096, cell 256"
+    }
+  },
+  "routes": {
+    "No-Torch": {
+      "before": {
+        "recording": "Dragonsreach-No-Torch.json",
+        "sha256": "6b82e796574708c97d6345c9234f758707f49322032bac6263966c73ca1e11f3",
+        "runs": [
+          {
+            "source": "torch-before-retail-No-Torch-take-1.json",
+            "replayFps": 65.9080455854045,
+            "samplerFps": 66.03070642194452,
+            "p99Ms": 19.9889,
+            "maxMs": 23.181900000000002,
+            "elapsedMs": 58703,
+            "framesSpanned": 3869,
+            "inputs": 81,
+            "cache": 3333
+          },
+          {
+            "source": "torch-before-retail-No-Torch-take-2.json",
+            "replayFps": 65.78207770529221,
+            "samplerFps": 65.9127908440444,
+            "p99Ms": 19.9163,
+            "maxMs": 24.1496,
+            "elapsedMs": 58709,
+            "framesSpanned": 3862,
+            "inputs": 81,
+            "cache": 3333
+          }
+        ],
+        "meanReplayFps": 65.84506164534835
+      },
+      "after": {
+        "recording": "Dragonsreach-No-Torch.json",
+        "sha256": "6b82e796574708c97d6345c9234f758707f49322032bac6263966c73ca1e11f3",
+        "runs": [
+          {
+            "source": "torch-after-retail-No-Torch-take-1.json",
+            "replayFps": 65.70698466780239,
+            "samplerFps": 65.85266086530865,
+            "p99Ms": 20.0816,
+            "maxMs": 23.0335,
+            "elapsedMs": 58700,
+            "framesSpanned": 3857,
+            "inputs": 81,
+            "cache": 3333
+          },
+          {
+            "source": "torch-after-retail-No-Torch-take-2.json",
+            "replayFps": 65.69106799093682,
+            "samplerFps": 65.83265415921711,
+            "p99Ms": 20.2515,
+            "maxMs": 23.748900000000003,
+            "elapsedMs": 58699,
+            "framesSpanned": 3856,
+            "inputs": 81,
+            "cache": 3333
+          }
+        ],
+        "meanReplayFps": 65.6990263293696
+      }
+    },
+    "Torch": {
+      "before": {
+        "recording": "Dragonsreach-Torch.json",
+        "sha256": "5783b1741c62a64a61088b41a4a0d5c1e017959a7a86a6e619e8be04c32a4366",
+        "runs": [
+          {
+            "source": "torch-before-retail-Torch-take-1.json",
+            "replayFps": 62.943141532587944,
+            "samplerFps": 63.05183101274273,
+            "p99Ms": 20.5725,
+            "maxMs": 26.4507,
+            "elapsedMs": 58672,
+            "framesSpanned": 3693,
+            "inputs": 81,
+            "cache": 3333
+          },
+          {
+            "source": "torch-before-retail-Torch-take-2.json",
+            "replayFps": 62.888794205368555,
+            "samplerFps": 62.990457906498555,
+            "p99Ms": 20.6785,
+            "maxMs": 23.6731,
+            "elapsedMs": 58675,
+            "framesSpanned": 3690,
+            "inputs": 81,
+            "cache": 3333
+          }
+        ],
+        "meanReplayFps": 62.91596786897825
+      },
+      "after": {
+        "recording": "Dragonsreach-Torch.json",
+        "sha256": "5783b1741c62a64a61088b41a4a0d5c1e017959a7a86a6e619e8be04c32a4366",
+        "runs": [
+          {
+            "source": "torch-after-retail-Torch-take-1.json",
+            "replayFps": 62.930387945728505,
+            "samplerFps": 63.03801301786706,
+            "p99Ms": 20.7701,
+            "maxMs": 23.3459,
+            "elapsedMs": 58668,
+            "framesSpanned": 3692,
+            "inputs": 81,
+            "cache": 3333
+          },
+          {
+            "source": "torch-after-retail-Torch-take-2.json",
+            "replayFps": 62.89736990130738,
+            "samplerFps": 62.99643638998817,
+            "p99Ms": 20.5898,
+            "maxMs": 24.3216,
+            "elapsedMs": 58667,
+            "framesSpanned": 3690,
+            "inputs": 81,
+            "cache": 3333
+          }
+        ],
+        "meanReplayFps": 62.91387892351794
+      }
+    }
+  },
+  "screenshots": {
+    "before": {
+      "pose": {
+        "camX": 454.0851135253906,
+        "camY": 2107.262451171875,
+        "camZ": 38.38570022583008,
+        "camPitch": 6.2420854568481445,
+        "camYaw": 0.4474000036716461
+      },
+      "gameHour": 12.0,
+      "weather": "0x0010A240",
+      "routeMs": 35903,
+      "file": "Wooden floor - before.png",
+      "size": [
+        3840,
+        2160
+      ]
+    },
+    "after": {
+      "pose": {
+        "camX": 454.0851135253906,
+        "camY": 2107.262451171875,
+        "camZ": 38.38570022583008,
+        "camPitch": 6.2420854568481445,
+        "camYaw": 0.4474000036716461
+      },
+      "gameHour": 12.0,
+      "weather": "0x0010A240",
+      "routeMs": 35903,
+      "file": "Wooden floor - after.png",
+      "size": [
+        3840,
+        2160
+      ]
+    }
+  },
+  "videos": {
+    "before": {
+      "file": "lumina-torch-before-camera-1080p.mkv",
+      "width": 1920,
+      "height": 1080,
+      "displayHz": 240,
+      "frames": 7075,
+      "meanDeliveredHz": 108.84416543574594,
+      "p99Ms": 17.0,
+      "cache": 3333,
+      "sha256": "5783b1741c62a64a61088b41a4a0d5c1e017959a7a86a6e619e8be04c32a4366"
+    },
+    "after": {
+      "file": "lumina-torch-after-camera-1080p.mkv",
+      "width": 1920,
+      "height": 1080,
+      "displayHz": 240,
+      "frames": 7532,
+      "meanDeliveredHz": 115.86866884115946,
+      "p99Ms": 17.0,
+      "cache": 3333,
+      "sha256": "5783b1741c62a64a61088b41a4a0d5c1e017959a7a86a6e619e8be04c32a4366"
+    }
+  },
+  "deployed": {
+    "dll": "bfdbe08a50101ca410cb58f2636b3e6c885b31033aee4a5f54f13f72843f07ff",
+    "pdb": "c1129d16d8b922241dc3d293434e6038b8195b6d5f8b42511a6841682e3fab0b",
+    "Lighting.hlsl": "cbcd72d3c57eaf816224190698bc294e58f7e56d08242ffe24a08e061140882e",
+    "diagnosticShaderPresent": false
+  },
+  "stationaryCameraAndSceneMatched": true,
+  "archivedComparisonsNoTorch": {
+    "baseline": [
+      {
+        "frames": 3834,
+        "elapsedMs": 58699,
+        "fps": 65.31627455322919,
+        "finished": true,
+        "maxFrameGap": 2
+      },
+      {
+        "frames": 3843,
+        "elapsedMs": 58708,
+        "fps": 65.45956258090891,
+        "finished": true,
+        "maxFrameGap": 1
+      }
+    ],
+    "bottled-matched": [
+      {
+        "frames": 4457,
+        "elapsedMs": 58686,
+        "fps": 75.94656306444467,
+        "finished": true,
+        "maxFrameGap": 1
+      },
+      {
+        "frames": 4446,
+        "elapsedMs": 58683,
+        "fps": 75.76299780174838,
+        "finished": true,
+        "maxFrameGap": 1
+      }
+    ],
+    "candidate-repeat": [
+      {
+        "frames": 3846,
+        "elapsedMs": 58705,
+        "fps": 65.51401073162423,
+        "finished": true,
+        "maxFrameGap": 1
+      },
+      {
+        "frames": 3852,
+        "elapsedMs": 58696,
+        "fps": 65.6262777702058,
+        "finished": true,
+        "maxFrameGap": 1
+      }
+    ],
+    "corrected-resize-retail": [
+      {
+        "frames": 3867,
+        "elapsedMs": 58706,
+        "fps": 65.87060947773652,
+        "finished": true,
+        "maxFrameGap": 1
+      },
+      {
+        "frames": 3861,
+        "elapsedMs": 58705,
+        "fps": 65.76952559407205,
+        "finished": true,
+        "maxFrameGap": 1
+      }
+    ]
+  }
+}
